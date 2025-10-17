@@ -53,20 +53,23 @@ fn main() -> anyhow::Result<()> {
         // make a nicer to work with version
         let cal = Calendar::from(cal_ref);
 
-        events.extend(cal.events().cloned());
+        events.extend(cal.events().map(|e| ical_utils::Event::from(e.clone())));
     }
 
     println!("found {} events", events.len());
 
     events.sort_by_key(|e| e.property_value("DTSTAMP").map(|s| s.to_owned()));
 
-    for event in events {
+    for event in &events {
         println!(
-            "{} {}",
-            event.property_value("DTSTAMP").unwrap_or_default(),
-            event.property_value("SUMMARY").unwrap_or_default(),
+            "{} {} {}",
+            event.created().unwrap_or_default(),
+            event.status_str().unwrap_or_default(),
+            event.summary().unwrap_or_default(),
         )
     }
+
+    dbg!(&events[0]);
 
     Ok(())
 }

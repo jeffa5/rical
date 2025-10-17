@@ -213,6 +213,7 @@ name = "ical-utils"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "icalendar",
  "serde_json",
