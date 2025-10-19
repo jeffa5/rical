@@ -1,6 +1,6 @@
-use std::{ops::Deref, str::FromStr};
+use std::{ops::Deref, time::SystemTime};
 
-use chrono::NaiveDateTime;
+use chrono::{DateTime, NaiveDateTime};
 use icalendar::{Component, Property};
 
 #[derive(Debug)]
@@ -21,8 +21,16 @@ impl From<icalendar::Event> for Event {
 }
 
 impl Event {
+    pub fn uid(&self) -> Option<&str> {
+        self.0.get_uid()
+    }
+
     pub fn created(&self) -> Option<NaiveDateTime> {
         self.datetime_property("CREATED")
+    }
+
+    pub fn dtstamp(&self) -> Option<NaiveDateTime> {
+        self.datetime_property("DTSTAMP")
     }
 
     pub fn start(&self) -> Option<NaiveDateTime> {
@@ -52,10 +60,14 @@ impl Event {
 fn parse_datetime(prop: &Property) -> Option<NaiveDateTime> {
     // TODO: handle tzid and timezone
     let val = prop.value();
-    if val.ends_with("Z") {
+    let ndt = if val.ends_with("Z") {
         // UTC
-        NaiveDateTime::parse_from_str(prop.value(), "%Y%m%dT%H%M%SZ").ok()
+        NaiveDateTime::parse_from_str(prop.value(), "%Y%m%dT%H%M%SZ").ok()?
     } else {
-        NaiveDateTime::parse_from_str(prop.value(), "%Y%m%dT%H%M%S").ok()
+        NaiveDateTime::parse_from_str(prop.value(), "%Y%m%dT%H%M%S").ok()?
+    };
+    if ndt == DateTime::UNIX_EPOCH.naive_utc() {
+        eprintln!("failed to properly read datetime value: {:?}", prop.value());
     }
+    Some(ndt)
 }

@@ -1,21 +1,15 @@
-use std::{
-    fs::{read_dir, read_to_string},
-    path::PathBuf,
-};
+use std::path::PathBuf;
 
 use clap::Parser as _;
-use icalendar::{Calendar, Component as _, parser::read_calendar};
-
-#[derive(Debug, Clone, clap::ValueEnum)]
-enum OutputFormat {
-    Table,
-    Json,
-}
+use rical::list::{self, ListArgs, OutputFormat};
 
 #[derive(Debug, Clone, clap::Parser)]
 struct Args {
     #[clap(short, long, default_value = "table")]
     format: OutputFormat,
+
+    #[clap(long, default_value = "10")]
+    limit: usize,
 
     #[clap()]
     path: PathBuf,
@@ -30,46 +24,12 @@ fn main() -> anyhow::Result<()> {
         anyhow::bail!("currently only directories are supported")
     }
 
-    let mut events = vec![];
-
-    for entry in read_dir(args.path)? {
-        let entry = entry?;
-        if !entry.metadata()?.is_file() {
-            continue;
-        }
-
-        println!("Loading file {:?}", entry.path());
-
-        let s = read_to_string(entry.path())?;
-
-        let cal_ref = match read_calendar(&s) {
-            Ok(cal) => cal,
-            Err(e) => {
-                eprintln!("{e}");
-                continue;
-            }
-        };
-
-        // make a nicer to work with version
-        let cal = Calendar::from(cal_ref);
-
-        events.extend(cal.events().map(|e| ical_utils::Event::from(e.clone())));
-    }
-
-    println!("found {} events", events.len());
-
-    events.sort_by_key(|e| e.property_value("DTSTAMP").map(|s| s.to_owned()));
-
-    for event in &events {
-        println!(
-            "{} {} {}",
-            event.created().unwrap_or_default(),
-            event.status_str().unwrap_or_default(),
-            event.summary().unwrap_or_default(),
-        )
-    }
-
-    dbg!(&events[0]);
+    let list_args = ListArgs {
+        path: args.path,
+        format: args.format,
+        limit: args.limit,
+    };
+    list::list(&list_args)?;
 
     Ok(())
 }
