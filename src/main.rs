@@ -2,7 +2,10 @@ use std::path::PathBuf;
 
 use chrono::{NaiveDateTime, Utc};
 use clap::Parser as _;
-use rical::list::{self, ListArgs, OutputFormat};
+use rical::{
+    list::{self, ListArgs, OutputFormat},
+    unfold,
+};
 
 #[derive(Debug, Clone, clap::Parser)]
 struct Args {
@@ -22,6 +25,10 @@ enum SubCommand {
         #[clap(long)]
         from: Option<NaiveDateTime>,
 
+        #[clap()]
+        path: PathBuf,
+    },
+    Unfold {
         #[clap()]
         path: PathBuf,
     },
@@ -46,6 +53,9 @@ fn main() -> anyhow::Result<()> {
                 from: from.unwrap_or_else(|| Utc::now().naive_utc()),
             };
             list::list(&list_args)?;
+        }
+        Some(SubCommand::Unfold { path }) => {
+            unfold::unfold(&path)?;
         }
         None => {
             list::list(&ListArgs {

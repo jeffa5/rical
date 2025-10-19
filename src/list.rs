@@ -4,7 +4,10 @@ use std::{
 };
 
 use chrono::NaiveDateTime;
-use icalendar::{parser::{read_calendar, unfold}, Calendar};
+use icalendar::{
+    Calendar,
+    parser::{read_calendar, unfold},
+};
 
 use crate::table::TableWriter;
 
