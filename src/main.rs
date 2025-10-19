@@ -40,8 +40,8 @@ enum SubCommand {
         #[clap(long)]
         from: Option<NaiveDateTime>,
 
-        #[clap()]
-        path: PathBuf,
+        #[clap(required = true, num_args = 1..)]
+        paths: Vec<PathBuf>,
     },
     Unfold {
         #[clap()]
@@ -63,10 +63,10 @@ fn main() -> anyhow::Result<()> {
             output,
             limit,
             from,
-            path,
+            paths,
         }) => {
             let list_args = ListArgs {
-                path: path,
+                paths,
                 format: output,
                 limit: limit,
                 from: from.unwrap_or_else(|| Utc::now().naive_utc()),
@@ -78,7 +78,7 @@ fn main() -> anyhow::Result<()> {
         }
         None => {
             list::list(&ListArgs {
-                path: PathBuf::from("."),
+                paths: vec![PathBuf::from(".")],
                 format: OutputFormat::Table,
                 limit: 10,
                 from: Utc::now().naive_utc(),

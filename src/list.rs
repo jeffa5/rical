@@ -20,28 +20,31 @@ pub enum OutputFormat {
 }
 
 pub struct ListArgs {
-    pub path: PathBuf,
+    pub paths: Vec<PathBuf>,
     pub format: OutputFormat,
     pub limit: usize,
     pub from: NaiveDateTime,
 }
 
 pub fn list(args: &ListArgs) -> anyhow::Result<()> {
-    let paths = if args.path.is_file() {
-        vec![args.path.clone()]
-    } else if args.path.is_dir() {
-        read_dir(&args.path)?
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.metadata().map_or(false, |m| m.is_file()))
-            .map(|e| e.path())
-            .collect()
-    } else {
-        anyhow::bail!(
-            "Path was neither file or directory: {:?}",
-            args.path.metadata()
-        );
-    };
+    let paths = args.paths.iter().flat_map(|path| {
+        if path.is_file() {
+            vec![path.clone()]
+        } else if path.is_dir() {
+            read_dir(&path)
+                .map(|rd| {
+                    rd.into_iter()
+                        .filter_map(|e| e.ok())
+                        .filter(|e| e.metadata().map_or(false, |m| m.is_file()))
+                        .map(|e| e.path())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        } else {
+            warn!("Path was neither file or directory: {:?}", path.metadata());
+            Vec::new()
+        }
+    });
 
     let mut events = paths
         .into_iter()
