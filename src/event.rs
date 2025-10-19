@@ -2,6 +2,7 @@ use std::ops::Deref;
 
 use chrono::{DateTime, NaiveDateTime};
 use icalendar::{Component, Property};
+use log::warn;
 
 #[derive(Debug)]
 pub struct Event(icalendar::Event);
@@ -67,7 +68,7 @@ fn parse_datetime(prop: &Property) -> Option<NaiveDateTime> {
         NaiveDateTime::parse_from_str(prop.value(), "%Y%m%dT%H%M%S").ok()?
     };
     if ndt == DateTime::UNIX_EPOCH.naive_utc() {
-        eprintln!("failed to properly read datetime value: {:?}", prop.value());
+        warn!("failed to properly read datetime value: {:?}", prop.value());
     }
     Some(ndt)
 }

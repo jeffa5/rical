@@ -2,15 +2,30 @@ use std::path::PathBuf;
 
 use chrono::{NaiveDateTime, Utc};
 use clap::Parser as _;
+use log::debug;
 use rical::{
     list::{self, ListArgs, OutputFormat},
     unfold,
 };
 
+fn level_filter_from_verbosity(verbosity: u8) -> log::LevelFilter {
+    match verbosity {
+        0 => log::LevelFilter::Off,
+        1 => log::LevelFilter::Error,
+        2 => log::LevelFilter::Warn,
+        3 => log::LevelFilter::Info,
+        4 => log::LevelFilter::Debug,
+        _ => log::LevelFilter::Trace,
+    }
+}
+
 #[derive(Debug, Clone, clap::Parser)]
 struct Args {
     #[clap(subcommand)]
     cmd: Option<SubCommand>,
+
+    #[clap(short, action=clap::ArgAction::Count, global = true)]
+    verbosity: u8,
 }
 
 #[derive(Debug, Clone, clap::Subcommand)]
@@ -37,7 +52,11 @@ enum SubCommand {
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    eprintln!("{:?}", args);
+    env_logger::Builder::from_default_env()
+        .filter_level(level_filter_from_verbosity(args.verbosity))
+        .init();
+
+    debug!("{:?}", args);
 
     match args.cmd {
         Some(SubCommand::List {

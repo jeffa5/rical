@@ -8,6 +8,7 @@ use icalendar::{
     Calendar,
     parser::{read_calendar, unfold},
 };
+use log::{debug, warn};
 
 use crate::table::TableWriter;
 
@@ -93,7 +94,7 @@ pub fn list(args: &ListArgs) -> anyhow::Result<()> {
 }
 
 fn read_ics_to_calendar(path: &Path) -> anyhow::Result<Calendar> {
-    eprintln!("Loading file {:?}", path);
+    debug!("Loading file {:?}", path);
 
     let s = read_to_string(path)?;
 
@@ -102,7 +103,7 @@ fn read_ics_to_calendar(path: &Path) -> anyhow::Result<Calendar> {
     let cal_ref = match read_calendar(&unfolded) {
         Ok(cal) => cal,
         Err(e) => {
-            eprintln!("{e}");
+            warn!("{e}");
             anyhow::bail!(e)
         }
     };
