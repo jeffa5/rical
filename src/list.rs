@@ -31,11 +31,11 @@ pub fn list(args: &ListArgs) -> anyhow::Result<()> {
         if path.is_file() {
             vec![path.clone()]
         } else if path.is_dir() {
-            read_dir(&path)
+            read_dir(path)
                 .map(|rd| {
                     rd.into_iter()
                         .filter_map(|e| e.ok())
-                        .filter(|e| e.metadata().map_or(false, |m| m.is_file()))
+                        .filter(|e| e.metadata().is_ok_and(|m| m.is_file()))
                         .map(|e| e.path())
                         .collect::<Vec<_>>()
                 })
@@ -52,7 +52,7 @@ pub fn list(args: &ListArgs) -> anyhow::Result<()> {
         .flat_map(|cal| {
             cal.events()
                 .map(|e| crate::Event::from(e.clone()))
-                .filter(|e| e.start().map_or(false, |ndt| ndt > args.from))
+                .filter(|e| e.start().is_some_and(|ndt| ndt > args.from))
                 .collect::<Vec<_>>()
         })
         .take(args.limit)

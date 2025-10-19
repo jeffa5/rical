@@ -51,10 +51,7 @@ impl Event {
     }
 
     fn datetime_property(&self, name: &str) -> Option<NaiveDateTime> {
-        self.0
-            .properties()
-            .get(name)
-            .and_then(|p| parse_datetime(p))
+        self.0.properties().get(name).and_then(parse_datetime)
     }
 }
 

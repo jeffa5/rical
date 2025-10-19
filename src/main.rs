@@ -68,7 +68,7 @@ fn main() -> anyhow::Result<()> {
             let list_args = ListArgs {
                 paths,
                 format: output,
-                limit: limit,
+                limit,
                 from: from.unwrap_or_else(|| Utc::now().naive_utc()),
             };
             list::list(&list_args)?;
