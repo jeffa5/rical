@@ -4,7 +4,7 @@ use std::{
 };
 
 use chrono::NaiveDateTime;
-use icalendar::{Calendar, parser::read_calendar};
+use icalendar::{parser::{read_calendar, unfold}, Calendar};
 
 use crate::table::TableWriter;
 
@@ -94,7 +94,9 @@ fn read_ics_to_calendar(path: &Path) -> anyhow::Result<Calendar> {
 
     let s = read_to_string(path)?;
 
-    let cal_ref = match read_calendar(&s) {
+    let unfolded = unfold(&s);
+
+    let cal_ref = match read_calendar(&unfolded) {
         Ok(cal) => cal,
         Err(e) => {
             eprintln!("{e}");
