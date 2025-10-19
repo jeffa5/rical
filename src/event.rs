@@ -60,6 +60,10 @@ impl Event {
             .map(|a| a.split(",").collect())
             .unwrap_or_default()
     }
+
+    pub fn organizer(&self) -> Option<&str> {
+        self.0.property_value("ORGANIZER")
+    }
 }
 
 fn parse_datetime(prop: &Property) -> Option<NaiveDateTime> {
