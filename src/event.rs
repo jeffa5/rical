@@ -53,6 +53,13 @@ impl Event {
     fn datetime_property(&self, name: &str) -> Option<NaiveDateTime> {
         self.0.properties().get(name).and_then(parse_datetime)
     }
+
+    pub fn attendees(&self) -> Vec<&str> {
+        self.0
+            .property_value("ATTENDEE")
+            .map(|a| a.split(",").collect())
+            .unwrap_or_default()
+    }
 }
 
 fn parse_datetime(prop: &Property) -> Option<NaiveDateTime> {

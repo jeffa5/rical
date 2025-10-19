@@ -28,12 +28,14 @@ impl TableWriter {
                 "start".to_owned(),
                 "status".to_owned(),
                 "summary".to_owned(),
+                "attendees".to_owned(),
             ]
         } else {
             vec![
                 "start".to_owned(),
                 "status".to_owned(),
                 "summary".to_owned(),
+                "attendees".to_owned(),
             ]
         };
 
@@ -60,12 +62,14 @@ impl TableWriter {
                     event.start().map_or(String::new(), |d| d.to_string()),
                     status,
                     event.summary().unwrap_or_default().to_owned(),
+                    event.attendees().len().to_string(),
                 ]
             } else {
                 vec![
                     event.start().map_or(String::new(), |d| d.to_string()),
                     status,
                     event.summary().unwrap_or_default().to_owned(),
+                    event.attendees().len().to_string(),
                 ]
             };
             table.add_row(row);

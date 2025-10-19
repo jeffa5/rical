@@ -5,7 +5,7 @@ use clap::Parser as _;
 use log::debug;
 use rical::{
     list::{self, ListArgs, OutputFormat},
-    unfold,
+    stats, unfold,
 };
 
 fn level_filter_from_verbosity(verbosity: u8) -> log::LevelFilter {
@@ -22,14 +22,30 @@ fn level_filter_from_verbosity(verbosity: u8) -> log::LevelFilter {
 #[derive(Debug, Clone, clap::Parser)]
 struct Args {
     #[clap(subcommand)]
-    cmd: Option<SubCommand>,
+    cmd: Option<Subcommand>,
 
     #[clap(short, action=clap::ArgAction::Count, global = true)]
     verbosity: u8,
 }
 
 #[derive(Debug, Clone, clap::Subcommand)]
-enum SubCommand {
+enum Subcommand {
+    Events {
+        #[clap(subcommand)]
+        cmd: EventsSubcommand,
+    },
+    Stats {
+        #[clap()]
+        path: PathBuf,
+    },
+    Unfold {
+        #[clap()]
+        path: PathBuf,
+    },
+}
+
+#[derive(Debug, Clone, clap::Subcommand)]
+enum EventsSubcommand {
     List {
         #[clap(short, long, default_value = "table")]
         output: OutputFormat,
@@ -43,10 +59,6 @@ enum SubCommand {
         #[clap(required = true, num_args = 1..)]
         paths: Vec<PathBuf>,
     },
-    Unfold {
-        #[clap()]
-        path: PathBuf,
-    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -59,21 +71,26 @@ fn main() -> anyhow::Result<()> {
     debug!("{:?}", args);
 
     match args.cmd {
-        Some(SubCommand::List {
-            output,
-            limit,
-            from,
-            paths,
-        }) => {
-            let list_args = ListArgs {
-                paths,
-                format: output,
+        Some(Subcommand::Events { cmd }) => match cmd {
+            EventsSubcommand::List {
+                output,
                 limit,
-                from: from.unwrap_or_else(|| Utc::now().naive_utc()),
-            };
-            list::list(&list_args)?;
+                from,
+                paths,
+            } => {
+                let list_args = ListArgs {
+                    paths,
+                    format: output,
+                    limit,
+                    from: from.unwrap_or_else(|| Utc::now().naive_utc()),
+                };
+                list::list(&list_args)?;
+            }
+        },
+        Some(Subcommand::Stats { path }) => {
+            stats::stats(&path)?;
         }
-        Some(SubCommand::Unfold { path }) => {
+        Some(Subcommand::Unfold { path }) => {
             unfold::unfold(&path)?;
         }
         None => {
