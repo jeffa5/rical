@@ -45,7 +45,7 @@ impl TableWriter {
                     Some(icalendar::EventStatus::Tentative) => "t".to_owned(),
                     Some(icalendar::EventStatus::Confirmed) => "y".to_owned(),
                     Some(icalendar::EventStatus::Cancelled) => "n".to_owned(),
-                    None => "?".to_owned(),
+                    None => "".to_owned(),
                 }
             } else {
                 event.status_str().unwrap_or_default().to_owned()

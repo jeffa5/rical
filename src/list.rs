@@ -3,6 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use chrono::NaiveDateTime;
 use icalendar::{Calendar, parser::read_calendar};
 
 use crate::table::TableWriter;
@@ -18,6 +19,7 @@ pub struct ListArgs {
     pub path: PathBuf,
     pub format: OutputFormat,
     pub limit: usize,
+    pub from: NaiveDateTime,
 }
 
 pub fn list(args: &ListArgs) -> anyhow::Result<()> {
@@ -29,14 +31,19 @@ pub fn list(args: &ListArgs) -> anyhow::Result<()> {
         .flat_map(|cal| {
             cal.events()
                 .map(|e| crate::Event::from(e.clone()))
+                .filter(|e| e.start().map_or(false, |ndt| ndt > args.from))
                 .collect::<Vec<_>>()
         })
         .take(args.limit)
         .collect::<Vec<_>>();
 
     events.sort_by_key(|e| {
-        e.start()
-            .unwrap_or_else(|| e.created().unwrap_or_else(|| e.dtstamp().expect("start, created, or dtstamp should be there")))
+        e.start().unwrap_or_else(|| {
+            e.created().unwrap_or_else(|| {
+                e.dtstamp()
+                    .expect("start, created, or dtstamp should be there")
+            })
+        })
     });
 
     match args.format {
