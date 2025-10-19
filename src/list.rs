@@ -23,11 +23,25 @@ pub struct ListArgs {
 }
 
 pub fn list(args: &ListArgs) -> anyhow::Result<()> {
-    let mut events = read_dir(&args.path)?
+    let paths = if args.path.is_file() {
+        vec![args.path.clone()]
+    } else if args.path.is_dir() {
+        read_dir(&args.path)?
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.metadata().map_or(false, |m| m.is_file()))
+            .map(|e| e.path())
+            .collect()
+    } else {
+        anyhow::bail!(
+            "Path was neither file or directory: {:?}",
+            args.path.metadata()
+        );
+    };
+
+    let mut events = paths
         .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.metadata().map_or(false, |m| m.is_file()))
-        .filter_map(|e| read_ics_to_calendar(&e.path()).ok())
+        .filter_map(|p| read_ics_to_calendar(&p).ok())
         .flat_map(|cal| {
             cal.events()
                 .map(|e| crate::Event::from(e.clone()))

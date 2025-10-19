@@ -39,10 +39,6 @@ fn main() -> anyhow::Result<()> {
             from,
             path,
         }) => {
-            if !path.is_dir() {
-                anyhow::bail!("currently only directories are supported")
-            }
-
             let list_args = ListArgs {
                 path: path,
                 format: output,

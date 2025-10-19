@@ -1,4 +1,4 @@
-use std::{ops::Deref, time::SystemTime};
+use std::ops::Deref;
 
 use chrono::{DateTime, NaiveDateTime};
 use icalendar::{Component, Property};
