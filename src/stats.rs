@@ -1,4 +1,6 @@
-use std::{fs::read_dir, path::Path};
+use std::{collections::BTreeMap, fs::read_dir, path::Path};
+
+use icalendar::Component;
 
 use crate::calendar::read_ics_to_calendar;
 
@@ -12,19 +14,34 @@ pub fn stats(path: &Path) -> anyhow::Result<()> {
         .filter_map(|e| read_ics_to_calendar(&e.path()).ok())
         .collect::<Vec<_>>();
 
-    let mut num_events = 0;
-    let mut num_todos = 0;
+    let mut total_events = 0;
+
+    let mut counts: BTreeMap<_, usize> = BTreeMap::new();
 
     for calendar in calendars {
-        let events = calendar.events().count();
-        let todos = calendar.todos().count();
+        let total = calendar.components.len();
+        total_events += total;
 
-        num_events += events;
-        num_todos += todos;
+        calendar.components.iter().for_each(|component| {
+            let kind = component_kind(component);
+            *counts.entry(kind).or_default() += 1;
+        });
     }
 
-    println!("events: {num_events}");
-    println!("todos: {num_todos}");
+    println!("total: {total_events}");
+    for (kind, count) in counts {
+        println!("{kind}: {count}");
+    }
 
     Ok(())
+}
+
+fn component_kind(component: &icalendar::CalendarComponent) -> String {
+    match component {
+        icalendar::CalendarComponent::Todo(todo) => todo.component_kind(),
+        icalendar::CalendarComponent::Event(event) => event.component_kind(),
+        icalendar::CalendarComponent::Venue(venue) => venue.component_kind(),
+        icalendar::CalendarComponent::Other(other) => other.component_kind(),
+        _ => "unknown".to_owned(),
+    }
 }
