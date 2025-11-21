@@ -41,6 +41,9 @@ enum Subcommand {
     Stats {
         #[clap()]
         path: PathBuf,
+
+        #[clap(long, default_value = "false")]
+        recursive: bool,
     },
     Unfold {
         #[clap()]
@@ -55,6 +58,9 @@ enum Subcommand {
 
         #[clap(long)]
         from: Option<NaiveDateTime>,
+
+        #[clap(long, default_value = "false")]
+        recursive: bool,
 
         #[clap(required = true, num_args = 1..)]
         paths: Vec<PathBuf>,
@@ -73,6 +79,9 @@ enum EventsSubcommand {
         #[clap(long)]
         from: Option<NaiveDateTime>,
 
+        #[clap(long, default_value = "false")]
+        recursive: bool,
+
         #[clap(required = true, num_args = 1..)]
         paths: Vec<PathBuf>,
     },
@@ -89,6 +98,9 @@ enum TodosSubcommand {
 
         #[clap(long)]
         from: Option<NaiveDateTime>,
+
+        #[clap(long, default_value = "false")]
+        recursive: bool,
 
         #[clap(required = true, num_args = 1..)]
         paths: Vec<PathBuf>,
@@ -110,6 +122,7 @@ fn main() -> anyhow::Result<()> {
                 output,
                 limit,
                 from,
+                recursive,
                 paths,
             } => {
                 let list_args = ListArgs {
@@ -117,6 +130,7 @@ fn main() -> anyhow::Result<()> {
                     format: output,
                     limit,
                     from,
+                    recursive,
                     kind: list::ListKind::Event,
                 };
                 list::list(&list_args)?;
@@ -127,6 +141,7 @@ fn main() -> anyhow::Result<()> {
                 output,
                 limit,
                 from,
+                recursive,
                 paths,
             } => {
                 let list_args = ListArgs {
@@ -134,13 +149,14 @@ fn main() -> anyhow::Result<()> {
                     format: output,
                     limit,
                     from,
+                    recursive,
                     kind: list::ListKind::Todo,
                 };
                 list::list(&list_args)?;
             }
         },
-        Subcommand::Stats { path } => {
-            stats::stats(&path)?;
+        Subcommand::Stats { path, recursive } => {
+            stats::stats(&path, recursive)?;
         }
         Subcommand::Unfold { path } => {
             unfold::unfold(&path)?;
@@ -149,6 +165,7 @@ fn main() -> anyhow::Result<()> {
             output,
             limit,
             from,
+            recursive,
             paths,
         } => {
             list::list(&ListArgs {
@@ -156,6 +173,7 @@ fn main() -> anyhow::Result<()> {
                 format: output,
                 limit,
                 from,
+                recursive,
                 kind: list::ListKind::All,
             })?;
         }

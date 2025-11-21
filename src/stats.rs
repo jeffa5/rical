@@ -1,17 +1,15 @@
-use std::{collections::BTreeMap, fs::read_dir, path::Path};
+use std::{collections::BTreeMap, path::Path};
 
 use icalendar::Component;
 
-use crate::calendar::read_ics_to_calendar;
+use crate::{calendar::read_ics_to_calendar, list::paths_to_files};
 
-pub fn stats(path: &Path) -> anyhow::Result<()> {
-    if !path.is_dir() {
-        anyhow::bail!("only supports directories for now")
-    }
+pub fn stats(path: &Path, recursive: bool) -> anyhow::Result<()> {
+    let paths = paths_to_files(&[path.to_owned()], recursive);
 
-    let calendars = read_dir(path)?
-        .filter_map(|e| e.ok())
-        .filter_map(|e| read_ics_to_calendar(&e.path()).ok())
+    let calendars = paths
+        .into_iter()
+        .filter_map(|p| read_ics_to_calendar(&p).ok())
         .collect::<Vec<_>>();
 
     let mut total_components = 0;
