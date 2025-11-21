@@ -22,7 +22,7 @@ fn level_filter_from_verbosity(verbosity: u8) -> log::LevelFilter {
 #[derive(Debug, Clone, clap::Parser)]
 struct Args {
     #[clap(subcommand)]
-    cmd: Option<Subcommand>,
+    cmd: Subcommand,
 
     #[clap(short, action=clap::ArgAction::Count, global = true)]
     verbosity: u8,
@@ -45,6 +45,19 @@ enum Subcommand {
     Unfold {
         #[clap()]
         path: PathBuf,
+    },
+    List {
+        #[clap(short, long, default_value = "table")]
+        output: OutputFormat,
+
+        #[clap(long, default_value = "10")]
+        limit: usize,
+
+        #[clap(long)]
+        from: Option<NaiveDateTime>,
+
+        #[clap(required = true, num_args = 1..)]
+        paths: Vec<PathBuf>,
     },
 }
 
@@ -92,7 +105,7 @@ fn main() -> anyhow::Result<()> {
     debug!("{:?}", args);
 
     match args.cmd {
-        Some(Subcommand::Events { cmd }) => match cmd {
+        Subcommand::Events { cmd } => match cmd {
             EventsSubcommand::List {
                 output,
                 limit,
@@ -109,7 +122,7 @@ fn main() -> anyhow::Result<()> {
                 list::list(&list_args)?;
             }
         },
-        Some(Subcommand::Todos { cmd }) => match cmd {
+        Subcommand::Todos { cmd } => match cmd {
             TodosSubcommand::List {
                 output,
                 limit,
@@ -126,18 +139,23 @@ fn main() -> anyhow::Result<()> {
                 list::list(&list_args)?;
             }
         },
-        Some(Subcommand::Stats { path }) => {
+        Subcommand::Stats { path } => {
             stats::stats(&path)?;
         }
-        Some(Subcommand::Unfold { path }) => {
+        Subcommand::Unfold { path } => {
             unfold::unfold(&path)?;
         }
-        None => {
+        Subcommand::List {
+            output,
+            limit,
+            from,
+            paths,
+        } => {
             list::list(&ListArgs {
-                paths: vec![PathBuf::from(".")],
-                format: OutputFormat::Table,
-                limit: 10,
-                from: Utc::now().naive_utc(),
+                paths,
+                format: output,
+                limit,
+                from: from.unwrap_or_else(|| Utc::now().naive_utc()),
                 kind: list::ListKind::All,
             })?;
         }
