@@ -24,6 +24,7 @@ impl TableWriter {
         let mut table = Table::new();
         let header = if self.options.verbose {
             vec![
+                "kind".to_owned(),
                 "uid".to_owned(),
                 "created".to_owned(),
                 "start".to_owned(),
@@ -34,6 +35,7 @@ impl TableWriter {
             ]
         } else {
             vec![
+                "kind".to_owned(),
                 "start".to_owned(),
                 "status".to_owned(),
                 "summary".to_owned(),
@@ -44,9 +46,9 @@ impl TableWriter {
 
         table.load_preset(NOTHING).set_header(header);
 
-        for event in components {
+        for component in components {
             let status = if self.options.symbols {
-                match event.property_value("STATUS") {
+                match component.property_value("STATUS") {
                     Some("TENTATIVE") => "t".to_owned(),
                     Some("CONFIRMED") => "y".to_owned(),
                     Some("CANCELLED") => "n".to_owned(),
@@ -54,53 +56,53 @@ impl TableWriter {
                     None => "".to_owned(),
                 }
             } else {
-                event
+                component
                     .property_value("STATUS")
                     .unwrap_or_default()
                     .to_owned()
             };
             let row = if self.options.verbose {
                 vec![
-                    event.get_uid().unwrap().to_owned(),
-                    event
+                    component.component_kind(),
+                    component.get_uid().unwrap().to_owned(),
+                    component
                         .get_created()
                         .unwrap_or_else(|| {
-                            event
+                            component
                                 .get_timestamp()
-                                .expect("no created or dtstamp in event")
+                                .expect("no created or dtstamp in component")
                         })
                         .to_string(),
-                    event.get_start().map_or(String::new(), |d| {
+                    component.get_start().map_or(String::new(), |d| {
                         date_perhaps_time_to_datetime_utc(d).to_string()
                     }),
                     status,
-                    event.get_summary().unwrap_or_default().to_owned(),
-                    event
+                    component.get_summary().unwrap_or_default().to_owned(),
+                    component
                         .property_value("ORGANIZER")
                         .unwrap_or_default()
                         .to_owned(),
-                    event
+                    component
                         .property_value("ATTENDEES")
-                        .map(|a| a.split(',').count())
-                        .unwrap_or_default()
-                        .to_string(),
+                        .map(|a| a.split(',').count().to_string())
+                        .unwrap_or_default(),
                 ]
             } else {
                 vec![
-                    event.get_start().map_or(String::new(), |d| {
+                    component.component_kind(),
+                    component.get_start().map_or(String::new(), |d| {
                         date_perhaps_time_to_datetime_utc(d).to_string()
                     }),
                     status,
-                    event.get_summary().unwrap_or_default().to_owned(),
-                    event
+                    component.get_summary().unwrap_or_default().to_owned(),
+                    component
                         .property_value("ORGANIZER")
                         .unwrap_or_default()
                         .to_owned(),
-                    event
+                    component
                         .property_value("ATTENDEES")
-                        .map(|a| a.split(',').count())
-                        .unwrap_or_default()
-                        .to_string(),
+                        .map(|a| a.split(',').count().to_string())
+                        .unwrap_or_default(),
                 ]
             };
             table.add_row(row);
