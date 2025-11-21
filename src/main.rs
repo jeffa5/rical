@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use chrono::{NaiveDateTime, Utc};
+use chrono::NaiveDateTime;
 use clap::Parser as _;
 use log::debug;
 use rical::{
@@ -116,7 +116,7 @@ fn main() -> anyhow::Result<()> {
                     paths,
                     format: output,
                     limit,
-                    from: from.unwrap_or_else(|| Utc::now().naive_utc()),
+                    from,
                     kind: list::ListKind::Event,
                 };
                 list::list(&list_args)?;
@@ -133,7 +133,7 @@ fn main() -> anyhow::Result<()> {
                     paths,
                     format: output,
                     limit,
-                    from: from.unwrap_or_else(|| Utc::now().naive_utc()),
+                    from,
                     kind: list::ListKind::Todo,
                 };
                 list::list(&list_args)?;
@@ -155,7 +155,7 @@ fn main() -> anyhow::Result<()> {
                 paths,
                 format: output,
                 limit,
-                from: from.unwrap_or_else(|| Utc::now().naive_utc()),
+                from,
                 kind: list::ListKind::All,
             })?;
         }

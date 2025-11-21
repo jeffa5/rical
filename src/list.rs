@@ -1,6 +1,6 @@
 use std::{fs::read_dir, path::PathBuf};
 
-use chrono::{NaiveDateTime, NaiveTime, Utc};
+use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use icalendar::{Component as _, DatePerhapsTime};
 use log::warn;
 
@@ -33,7 +33,7 @@ pub struct ListArgs {
     pub paths: Vec<PathBuf>,
     pub format: OutputFormat,
     pub limit: usize,
-    pub from: NaiveDateTime,
+    pub from: Option<NaiveDateTime>,
     pub kind: ListKind,
 }
 
@@ -66,8 +66,10 @@ pub fn list(args: &ListArgs) -> anyhow::Result<()> {
                 .map(AnyComponent::from)
                 .filter(|c| args.kind.matches(&c.component_kind()))
                 .filter(|c| {
-                    c.get_start().is_some_and(|ndt| {
-                        date_perhaps_time_to_datetime_utc(ndt) > args.from.and_utc()
+                    args.from.is_none_or(|from| {
+                        c.get_start().is_some_and(|ndt| {
+                            date_perhaps_time_to_datetime_utc(ndt) > from.and_utc()
+                        })
                     })
                 })
                 .collect::<Vec<_>>()
@@ -79,10 +81,8 @@ pub fn list(args: &ListArgs) -> anyhow::Result<()> {
         e.get_start()
             .map(date_perhaps_time_to_datetime_utc)
             .unwrap_or_else(|| {
-                e.get_created().unwrap_or_else(|| {
-                    e.get_timestamp()
-                        .expect("start, created, or dtstamp should be there")
-                })
+                e.get_created()
+                    .unwrap_or_else(|| e.get_timestamp().unwrap_or(DateTime::<Utc>::MIN_UTC))
             })
     });
 
