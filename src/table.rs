@@ -1,8 +1,9 @@
 use std::io::Write;
 
 use comfy_table::{Table, presets::NOTHING};
+use icalendar::Component;
 
-use crate::Event;
+use crate::{component::AnyComponent, list::date_perhaps_time_to_datetime_utc};
 
 pub struct TableOptions {
     pub verbose: bool,
@@ -19,7 +20,7 @@ impl TableWriter {
         Self { writer, options }
     }
 
-    pub fn write_events(&mut self, events: &[Event]) -> anyhow::Result<()> {
+    pub fn write_any_components(&mut self, components: &[AnyComponent]) -> anyhow::Result<()> {
         let mut table = Table::new();
         let header = if self.options.verbose {
             vec![
@@ -43,37 +44,63 @@ impl TableWriter {
 
         table.load_preset(NOTHING).set_header(header);
 
-        for event in events {
+        for event in components {
             let status = if self.options.symbols {
-                match event.get_status() {
-                    Some(icalendar::EventStatus::Tentative) => "t".to_owned(),
-                    Some(icalendar::EventStatus::Confirmed) => "y".to_owned(),
-                    Some(icalendar::EventStatus::Cancelled) => "n".to_owned(),
+                match event.property_value("STATUS") {
+                    Some("TENTATIVE") => "t".to_owned(),
+                    Some("CONFIRMED") => "y".to_owned(),
+                    Some("CANCELLED") => "n".to_owned(),
+                    Some(_) => "?".to_owned(),
                     None => "".to_owned(),
                 }
             } else {
-                event.status_str().unwrap_or_default().to_owned()
+                event
+                    .property_value("STATUS")
+                    .unwrap_or_default()
+                    .to_owned()
             };
             let row = if self.options.verbose {
                 vec![
-                    event.uid().unwrap().to_owned(),
+                    event.get_uid().unwrap().to_owned(),
                     event
-                        .created()
-                        .unwrap_or_else(|| event.dtstamp().expect("no created or dtstamp in event"))
+                        .get_created()
+                        .unwrap_or_else(|| {
+                            event
+                                .get_timestamp()
+                                .expect("no created or dtstamp in event")
+                        })
                         .to_string(),
-                    event.start().map_or(String::new(), |d| d.to_string()),
+                    event.get_start().map_or(String::new(), |d| {
+                        date_perhaps_time_to_datetime_utc(d).to_string()
+                    }),
                     status,
-                    event.summary().unwrap_or_default().to_owned(),
-                    event.organizer().unwrap_or_default().to_owned(),
-                    event.attendees().len().to_string(),
+                    event.get_summary().unwrap_or_default().to_owned(),
+                    event
+                        .property_value("ORGANIZER")
+                        .unwrap_or_default()
+                        .to_owned(),
+                    event
+                        .property_value("ATTENDEES")
+                        .map(|a| a.split(',').count())
+                        .unwrap_or_default()
+                        .to_string(),
                 ]
             } else {
                 vec![
-                    event.start().map_or(String::new(), |d| d.to_string()),
+                    event.get_start().map_or(String::new(), |d| {
+                        date_perhaps_time_to_datetime_utc(d).to_string()
+                    }),
                     status,
-                    event.summary().unwrap_or_default().to_owned(),
-                    event.organizer().unwrap_or_default().to_owned(),
-                    event.attendees().len().to_string(),
+                    event.get_summary().unwrap_or_default().to_owned(),
+                    event
+                        .property_value("ORGANIZER")
+                        .unwrap_or_default()
+                        .to_owned(),
+                    event
+                        .property_value("ATTENDEES")
+                        .map(|a| a.split(',').count())
+                        .unwrap_or_default()
+                        .to_string(),
                 ]
             };
             table.add_row(row);

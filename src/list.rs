@@ -1,9 +1,10 @@
 use std::{fs::read_dir, path::PathBuf};
 
-use chrono::NaiveDateTime;
+use chrono::{NaiveDateTime, NaiveTime, Utc};
+use icalendar::{Component as _, DatePerhapsTime};
 use log::warn;
 
-use crate::{calendar::read_ics_to_calendar, table::TableWriter};
+use crate::{calendar::read_ics_to_calendar, component::AnyComponent, table::TableWriter};
 
 #[derive(Debug, Clone, clap::ValueEnum)]
 pub enum OutputFormat {
@@ -12,11 +13,28 @@ pub enum OutputFormat {
     Json,
 }
 
+pub enum ListKind {
+    Event,
+    Todo,
+    All,
+}
+
+impl ListKind {
+    fn matches(&self, other: &str) -> bool {
+        match self {
+            ListKind::Event => other == "VEVENT",
+            ListKind::Todo => other == "VTODO",
+            ListKind::All => true,
+        }
+    }
+}
+
 pub struct ListArgs {
     pub paths: Vec<PathBuf>,
     pub format: OutputFormat,
     pub limit: usize,
     pub from: NaiveDateTime,
+    pub kind: ListKind,
 }
 
 pub fn list(args: &ListArgs) -> anyhow::Result<()> {
@@ -39,25 +57,33 @@ pub fn list(args: &ListArgs) -> anyhow::Result<()> {
         }
     });
 
-    let mut events = paths
+    let mut components = paths
         .into_iter()
         .filter_map(|p| read_ics_to_calendar(&p).ok())
         .flat_map(|cal| {
-            cal.events()
-                .map(|e| crate::Event::from(e.clone()))
-                .filter(|e| e.start().is_some_and(|ndt| ndt > args.from))
+            cal.components
+                .into_iter()
+                .map(AnyComponent::from)
+                .filter(|c| args.kind.matches(&c.component_kind()))
+                .filter(|c| {
+                    c.get_start().is_some_and(|ndt| {
+                        date_perhaps_time_to_datetime_utc(ndt) > args.from.and_utc()
+                    })
+                })
                 .collect::<Vec<_>>()
         })
         .take(args.limit)
         .collect::<Vec<_>>();
 
-    events.sort_by_key(|e| {
-        e.start().unwrap_or_else(|| {
-            e.created().unwrap_or_else(|| {
-                e.dtstamp()
-                    .expect("start, created, or dtstamp should be there")
+    components.sort_by_key(|e| {
+        e.get_start()
+            .map(date_perhaps_time_to_datetime_utc)
+            .unwrap_or_else(|| {
+                e.get_created().unwrap_or_else(|| {
+                    e.get_timestamp()
+                        .expect("start, created, or dtstamp should be there")
+                })
             })
-        })
     });
 
     match args.format {
@@ -69,7 +95,7 @@ pub fn list(args: &ListArgs) -> anyhow::Result<()> {
                     symbols: false,
                 },
             );
-            table_writer.write_events(&events)?;
+            table_writer.write_any_components(&components)?;
         }
         OutputFormat::Table => {
             let mut table_writer = TableWriter::new(
@@ -79,7 +105,7 @@ pub fn list(args: &ListArgs) -> anyhow::Result<()> {
                     symbols: true,
                 },
             );
-            table_writer.write_events(&events)?;
+            table_writer.write_any_components(&components)?;
         }
         OutputFormat::Json => {
             todo!()
@@ -87,4 +113,19 @@ pub fn list(args: &ListArgs) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+pub(crate) fn date_perhaps_time_to_datetime_utc(dpt: DatePerhapsTime) -> chrono::DateTime<Utc> {
+    match dpt {
+        icalendar::DatePerhapsTime::DateTime(calendar_date_time) => calendar_date_time
+            .try_into_utc()
+            .unwrap_or_else(|| match calendar_date_time {
+                icalendar::CalendarDateTime::Floating(naive_date_time) => naive_date_time.and_utc(),
+                icalendar::CalendarDateTime::Utc(..) => todo!(),
+                icalendar::CalendarDateTime::WithTimezone { .. } => todo!(),
+            }),
+        icalendar::DatePerhapsTime::Date(naive_date) => naive_date
+            .and_time(NaiveTime::from_hms_opt(0, 0, 0).unwrap())
+            .and_utc(),
+    }
 }

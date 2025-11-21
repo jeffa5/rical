@@ -34,6 +34,10 @@ enum Subcommand {
         #[clap(subcommand)]
         cmd: EventsSubcommand,
     },
+    Todos {
+        #[clap(subcommand)]
+        cmd: TodosSubcommand,
+    },
     Stats {
         #[clap()]
         path: PathBuf,
@@ -46,6 +50,23 @@ enum Subcommand {
 
 #[derive(Debug, Clone, clap::Subcommand)]
 enum EventsSubcommand {
+    List {
+        #[clap(short, long, default_value = "table")]
+        output: OutputFormat,
+
+        #[clap(long, default_value = "10")]
+        limit: usize,
+
+        #[clap(long)]
+        from: Option<NaiveDateTime>,
+
+        #[clap(required = true, num_args = 1..)]
+        paths: Vec<PathBuf>,
+    },
+}
+
+#[derive(Debug, Clone, clap::Subcommand)]
+enum TodosSubcommand {
     List {
         #[clap(short, long, default_value = "table")]
         output: OutputFormat,
@@ -83,6 +104,24 @@ fn main() -> anyhow::Result<()> {
                     format: output,
                     limit,
                     from: from.unwrap_or_else(|| Utc::now().naive_utc()),
+                    kind: list::ListKind::Event,
+                };
+                list::list(&list_args)?;
+            }
+        },
+        Some(Subcommand::Todos { cmd }) => match cmd {
+            TodosSubcommand::List {
+                output,
+                limit,
+                from,
+                paths,
+            } => {
+                let list_args = ListArgs {
+                    paths,
+                    format: output,
+                    limit,
+                    from: from.unwrap_or_else(|| Utc::now().naive_utc()),
+                    kind: list::ListKind::Todo,
                 };
                 list::list(&list_args)?;
             }
@@ -99,6 +138,7 @@ fn main() -> anyhow::Result<()> {
                 format: OutputFormat::Table,
                 limit: 10,
                 from: Utc::now().naive_utc(),
+                kind: list::ListKind::All,
             })?;
         }
     }
