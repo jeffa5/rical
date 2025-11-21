@@ -14,13 +14,13 @@ pub fn stats(path: &Path) -> anyhow::Result<()> {
         .filter_map(|e| read_ics_to_calendar(&e.path()).ok())
         .collect::<Vec<_>>();
 
-    let mut total_events = 0;
+    let mut total_components = 0;
 
     let mut counts: BTreeMap<_, usize> = BTreeMap::new();
 
     for calendar in calendars {
         let total = calendar.components.len();
-        total_events += total;
+        total_components += total;
 
         calendar.components.iter().for_each(|component| {
             let kind = component_kind(component);
@@ -28,7 +28,7 @@ pub fn stats(path: &Path) -> anyhow::Result<()> {
         });
     }
 
-    println!("total: {total_events}");
+    println!("total: {total_components}");
     for (kind, count) in counts {
         println!("{kind}: {count}");
     }
