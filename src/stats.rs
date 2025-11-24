@@ -18,6 +18,7 @@ pub struct StatsArgs {
 #[derive(Debug, Serialize)]
 struct Stats {
     total: u64,
+    #[serde(flatten)]
     by_kind: BTreeMap<String, u64>,
 }
 

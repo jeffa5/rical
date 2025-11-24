@@ -102,8 +102,6 @@ impl serde::ser::Serializer for &mut TableSerializer {
     }
 
     fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap> {
-        let len = len.unwrap();
-        self.row = vec![String::new(); len];
         Ok(self)
     }
 
