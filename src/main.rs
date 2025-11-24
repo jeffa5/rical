@@ -5,7 +5,7 @@ use clap::Parser as _;
 use log::debug;
 use rical::{
     format::OutputFormat,
-    list::{self, ListArgs},
+    list::{self, ListArgs, ListKind},
     stats::{self, StatsArgs},
     unfold,
 };
@@ -66,6 +66,9 @@ enum Subcommand {
 
         #[clap(long, default_value = "false")]
         recursive: bool,
+
+        #[clap(long, value_delimiter = ',', default_value = "todo,event,journal")]
+        kinds: Vec<ListKind>,
 
         #[clap(required = true, num_args = 1..)]
         paths: Vec<PathBuf>,
@@ -136,7 +139,7 @@ fn main() -> anyhow::Result<()> {
                     limit,
                     from,
                     recursive,
-                    kind: list::ListKind::Event,
+                    kinds: vec![list::ListKind::Event],
                 };
                 list::list(&list_args)?;
             }
@@ -155,7 +158,7 @@ fn main() -> anyhow::Result<()> {
                     limit,
                     from,
                     recursive,
-                    kind: list::ListKind::Todo,
+                    kinds: vec![list::ListKind::Todo],
                 };
                 list::list(&list_args)?;
             }
@@ -180,6 +183,7 @@ fn main() -> anyhow::Result<()> {
             limit,
             from,
             recursive,
+            kinds,
             paths,
         } => {
             list::list(&ListArgs {
@@ -188,7 +192,7 @@ fn main() -> anyhow::Result<()> {
                 limit,
                 from,
                 recursive,
-                kind: list::ListKind::All,
+                kinds,
             })?;
         }
     }

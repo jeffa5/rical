@@ -206,7 +206,6 @@ impl Formatable for FormatableComponent {
             "summary".to_owned(),
             "organizer".to_owned(),
             "attendees".to_owned(),
-            "path".to_owned(),
         ]
     }
 

@@ -1,4 +1,4 @@
-use std::{fs::read_dir, path::PathBuf};
+use std::{fs::read_dir, path::PathBuf, str::FromStr};
 
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use icalendar::{Component as _, DatePerhapsTime};
@@ -10,9 +10,11 @@ use crate::{
     format::OutputFormat,
 };
 
+#[derive(Debug, Clone)]
 pub enum ListKind {
     Event,
     Todo,
+    Journal,
     All,
 }
 
@@ -21,7 +23,22 @@ impl ListKind {
         match self {
             ListKind::Event => other == "VEVENT",
             ListKind::Todo => other == "VTODO",
+            ListKind::Journal => other == "VJOURNAL",
             ListKind::All => true,
+        }
+    }
+}
+
+impl FromStr for ListKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "all" => Ok(Self::All),
+            "event" => Ok(Self::Event),
+            "todo" => Ok(Self::Todo),
+            "journal" => Ok(Self::Journal),
+            _ => Err(format!("Unknown list kind {s:?}")),
         }
     }
 }
@@ -31,7 +48,7 @@ pub struct ListArgs {
     pub format: OutputFormat,
     pub limit: usize,
     pub from: Option<NaiveDateTime>,
-    pub kind: ListKind,
+    pub kinds: Vec<ListKind>,
     pub recursive: bool,
 }
 
@@ -45,7 +62,7 @@ pub fn list(args: &ListArgs) -> anyhow::Result<()> {
             cal.components
                 .into_iter()
                 .map(|c| AnyComponent::new(p.clone(), c))
-                .filter(|c| args.kind.matches(&c.component_kind()))
+                .filter(|c| args.kinds.iter().any(|k| k.matches(&c.component_kind())))
                 .filter(|c| {
                     args.from.is_none_or(|from| {
                         c.get_start().is_some_and(|ndt| {
