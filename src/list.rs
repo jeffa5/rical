@@ -40,11 +40,11 @@ pub fn list(args: &ListArgs) -> anyhow::Result<()> {
 
     let mut components = paths
         .into_iter()
-        .filter_map(|p| read_ics_to_calendar(&p).ok())
-        .flat_map(|cal| {
+        .filter_map(|p| read_ics_to_calendar(&p).ok().map(|c| (p, c)))
+        .flat_map(|(p, cal)| {
             cal.components
                 .into_iter()
-                .map(AnyComponent::from)
+                .map(|c| AnyComponent::new(p.clone(), c))
                 .filter(|c| args.kind.matches(&c.component_kind()))
                 .filter(|c| {
                     args.from.is_none_or(|from| {

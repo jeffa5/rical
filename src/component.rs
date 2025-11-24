@@ -1,19 +1,24 @@
+use std::path::PathBuf;
+
 use icalendar::{CalendarComponent, Component, Other};
 use serde::Serialize;
 
 use crate::{format::Formatable, list::date_perhaps_time_to_datetime_utc};
 
-pub struct AnyComponent(CalendarComponent);
+pub struct AnyComponent {
+    path: PathBuf,
+    component: CalendarComponent,
+}
 
-impl From<CalendarComponent> for AnyComponent {
-    fn from(value: CalendarComponent) -> Self {
-        Self(value)
+impl AnyComponent {
+    pub fn new(path: PathBuf, component: CalendarComponent) -> Self {
+        Self { path, component }
     }
 }
 
 impl Component for AnyComponent {
     fn component_kind(&self) -> String {
-        match &self.0 {
+        match &self.component {
             CalendarComponent::Todo(todo) => todo.component_kind(),
             CalendarComponent::Event(event) => event.component_kind(),
             CalendarComponent::Venue(venue) => venue.component_kind(),
@@ -23,7 +28,7 @@ impl Component for AnyComponent {
     }
 
     fn properties(&self) -> &std::collections::BTreeMap<String, icalendar::Property> {
-        match &self.0 {
+        match &self.component {
             CalendarComponent::Todo(todo) => todo.properties(),
             CalendarComponent::Event(event) => event.properties(),
             CalendarComponent::Venue(venue) => venue.properties(),
@@ -33,7 +38,7 @@ impl Component for AnyComponent {
     }
 
     fn components(&self) -> &[Other] {
-        match &self.0 {
+        match &self.component {
             CalendarComponent::Todo(todo) => todo.components(),
             CalendarComponent::Event(event) => event.components(),
             CalendarComponent::Venue(venue) => venue.components(),
@@ -43,7 +48,7 @@ impl Component for AnyComponent {
     }
 
     fn multi_properties(&self) -> &std::collections::BTreeMap<String, Vec<icalendar::Property>> {
-        match &self.0 {
+        match &self.component {
             CalendarComponent::Todo(todo) => todo.multi_properties(),
             CalendarComponent::Event(event) => event.multi_properties(),
             CalendarComponent::Venue(venue) => venue.multi_properties(),
@@ -53,7 +58,7 @@ impl Component for AnyComponent {
     }
 
     fn append_property(&mut self, property: impl Into<icalendar::Property>) -> &mut Self {
-        match &mut self.0 {
+        match &mut self.component {
             CalendarComponent::Todo(todo) => {
                 todo.append_property(property);
             }
@@ -72,7 +77,7 @@ impl Component for AnyComponent {
     }
 
     fn append_component(&mut self, child: impl Into<Other>) -> &mut Self {
-        match &mut self.0 {
+        match &mut self.component {
             CalendarComponent::Todo(todo) => {
                 todo.append_component(child);
             }
@@ -91,7 +96,7 @@ impl Component for AnyComponent {
     }
 
     fn append_multi_property(&mut self, property: impl Into<icalendar::Property>) -> &mut Self {
-        match &mut self.0 {
+        match &mut self.component {
             CalendarComponent::Todo(todo) => {
                 todo.append_multi_property(property);
             }
@@ -110,7 +115,7 @@ impl Component for AnyComponent {
     }
 
     fn remove_property(&mut self, key: &str) -> &mut Self {
-        match &mut self.0 {
+        match &mut self.component {
             CalendarComponent::Todo(todo) => {
                 todo.remove_property(key);
             }
@@ -129,7 +134,7 @@ impl Component for AnyComponent {
     }
 
     fn remove_multi_property(&mut self, key: &str) -> &mut Self {
-        match &mut self.0 {
+        match &mut self.component {
             CalendarComponent::Todo(todo) => {
                 todo.remove_multi_property(key);
             }
@@ -150,6 +155,7 @@ impl Component for AnyComponent {
 
 #[derive(Debug, Serialize)]
 pub struct FormatableComponent {
+    path: PathBuf,
     kind: String,
     uid: String,
     created: String,
@@ -163,6 +169,7 @@ pub struct FormatableComponent {
 impl From<AnyComponent> for FormatableComponent {
     fn from(value: AnyComponent) -> Self {
         Self {
+            path: value.path.clone(),
             kind: value.component_kind(),
             uid: value.get_uid().map(|s| s.to_owned()).unwrap_or_default(),
             created: value
@@ -199,6 +206,7 @@ impl Formatable for FormatableComponent {
             "summary".to_owned(),
             "organizer".to_owned(),
             "attendees".to_owned(),
+            "path".to_owned(),
         ]
     }
 
@@ -212,6 +220,7 @@ impl Formatable for FormatableComponent {
             "summary".to_owned(),
             "organizer".to_owned(),
             "attendees".to_owned(),
+            "path".to_owned(),
         ]
     }
 }
