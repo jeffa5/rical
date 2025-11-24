@@ -1,11 +1,40 @@
-use std::{collections::BTreeMap, path::Path};
+use std::{collections::BTreeMap, path::PathBuf};
 
 use icalendar::Component;
+use serde::Serialize;
 
-use crate::{calendar::read_ics_to_calendar, list::paths_to_files};
+use crate::{
+    calendar::read_ics_to_calendar,
+    format::{Formatable, OutputFormat},
+    list::paths_to_files,
+};
 
-pub fn stats(path: &Path, recursive: bool) -> anyhow::Result<()> {
-    let paths = paths_to_files(&[path.to_owned()], recursive);
+pub struct StatsArgs {
+    pub paths: Vec<PathBuf>,
+    pub recursive: bool,
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Serialize)]
+struct Stats {
+    total: u64,
+    by_kind: BTreeMap<String, u64>,
+}
+
+impl Formatable for Stats {
+    fn keys(&self) -> Vec<String> {
+        let mut keys = vec!["total".to_owned()];
+        keys.extend(self.by_kind.keys().cloned());
+        keys
+    }
+
+    fn verbose_keys(&self) -> Vec<String> {
+        self.keys()
+    }
+}
+
+pub fn stats(args: &StatsArgs) -> anyhow::Result<()> {
+    let paths = paths_to_files(&args.paths, args.recursive);
 
     let calendars = paths
         .into_iter()
@@ -14,11 +43,11 @@ pub fn stats(path: &Path, recursive: bool) -> anyhow::Result<()> {
 
     let mut total_components = 0;
 
-    let mut counts: BTreeMap<_, usize> = BTreeMap::new();
+    let mut counts: BTreeMap<_, u64> = BTreeMap::new();
 
     for calendar in calendars {
         let total = calendar.components.len();
-        total_components += total;
+        total_components += total as u64;
 
         calendar.components.iter().for_each(|component| {
             let kind = component_kind(component);
@@ -26,10 +55,13 @@ pub fn stats(path: &Path, recursive: bool) -> anyhow::Result<()> {
         });
     }
 
-    println!("total: {total_components}");
-    for (kind, count) in counts {
-        println!("{kind}: {count}");
-    }
+    let stats = Stats {
+        total: total_components,
+        by_kind: counts,
+    };
+
+    let s = args.format.render(&stats)?;
+    println!("{}", s);
 
     Ok(())
 }

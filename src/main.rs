@@ -4,8 +4,10 @@ use chrono::NaiveDateTime;
 use clap::Parser as _;
 use log::debug;
 use rical::{
-    list::{self, ListArgs, OutputFormat},
-    stats, unfold,
+    format::OutputFormat,
+    list::{self, ListArgs},
+    stats::{self, StatsArgs},
+    unfold,
 };
 
 fn level_filter_from_verbosity(verbosity: u8) -> log::LevelFilter {
@@ -44,6 +46,9 @@ enum Subcommand {
 
         #[clap(long, default_value = "false")]
         recursive: bool,
+
+        #[clap(short, long, default_value = "table")]
+        output: OutputFormat,
     },
     Unfold {
         #[clap()]
@@ -155,8 +160,17 @@ fn main() -> anyhow::Result<()> {
                 list::list(&list_args)?;
             }
         },
-        Subcommand::Stats { path, recursive } => {
-            stats::stats(&path, recursive)?;
+        Subcommand::Stats {
+            path,
+            recursive,
+            output,
+        } => {
+            let stats_args = StatsArgs {
+                paths: vec![path],
+                recursive,
+                format: output,
+            };
+            stats::stats(&stats_args)?;
         }
         Subcommand::Unfold { path } => {
             unfold::unfold(&path)?;

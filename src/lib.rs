@@ -1,6 +1,7 @@
 pub mod calendar;
 pub mod component;
 pub mod event;
+pub mod format;
 pub mod list;
 pub mod stats;
 pub mod table;

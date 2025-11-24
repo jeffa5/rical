@@ -1,4 +1,7 @@
 use icalendar::{CalendarComponent, Component, Other};
+use serde::Serialize;
+
+use crate::{format::Formatable, list::date_perhaps_time_to_datetime_utc};
 
 pub struct AnyComponent(CalendarComponent);
 
@@ -142,5 +145,73 @@ impl Component for AnyComponent {
             _ => todo!(),
         }
         self
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct FormatableComponent {
+    kind: String,
+    uid: String,
+    created: String,
+    start: String,
+    status: String,
+    summary: String,
+    organizer: String,
+    attendees: String,
+}
+
+impl From<AnyComponent> for FormatableComponent {
+    fn from(value: AnyComponent) -> Self {
+        Self {
+            kind: value.component_kind(),
+            uid: value.get_uid().map(|s| s.to_owned()).unwrap_or_default(),
+            created: value
+                .get_created()
+                .or_else(|| value.get_timestamp())
+                .map(|t| t.to_string())
+                .unwrap_or_default(),
+            start: value.get_start().map_or(String::new(), |d| {
+                date_perhaps_time_to_datetime_utc(d).to_string()
+            }),
+            status: value
+                .property_value("STATUS")
+                .unwrap_or_default()
+                .to_owned(),
+            summary: value.get_summary().unwrap_or_default().to_owned(),
+            organizer: value
+                .property_value("ORGANIZER")
+                .unwrap_or_default()
+                .to_owned(),
+            attendees: value
+                .property_value("ATTENDEES")
+                .map(|a| a.split(',').count().to_string())
+                .unwrap_or_default(),
+        }
+    }
+}
+
+impl Formatable for FormatableComponent {
+    fn keys(&self) -> Vec<String> {
+        vec![
+            "kind".to_owned(),
+            "start".to_owned(),
+            "status".to_owned(),
+            "summary".to_owned(),
+            "organizer".to_owned(),
+            "attendees".to_owned(),
+        ]
+    }
+
+    fn verbose_keys(&self) -> Vec<String> {
+        vec![
+            "kind".to_owned(),
+            "uid".to_owned(),
+            "created".to_owned(),
+            "start".to_owned(),
+            "status".to_owned(),
+            "summary".to_owned(),
+            "organizer".to_owned(),
+            "attendees".to_owned(),
+        ]
     }
 }

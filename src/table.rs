@@ -22,29 +22,8 @@ impl TableWriter {
 
     pub fn write_any_components(&mut self, components: &[AnyComponent]) -> anyhow::Result<()> {
         let mut table = Table::new();
-        let header = if self.options.verbose {
-            vec![
-                "kind".to_owned(),
-                "uid".to_owned(),
-                "created".to_owned(),
-                "start".to_owned(),
-                "status".to_owned(),
-                "summary".to_owned(),
-                "organizer".to_owned(),
-                "attendees".to_owned(),
-            ]
-        } else {
-            vec![
-                "kind".to_owned(),
-                "start".to_owned(),
-                "status".to_owned(),
-                "summary".to_owned(),
-                "organizer".to_owned(),
-                "attendees".to_owned(),
-            ]
-        };
 
-        table.load_preset(NOTHING).set_header(header);
+        table.load_preset(NOTHING);
 
         for component in components {
             let status = if self.options.symbols {
@@ -73,9 +52,6 @@ impl TableWriter {
                                 .expect("no created or dtstamp in component")
                         })
                         .to_string(),
-                    component.get_start().map_or(String::new(), |d| {
-                        date_perhaps_time_to_datetime_utc(d).to_string()
-                    }),
                     status,
                     component.get_summary().unwrap_or_default().to_owned(),
                     component

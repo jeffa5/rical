@@ -4,14 +4,11 @@ use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use icalendar::{Component as _, DatePerhapsTime};
 use log::warn;
 
-use crate::{calendar::read_ics_to_calendar, component::AnyComponent, table::TableWriter};
-
-#[derive(Debug, Clone, clap::ValueEnum)]
-pub enum OutputFormat {
-    VerboseTable,
-    Table,
-    Json,
-}
+use crate::{
+    calendar::read_ics_to_calendar,
+    component::{AnyComponent, FormatableComponent},
+    format::OutputFormat,
+};
 
 pub enum ListKind {
     Event,
@@ -70,31 +67,13 @@ pub fn list(args: &ListArgs) -> anyhow::Result<()> {
             })
     });
 
-    match args.format {
-        OutputFormat::VerboseTable => {
-            let mut table_writer = TableWriter::new(
-                Box::new(std::io::stdout()),
-                crate::table::TableOptions {
-                    verbose: true,
-                    symbols: false,
-                },
-            );
-            table_writer.write_any_components(&components)?;
-        }
-        OutputFormat::Table => {
-            let mut table_writer = TableWriter::new(
-                Box::new(std::io::stdout()),
-                crate::table::TableOptions {
-                    verbose: false,
-                    symbols: true,
-                },
-            );
-            table_writer.write_any_components(&components)?;
-        }
-        OutputFormat::Json => {
-            todo!()
-        }
-    }
+    let s = args.format.render(
+        &components
+            .into_iter()
+            .map(FormatableComponent::from)
+            .collect::<Vec<_>>(),
+    )?;
+    println!("{s}");
 
     Ok(())
 }
