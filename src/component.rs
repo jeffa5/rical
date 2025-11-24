@@ -190,6 +190,8 @@ pub struct PrettyProperties {
     uid: String,
     created: String,
     start: String,
+    end: String,
+    duration: String,
     status: String,
     summary: String,
     organizer: String,
@@ -211,6 +213,8 @@ impl Formatable for PrettyComponent {
         vec![
             "kind".to_owned(),
             "start".to_owned(),
+            "end".to_owned(),
+            "duration".to_owned(),
             "status".to_owned(),
             "summary".to_owned(),
             "organizer".to_owned(),
@@ -231,6 +235,19 @@ impl From<AnyComponent> for PrettyProperties {
             start: value.get_start().map_or(String::new(), |d| {
                 date_perhaps_time_to_datetime_utc(d).to_string()
             }),
+            end: value.get_end().map_or(String::new(), |d| {
+                date_perhaps_time_to_datetime_utc(d).to_string()
+            }),
+            duration: value
+                .get_end()
+                .and_then(|end| {
+                    value.get_start().map(|start| {
+                        date_perhaps_time_to_datetime_utc(end)
+                            - date_perhaps_time_to_datetime_utc(start)
+                    })
+                })
+                .map(|d| d.to_string())
+                .unwrap_or_default(),
             status: value
                 .property_value("STATUS")
                 .unwrap_or_default()

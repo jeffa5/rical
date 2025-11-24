@@ -1,6 +1,6 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, str::FromStr};
 
-use chrono::NaiveDateTime;
+use chrono::{NaiveDateTime, Utc};
 use clap::Parser as _;
 use log::debug;
 use rical::{
@@ -41,7 +41,7 @@ struct ListCliArgs {
     #[clap(long, default_value = "10")]
     limit: usize,
 
-    #[clap(long)]
+    #[clap(long, value_parser = parse_datetime)]
     from: Option<NaiveDateTime>,
 
     #[clap(long, default_value = "false")]
@@ -198,4 +198,16 @@ fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn parse_datetime(
+    s: &str,
+) -> Result<NaiveDateTime, Box<dyn std::error::Error + Send + Sync + 'static>> {
+    match s {
+        "now" => Ok(Utc::now().naive_utc()),
+        s => {
+            let ndt = NaiveDateTime::from_str(s)?;
+            Ok(ndt)
+        }
+    }
 }
