@@ -6,7 +6,7 @@ use log::warn;
 
 use crate::{
     calendar::read_ics_to_calendar,
-    component::{AnyComponent, FormatableComponent},
+    component::{AnyComponent, PrettyComponent},
     format::OutputFormat,
 };
 
@@ -46,6 +46,7 @@ impl FromStr for ListKind {
 pub struct ListArgs {
     pub paths: Vec<PathBuf>,
     pub format: OutputFormat,
+    pub raw: bool,
     pub limit: usize,
     pub from: Option<NaiveDateTime>,
     pub kinds: Vec<ListKind>,
@@ -84,12 +85,16 @@ pub fn list(args: &ListArgs) -> anyhow::Result<()> {
             })
     });
 
-    let s = args.format.render(
-        &components
-            .into_iter()
-            .map(FormatableComponent::from)
-            .collect::<Vec<_>>(),
-    )?;
+    let s = if args.raw {
+        args.format.render(&components)?
+    } else {
+        args.format.render(
+            &components
+                .into_iter()
+                .map(PrettyComponent::from)
+                .collect::<Vec<_>>(),
+        )?
+    };
     println!("{s}");
 
     Ok(())

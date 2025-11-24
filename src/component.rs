@@ -1,7 +1,7 @@
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use icalendar::{CalendarComponent, Component, Other};
-use serde::Serialize;
+use serde::{Serialize, ser::SerializeStruct};
 
 use crate::{format::Formatable, list::date_perhaps_time_to_datetime_utc};
 
@@ -13,6 +13,31 @@ pub struct AnyComponent {
 impl AnyComponent {
     pub fn new(path: PathBuf, component: CalendarComponent) -> Self {
         Self { path, component }
+    }
+}
+
+impl Serialize for AnyComponent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut s = serializer.serialize_struct("AnyComponent", 2)?;
+        s.serialize_field("path", &self.path)?;
+        let props = self
+            .properties()
+            .iter()
+            .map(|(k, v)| (k, v.value()))
+            .collect::<BTreeMap<_, _>>();
+        s.serialize_field("properties", &props)?;
+        s.end()
+    }
+}
+
+impl Formatable for AnyComponent {
+    fn keys(&self) -> Vec<String> {
+        let mut keys = vec!["path".to_owned()];
+        keys.extend(self.properties().keys().cloned());
+        keys
     }
 }
 
@@ -154,9 +179,14 @@ impl Component for AnyComponent {
 }
 
 #[derive(Debug, Serialize)]
-pub struct FormatableComponent {
+pub struct PrettyComponent {
     path: PathBuf,
     kind: String,
+    properties: PrettyProperties,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PrettyProperties {
     uid: String,
     created: String,
     start: String,
@@ -166,11 +196,32 @@ pub struct FormatableComponent {
     attendees: String,
 }
 
-impl From<AnyComponent> for FormatableComponent {
+impl From<AnyComponent> for PrettyComponent {
     fn from(value: AnyComponent) -> Self {
         Self {
             path: value.path.clone(),
             kind: value.component_kind(),
+            properties: PrettyProperties::from(value),
+        }
+    }
+}
+
+impl Formatable for PrettyComponent {
+    fn keys(&self) -> Vec<String> {
+        vec![
+            "kind".to_owned(),
+            "start".to_owned(),
+            "status".to_owned(),
+            "summary".to_owned(),
+            "organizer".to_owned(),
+            "attendees".to_owned(),
+        ]
+    }
+}
+
+impl From<AnyComponent> for PrettyProperties {
+    fn from(value: AnyComponent) -> Self {
+        Self {
             uid: value.get_uid().map(|s| s.to_owned()).unwrap_or_default(),
             created: value
                 .get_created()
@@ -194,32 +245,5 @@ impl From<AnyComponent> for FormatableComponent {
                 .map(|a| a.split(',').count().to_string())
                 .unwrap_or_default(),
         }
-    }
-}
-
-impl Formatable for FormatableComponent {
-    fn keys(&self) -> Vec<String> {
-        vec![
-            "kind".to_owned(),
-            "start".to_owned(),
-            "status".to_owned(),
-            "summary".to_owned(),
-            "organizer".to_owned(),
-            "attendees".to_owned(),
-        ]
-    }
-
-    fn verbose_keys(&self) -> Vec<String> {
-        vec![
-            "kind".to_owned(),
-            "uid".to_owned(),
-            "created".to_owned(),
-            "start".to_owned(),
-            "status".to_owned(),
-            "summary".to_owned(),
-            "organizer".to_owned(),
-            "attendees".to_owned(),
-            "path".to_owned(),
-        ]
     }
 }

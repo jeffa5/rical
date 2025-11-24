@@ -58,6 +58,9 @@ enum Subcommand {
         #[clap(short, long, default_value = "table")]
         output: OutputFormat,
 
+        #[clap(long)]
+        raw: bool,
+
         #[clap(long, default_value = "10")]
         limit: usize,
 
@@ -81,6 +84,9 @@ enum EventsSubcommand {
         #[clap(short, long, default_value = "table")]
         output: OutputFormat,
 
+        #[clap(long)]
+        raw: bool,
+
         #[clap(long, default_value = "10")]
         limit: usize,
 
@@ -100,6 +106,9 @@ enum TodosSubcommand {
     List {
         #[clap(short, long, default_value = "table")]
         output: OutputFormat,
+
+        #[clap(long)]
+        raw: bool,
 
         #[clap(long, default_value = "10")]
         limit: usize,
@@ -128,6 +137,7 @@ fn main() -> anyhow::Result<()> {
         Subcommand::Events { cmd } => match cmd {
             EventsSubcommand::List {
                 output,
+                raw,
                 limit,
                 from,
                 recursive,
@@ -136,6 +146,7 @@ fn main() -> anyhow::Result<()> {
                 let list_args = ListArgs {
                     paths,
                     format: output,
+                    raw,
                     limit,
                     from,
                     recursive,
@@ -147,6 +158,7 @@ fn main() -> anyhow::Result<()> {
         Subcommand::Todos { cmd } => match cmd {
             TodosSubcommand::List {
                 output,
+                raw,
                 limit,
                 from,
                 recursive,
@@ -155,6 +167,7 @@ fn main() -> anyhow::Result<()> {
                 let list_args = ListArgs {
                     paths,
                     format: output,
+                    raw,
                     limit,
                     from,
                     recursive,
@@ -180,6 +193,7 @@ fn main() -> anyhow::Result<()> {
         }
         Subcommand::List {
             output,
+            raw,
             limit,
             from,
             recursive,
@@ -189,6 +203,7 @@ fn main() -> anyhow::Result<()> {
             list::list(&ListArgs {
                 paths,
                 format: output,
+                raw,
                 limit,
                 from,
                 recursive,

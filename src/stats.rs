@@ -18,7 +18,6 @@ pub struct StatsArgs {
 #[derive(Debug, Serialize)]
 struct Stats {
     total: u64,
-    #[serde(flatten)]
     by_kind: BTreeMap<String, u64>,
 }
 
@@ -27,10 +26,6 @@ impl Formatable for Stats {
         let mut keys = vec!["total".to_owned()];
         keys.extend(self.by_kind.keys().cloned());
         keys
-    }
-
-    fn verbose_keys(&self) -> Vec<String> {
-        self.keys()
     }
 }
 

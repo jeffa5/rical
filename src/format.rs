@@ -1,6 +1,7 @@
+use log::debug;
+
 #[derive(Debug, Clone, clap::ValueEnum)]
 pub enum OutputFormat {
-    VerboseTable,
     Table,
     Json,
 }
@@ -8,17 +9,9 @@ pub enum OutputFormat {
 impl OutputFormat {
     pub fn render(&self, formatable: &impl Formatable) -> anyhow::Result<String> {
         match self {
-            OutputFormat::VerboseTable => Self::render_verbose_table(formatable),
             OutputFormat::Table => Self::render_table(formatable),
             OutputFormat::Json => Self::render_json(formatable),
         }
-    }
-
-    fn render_verbose_table(formatable: &impl Formatable) -> anyhow::Result<String> {
-        let keys = formatable.verbose_keys();
-        let ts = TableSerializer::new(keys);
-        let s = ts.to_string(formatable);
-        Ok(s)
     }
 
     fn render_table(formatable: &impl Formatable) -> anyhow::Result<String> {
@@ -36,7 +29,6 @@ impl OutputFormat {
 
 pub trait Formatable: serde::Serialize {
     fn keys(&self) -> Vec<String>;
-    fn verbose_keys(&self) -> Vec<String>;
 }
 
 impl<T> Formatable for Vec<T>
@@ -46,10 +38,6 @@ where
     fn keys(&self) -> Vec<String> {
         self.first().map(|v| v.keys()).unwrap_or_default()
     }
-
-    fn verbose_keys(&self) -> Vec<String> {
-        self.first().map(|v| v.verbose_keys()).unwrap_or_default()
-    }
 }
 
 struct TableSerializer {
@@ -57,6 +45,7 @@ struct TableSerializer {
     table: comfy_table::Table,
     last_key: Option<String>,
     row: Vec<String>,
+    depth: usize,
 }
 
 impl TableSerializer {
@@ -71,11 +60,19 @@ impl TableSerializer {
             last_key: None,
             table,
             row,
+            depth: 0,
         }
     }
 
     fn flush_row(&mut self) {
-        self.table.add_row(std::mem::take(&mut self.row));
+        self.depth -= 1;
+        if self.depth != 0 {
+            return;
+        }
+        self.table.add_row(&self.row);
+        for i in 0..self.row.len() {
+            self.row[i] = String::new();
+        }
     }
 
     #[allow(clippy::wrong_self_convention)]
@@ -101,99 +98,120 @@ impl serde::ser::Serializer for &mut TableSerializer {
         Ok(self)
     }
 
-    fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap> {
+    fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap> {
+        self.depth += 1;
         Ok(self)
     }
 
-    fn serialize_struct(self, _name: &'static str, len: usize) -> Result<Self::SerializeStruct> {
-        self.serialize_map(Some(len))
+    fn serialize_struct(self, _name: &'static str, _len: usize) -> Result<Self::SerializeStruct> {
+        self.depth += 1;
+        Ok(self)
     }
 
     fn serialize_bool(self, _: bool) -> Result<Self::Ok> {
-        Err(Error("bool not supported".to_owned()))
+        debug!("bool not supported");
+        Ok(())
     }
 
     fn serialize_i8(self, _: i8) -> Result<Self::Ok> {
-        Err(Error("i8 not supported".to_owned()))
+        debug!("i8 not supported");
+        Ok(())
     }
 
     fn serialize_i16(self, _: i16) -> Result<Self::Ok> {
-        Err(Error("i16 not supported".to_owned()))
+        debug!("i16 not supported");
+        Ok(())
     }
 
     fn serialize_i32(self, _: i32) -> Result<Self::Ok> {
-        Err(Error("i32 not supported".to_owned()))
+        debug!("i32 not supported");
+        Ok(())
     }
 
     fn serialize_i64(self, _: i64) -> Result<Self::Ok> {
-        Err(Error("i64 not supported".to_owned()))
+        debug!("i64 not supported");
+        Ok(())
     }
 
     fn serialize_u8(self, _: u8) -> Result<Self::Ok> {
-        Err(Error("u8 not supported".to_owned()))
+        debug!("u8 not supported");
+        Ok(())
     }
 
     fn serialize_u16(self, _: u16) -> Result<Self::Ok> {
-        Err(Error("u16 not supported".to_owned()))
+        debug!("u16 not supported");
+        Ok(())
     }
 
     fn serialize_u32(self, _: u32) -> Result<Self::Ok> {
-        Err(Error("u32 not supported".to_owned()))
+        debug!("u32 not supported");
+        Ok(())
     }
 
     fn serialize_u64(self, _: u64) -> Result<Self::Ok> {
-        Err(Error("u64 not supported".to_owned()))
+        debug!("u64 not supported");
+        Ok(())
     }
 
     fn serialize_f32(self, _: f32) -> Result<Self::Ok> {
-        Err(Error("f32 not supported".to_owned()))
+        debug!("f32 not supported");
+        Ok(())
     }
 
     fn serialize_f64(self, _: f64) -> Result<Self::Ok> {
-        Err(Error("f64 not supported".to_owned()))
+        debug!("f64 not supported");
+        Ok(())
     }
 
     fn serialize_char(self, _: char) -> Result<Self::Ok> {
-        Err(Error("char not supported".to_owned()))
+        debug!("char not supported");
+        Ok(())
     }
 
-    fn serialize_str(self, s: &str) -> Result<Self::Ok> {
-        dbg!(s);
-        Err(Error("str not supported".to_owned()))
+    fn serialize_str(self, _s: &str) -> Result<Self::Ok> {
+        debug!("str not supported");
+        Ok(())
     }
 
     fn serialize_bytes(self, _: &[u8]) -> Result<Self::Ok> {
-        Err(Error("bytes not supported".to_owned()))
+        debug!("bytes not supported");
+        Ok(())
     }
 
     fn serialize_none(self) -> Result<Self::Ok> {
-        Err(Error("none not supported".to_owned()))
+        debug!("none not supported");
+        Ok(())
     }
 
     fn serialize_some<T>(self, _: &T) -> Result<Self::Ok>
     where
         T: ?Sized + serde::Serialize,
     {
-        Err(Error("some not supported".to_owned()))
+        debug!("some not supported");
+        Ok(())
     }
 
     fn serialize_unit(self) -> Result<Self::Ok> {
-        Err(Error("unit not supported".to_owned()))
+        debug!("unit not supported");
+        Ok(())
     }
 
     fn serialize_unit_struct(self, _: &'static str) -> Result<Self::Ok> {
-        Err(Error("struct not supported".to_owned()))
+        debug!("struct not supported");
+        Ok(())
     }
 
     fn serialize_unit_variant(self, _: &'static str, _: u32, _: &'static str) -> Result<Self::Ok> {
-        Err(Error("variant not supported".to_owned()))
+        debug!("variant not supported");
+        Ok(())
     }
 
     fn serialize_newtype_struct<T>(self, _: &'static str, _: &T) -> Result<Self::Ok>
     where
         T: ?Sized + serde::Serialize,
     {
-        Err(Error("newtype_struct not supported".to_owned()))
+        debug!("newtype_struct not supported");
+        Ok(())
     }
 
     fn serialize_newtype_variant<T>(
@@ -206,11 +224,13 @@ impl serde::ser::Serializer for &mut TableSerializer {
     where
         T: ?Sized + serde::Serialize,
     {
-        Err(Error("newtype_variant not supported".to_owned()))
+        debug!("newtype_variant not supported");
+        Ok(())
     }
 
     fn serialize_tuple(self, _: usize) -> Result<Self::SerializeTuple> {
-        Err(Error("tuple not supported".to_owned()))
+        debug!("tuple not supported");
+        Ok(self)
     }
 
     fn serialize_tuple_struct(
@@ -218,7 +238,8 @@ impl serde::ser::Serializer for &mut TableSerializer {
         _: &'static str,
         _: usize,
     ) -> Result<Self::SerializeTupleStruct> {
-        Err(Error("tuple_struct not supported".to_owned()))
+        debug!("tuple_struct not supported");
+        Ok(self)
     }
 
     fn serialize_tuple_variant(
@@ -228,7 +249,8 @@ impl serde::ser::Serializer for &mut TableSerializer {
         _: &'static str,
         _: usize,
     ) -> Result<Self::SerializeTupleVariant> {
-        Err(Error("tuple_variant not supported".to_owned()))
+        debug!("tuple_variant not supported");
+        Ok(self)
     }
 
     fn serialize_struct_variant(
@@ -238,7 +260,8 @@ impl serde::ser::Serializer for &mut TableSerializer {
         _: &'static str,
         _: usize,
     ) -> Result<Self::SerializeStructVariant> {
-        Err(Error("struct_variant not supported".to_owned()))
+        debug!("struct_variant not supported");
+        Ok(self)
     }
 }
 
@@ -303,6 +326,8 @@ impl serde::ser::SerializeMap for &mut TableSerializer {
         if let Some(pos) = self.columns.iter().position(|i| *i == key) {
             let s = serde_plain::to_string(&value).unwrap();
             self.row[pos] = s;
+        } else {
+            value.serialize(&mut **self)?;
         }
         Ok(())
     }
@@ -381,6 +406,8 @@ impl serde::ser::SerializeStruct for &mut TableSerializer {
         if let Some(pos) = self.columns.iter().position(|c| *c == key) {
             let s = serde_plain::to_string(&value).unwrap();
             self.row[pos] = s;
+        } else {
+            value.serialize(&mut **self)?;
         }
         Ok(())
     }
