@@ -44,6 +44,9 @@ struct ListCliArgs {
     #[clap(long, value_parser = parse_datetime)]
     from: Option<NaiveDateTime>,
 
+    #[clap(long, value_parser = parse_datetime)]
+    to: Option<NaiveDateTime>,
+
     #[clap(long, default_value = "false")]
     recursive: bool,
 
@@ -118,6 +121,7 @@ fn main() -> anyhow::Result<()> {
                         raw,
                         limit,
                         from,
+                        to,
                         recursive,
                         paths,
                     },
@@ -128,6 +132,7 @@ fn main() -> anyhow::Result<()> {
                     raw,
                     limit,
                     from,
+                    to,
                     recursive,
                     kinds: vec![list::ListKind::Event],
                 };
@@ -142,6 +147,7 @@ fn main() -> anyhow::Result<()> {
                         raw,
                         limit,
                         from,
+                        to,
                         recursive,
                         paths,
                     },
@@ -152,6 +158,7 @@ fn main() -> anyhow::Result<()> {
                     raw,
                     limit,
                     from,
+                    to,
                     recursive,
                     kinds: vec![list::ListKind::Todo],
                 };
@@ -181,6 +188,7 @@ fn main() -> anyhow::Result<()> {
                     raw,
                     limit,
                     from,
+                    to,
                     recursive,
                     paths,
                 },
@@ -191,6 +199,7 @@ fn main() -> anyhow::Result<()> {
                 raw,
                 limit,
                 from,
+                to,
                 recursive,
                 kinds,
             })?;

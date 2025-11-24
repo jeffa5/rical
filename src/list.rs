@@ -49,6 +49,7 @@ pub struct ListArgs {
     pub raw: bool,
     pub limit: usize,
     pub from: Option<NaiveDateTime>,
+    pub to: Option<NaiveDateTime>,
     pub kinds: Vec<ListKind>,
     pub recursive: bool,
 }
@@ -67,7 +68,14 @@ pub fn list(args: &ListArgs) -> anyhow::Result<()> {
                 .filter(|c| {
                     args.from.is_none_or(|from| {
                         c.get_start().is_some_and(|ndt| {
-                            date_perhaps_time_to_datetime_utc(ndt) > from.and_utc()
+                            date_perhaps_time_to_datetime_utc(ndt) >= from.and_utc()
+                        })
+                    })
+                })
+                .filter(|c| {
+                    args.to.is_none_or(|to| {
+                        c.get_end().is_some_and(|ndt| {
+                            date_perhaps_time_to_datetime_utc(ndt) <= to.and_utc()
                         })
                     })
                 })
