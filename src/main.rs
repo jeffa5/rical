@@ -30,6 +30,27 @@ struct Args {
     verbosity: u8,
 }
 
+#[derive(Debug, Clone, clap::Args)]
+struct ListCliArgs {
+    #[clap(short, long, default_value = "table")]
+    output: OutputFormat,
+
+    #[clap(long)]
+    raw: bool,
+
+    #[clap(long, default_value = "10")]
+    limit: usize,
+
+    #[clap(long)]
+    from: Option<NaiveDateTime>,
+
+    #[clap(long, default_value = "false")]
+    recursive: bool,
+
+    #[clap(required = true, num_args = 1..)]
+    paths: Vec<PathBuf>,
+}
+
 #[derive(Debug, Clone, clap::Subcommand)]
 enum Subcommand {
     Events {
@@ -55,72 +76,27 @@ enum Subcommand {
         path: PathBuf,
     },
     List {
-        #[clap(short, long, default_value = "table")]
-        output: OutputFormat,
-
-        #[clap(long)]
-        raw: bool,
-
-        #[clap(long, default_value = "10")]
-        limit: usize,
-
-        #[clap(long)]
-        from: Option<NaiveDateTime>,
-
-        #[clap(long, default_value = "false")]
-        recursive: bool,
+        #[clap(flatten)]
+        common: ListCliArgs,
 
         #[clap(long, value_delimiter = ',', default_value = "todo,event,journal")]
         kinds: Vec<ListKind>,
-
-        #[clap(required = true, num_args = 1..)]
-        paths: Vec<PathBuf>,
     },
 }
 
 #[derive(Debug, Clone, clap::Subcommand)]
 enum EventsSubcommand {
     List {
-        #[clap(short, long, default_value = "table")]
-        output: OutputFormat,
-
-        #[clap(long)]
-        raw: bool,
-
-        #[clap(long, default_value = "10")]
-        limit: usize,
-
-        #[clap(long)]
-        from: Option<NaiveDateTime>,
-
-        #[clap(long, default_value = "false")]
-        recursive: bool,
-
-        #[clap(required = true, num_args = 1..)]
-        paths: Vec<PathBuf>,
+        #[clap(flatten)]
+        common: ListCliArgs,
     },
 }
 
 #[derive(Debug, Clone, clap::Subcommand)]
 enum TodosSubcommand {
     List {
-        #[clap(short, long, default_value = "table")]
-        output: OutputFormat,
-
-        #[clap(long)]
-        raw: bool,
-
-        #[clap(long, default_value = "10")]
-        limit: usize,
-
-        #[clap(long)]
-        from: Option<NaiveDateTime>,
-
-        #[clap(long, default_value = "false")]
-        recursive: bool,
-
-        #[clap(required = true, num_args = 1..)]
-        paths: Vec<PathBuf>,
+        #[clap(flatten)]
+        common: ListCliArgs,
     },
 }
 
@@ -136,12 +112,15 @@ fn main() -> anyhow::Result<()> {
     match args.cmd {
         Subcommand::Events { cmd } => match cmd {
             EventsSubcommand::List {
-                output,
-                raw,
-                limit,
-                from,
-                recursive,
-                paths,
+                common:
+                    ListCliArgs {
+                        output,
+                        raw,
+                        limit,
+                        from,
+                        recursive,
+                        paths,
+                    },
             } => {
                 let list_args = ListArgs {
                     paths,
@@ -157,12 +136,15 @@ fn main() -> anyhow::Result<()> {
         },
         Subcommand::Todos { cmd } => match cmd {
             TodosSubcommand::List {
-                output,
-                raw,
-                limit,
-                from,
-                recursive,
-                paths,
+                common:
+                    ListCliArgs {
+                        output,
+                        raw,
+                        limit,
+                        from,
+                        recursive,
+                        paths,
+                    },
             } => {
                 let list_args = ListArgs {
                     paths,
@@ -192,13 +174,16 @@ fn main() -> anyhow::Result<()> {
             unfold::unfold(&path)?;
         }
         Subcommand::List {
-            output,
-            raw,
-            limit,
-            from,
-            recursive,
             kinds,
-            paths,
+            common:
+                ListCliArgs {
+                    output,
+                    raw,
+                    limit,
+                    from,
+                    recursive,
+                    paths,
+                },
         } => {
             list::list(&ListArgs {
                 paths,
