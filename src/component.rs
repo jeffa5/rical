@@ -194,7 +194,6 @@ pub struct PrettyProperties {
     duration: String,
     status: String,
     summary: String,
-    organizer: String,
     attendees: String,
 }
 
@@ -202,9 +201,18 @@ impl From<AnyComponent> for PrettyComponent {
     fn from(value: AnyComponent) -> Self {
         Self {
             path: value.path.clone(),
-            kind: value.component_kind(),
+            kind: pretty_kind(value.component_kind()),
             properties: PrettyProperties::from(value),
         }
+    }
+}
+
+fn pretty_kind(component_kind: String) -> String {
+    match component_kind.as_str() {
+        "VEVENT" => "event".to_owned(),
+        "VTODO" => "todo".to_owned(),
+        "VJOURNAL" => "journal".to_owned(),
+        k => k.to_owned(),
     }
 }
 
@@ -217,7 +225,6 @@ impl Formatable for PrettyComponent {
             "duration".to_owned(),
             "status".to_owned(),
             "summary".to_owned(),
-            "organizer".to_owned(),
             "attendees".to_owned(),
         ]
     }
@@ -246,21 +253,37 @@ impl From<AnyComponent> for PrettyProperties {
                             - date_perhaps_time_to_datetime_utc(start)
                     })
                 })
-                .map(|d| d.to_string())
+                .map(time_delta_to_string)
                 .unwrap_or_default(),
             status: value
                 .property_value("STATUS")
                 .unwrap_or_default()
                 .to_owned(),
             summary: value.get_summary().unwrap_or_default().to_owned(),
-            organizer: value
-                .property_value("ORGANIZER")
-                .unwrap_or_default()
-                .to_owned(),
             attendees: value
                 .property_value("ATTENDEES")
                 .map(|a| a.split(',').count().to_string())
                 .unwrap_or_default(),
         }
     }
+}
+
+fn time_delta_to_string(d: chrono::TimeDelta) -> String {
+    let mut s = String::new();
+    if d.num_weeks() > 0 {
+        s = format!("{}w", d.num_weeks());
+    }
+    if d.num_days() % 7 > 0 {
+        s = format!("{}d", d.num_days() % 7);
+    }
+    if d.num_hours() % 24 > 0 {
+        s = format!("{}h", d.num_hours() % 24);
+    }
+    if d.num_minutes() % 60 > 0 {
+        s = format!("{}m", d.num_minutes() % 60);
+    }
+    if d.num_seconds() % 60 > 0 {
+        s = format!("{}s", d.num_seconds() % 60);
+    }
+    s
 }
