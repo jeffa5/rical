@@ -21,8 +21,9 @@ impl Serialize for AnyComponent {
     where
         S: serde::Serializer,
     {
-        let mut s = serializer.serialize_struct("AnyComponent", 2)?;
+        let mut s = serializer.serialize_struct("AnyComponent", 3)?;
         s.serialize_field("path", &self.path)?;
+        s.serialize_field("kind", &self.component_kind())?;
         let props = self
             .properties()
             .iter()
