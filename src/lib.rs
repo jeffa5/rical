@@ -3,6 +3,7 @@ pub mod component;
 pub mod event;
 pub mod format;
 pub mod list;
+pub mod show;
 pub mod stats;
 pub mod table;
 pub mod todo;

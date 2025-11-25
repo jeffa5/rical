@@ -6,6 +6,7 @@ use log::debug;
 use rical::{
     format::OutputFormat,
     list::{self, ListArgs, ListKind},
+    show::{self, ShowArgs},
     stats::{self, StatsArgs},
     unfold,
 };
@@ -71,6 +72,16 @@ enum Subcommand {
         #[clap(long, value_delimiter = ',', default_value = "todo,event,journal")]
         kinds: Vec<ListKind>,
     },
+    Show {
+        #[clap(required = true, num_args = 1..)]
+        paths: Vec<PathBuf>,
+
+        #[clap(long, default_value = "false")]
+        recursive: bool,
+
+        #[clap(long)]
+        id: String,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -117,6 +128,18 @@ fn main() -> anyhow::Result<()> {
                 to,
                 recursive,
                 kinds,
+                short_id: None,
+            })?;
+        }
+        Subcommand::Show {
+            paths,
+            recursive,
+            id,
+        } => {
+            show::show(&ShowArgs {
+                paths,
+                recursive,
+                id,
             })?;
         }
     }

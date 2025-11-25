@@ -52,6 +52,7 @@ pub struct ListArgs {
     pub to: Option<NaiveDateTime>,
     pub kinds: Vec<ListKind>,
     pub recursive: bool,
+    pub short_id: Option<String>,
 }
 
 pub fn list(args: &ListArgs) -> anyhow::Result<()> {
@@ -64,6 +65,11 @@ pub fn list(args: &ListArgs) -> anyhow::Result<()> {
             cal.components
                 .into_iter()
                 .map(|c| AnyComponent::new(p.clone(), c))
+                .filter(|c| {
+                    args.short_id
+                        .as_ref()
+                        .is_none_or(|sid| c.get_uid().is_some_and(|uid| uid.starts_with(sid)))
+                })
                 .filter(|c| args.kinds.iter().any(|k| k.matches(&c.component_kind())))
                 .filter(|c| {
                     args.from.is_none_or(|from| {
