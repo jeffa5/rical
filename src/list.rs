@@ -1,4 +1,4 @@
-use std::{fs::read_dir, path::PathBuf, str::FromStr};
+use std::{collections::BTreeMap, fs::read_dir, path::PathBuf, str::FromStr};
 
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use icalendar::{Component as _, DatePerhapsTime};
@@ -57,7 +57,7 @@ pub struct ListArgs {
 pub fn list(args: &ListArgs) -> anyhow::Result<()> {
     let paths = paths_to_files(&args.paths, args.recursive);
 
-    let mut components = paths
+    let components = paths
         .into_iter()
         .filter_map(|p| read_ics_to_calendar(&p).ok().map(|c| (p, c)))
         .flat_map(|(p, cal)| {
@@ -81,9 +81,15 @@ pub fn list(args: &ListArgs) -> anyhow::Result<()> {
                 })
                 .collect::<Vec<_>>()
         })
-        .take(args.limit)
         .collect::<Vec<_>>();
 
+    let mut all_ids = components
+        .iter()
+        .filter_map(|c| c.get_uid())
+        .map(|u| u.to_owned())
+        .collect::<Vec<_>>();
+
+    let mut components = components.into_iter().take(args.limit).collect::<Vec<_>>();
     components.sort_by_key(|e| {
         e.get_start()
             .map(date_perhaps_time_to_datetime_utc)
@@ -96,16 +102,79 @@ pub fn list(args: &ListArgs) -> anyhow::Result<()> {
     let s = if args.raw {
         args.format.render(&components)?
     } else {
+        let short_ids = build_prefixes_map(&mut all_ids);
+
         args.format.render(
             &components
                 .into_iter()
-                .map(PrettyComponent::from)
+                .map(|c| {
+                    let short_id = c.get_uid().and_then(|u| short_ids.get(u).cloned());
+                    PrettyComponent::new(c, short_id)
+                })
                 .collect::<Vec<_>>(),
         )?
     };
     println!("{s}");
 
     Ok(())
+}
+
+fn build_prefixes_map(all_ids: &mut [String]) -> BTreeMap<String, String> {
+    let prefixes = build_prefixes(all_ids);
+    all_ids.iter().cloned().zip(prefixes).collect()
+}
+
+fn build_prefixes(all_ids: &mut [String]) -> Vec<String> {
+    all_ids.sort_unstable();
+
+    let mut prefixes = Vec::new();
+
+    prefixes.push(find_prefix("", &all_ids[0], &all_ids[1]));
+
+    for window in all_ids.windows(3) {
+        let [u1, u2, u3] = window else {
+            panic!("window length not what was expected");
+        };
+        prefixes.push(find_prefix(u1, u2, u3));
+    }
+
+    let len = all_ids.len();
+    prefixes.push(find_prefix(&all_ids[len - 2], &all_ids[len - 1], ""));
+
+    assert_eq!(
+        all_ids.len(),
+        prefixes.len(),
+        "should have the same number of prefixes as original ids"
+    );
+
+    prefixes
+}
+
+fn find_prefix(u1: &str, u2: &str, u3: &str) -> String {
+    let mut before_finished = false;
+    let mut after_finished = false;
+    let mut matched = false;
+    let prefix = u1
+        .chars()
+        .map(Some)
+        .chain(std::iter::repeat(None))
+        .zip(u2.chars().map(Some))
+        .zip(u3.chars().map(Some).chain(std::iter::repeat(None)))
+        .take_while(|((c1, c2), c3)| {
+            before_finished |= c1 != c2;
+            after_finished |= c3 != c2;
+            if !before_finished || !after_finished {
+                true
+            } else {
+                // get one more past what matches
+                matched = !matched;
+                matched
+            }
+        })
+        .map(|((_, c2), _)| c2.unwrap())
+        .collect::<String>();
+    assert!(!prefix.is_empty());
+    prefix
 }
 
 pub(crate) fn paths_to_files(paths: &[PathBuf], recursive: bool) -> Vec<PathBuf> {

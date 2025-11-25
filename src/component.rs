@@ -183,6 +183,7 @@ impl Component for AnyComponent {
 pub struct PrettyComponent {
     path: PathBuf,
     kind: String,
+    short_id: Option<String>,
     properties: PrettyProperties,
 }
 
@@ -198,11 +199,20 @@ pub struct PrettyProperties {
     attendees: String,
 }
 
+impl PrettyComponent {
+    pub fn new(component: AnyComponent, short_id: Option<String>) -> Self {
+        let mut s = Self::from(component);
+        s.short_id = short_id;
+        s
+    }
+}
+
 impl From<AnyComponent> for PrettyComponent {
     fn from(value: AnyComponent) -> Self {
         Self {
             path: value.path.clone(),
             kind: pretty_kind(value.component_kind()),
+            short_id: None,
             properties: PrettyProperties::from(value),
         }
     }
@@ -220,6 +230,7 @@ fn pretty_kind(component_kind: String) -> String {
 impl Formatable for PrettyComponent {
     fn keys(&self) -> Vec<String> {
         vec![
+            "short_id".to_owned(),
             "kind".to_owned(),
             "start".to_owned(),
             "end".to_owned(),
