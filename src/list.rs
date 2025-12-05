@@ -131,11 +131,19 @@ fn build_prefixes_map(all_ids: &mut [String]) -> BTreeMap<String, String> {
 }
 
 fn build_prefixes(all_ids: &mut [String]) -> Vec<String> {
+    if all_ids.is_empty() {
+        return Vec::new();
+    }
+
     all_ids.sort_unstable();
 
     let mut prefixes = Vec::new();
 
-    prefixes.push(find_prefix("", &all_ids[0], &all_ids[1]));
+    prefixes.push(find_prefix(
+        "",
+        &all_ids[0],
+        all_ids.get(1).map_or("", |s| s.as_str()),
+    ));
 
     for window in all_ids.windows(3) {
         let [u1, u2, u3] = window else {
