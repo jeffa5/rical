@@ -11,7 +11,12 @@ pub fn read_ics_to_calendar(path: &Path) -> anyhow::Result<Calendar> {
 
     let s = read_to_string(path)?;
 
-    let unfolded = unfold(&s);
+    parse_calendar(&s)
+}
+
+/// Parse the text of an `.ics` file.
+pub fn parse_calendar(s: &str) -> anyhow::Result<Calendar> {
+    let unfolded = unfold(s);
 
     let cal_ref = match read_calendar(&unfolded) {
         Ok(cal) => cal,

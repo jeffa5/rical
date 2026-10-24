@@ -3,17 +3,25 @@
 //! See <https://vdirsyncer.pimutils.org/en/stable/vdir.html>.
 
 use std::{
+    collections::BTreeMap,
     fmt,
     fs::{self, read_dir},
+    ops::Range,
     path::{Path, PathBuf},
     str::FromStr,
 };
 
 use anyhow::Context as _;
+use chrono::{DateTime, Utc};
+use chrono_tz::Tz;
 use log::warn;
 use serde::Serialize;
 
-use crate::{component::AnyComponent, ics::read_ics_to_calendar};
+use crate::{
+    component::AnyComponent,
+    ics::read_ics_to_calendar,
+    occurrence::{self, Kind, Occurrence},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Rgb {
@@ -106,28 +114,32 @@ impl Calendar {
     pub fn components(&self) -> anyhow::Result<Vec<AnyComponent>> {
         Ok(self
             .item_paths()?
-            .into_iter()
-            .filter_map(|p| match read_ics_to_calendar(&p) {
-                Ok(cal) => Some((p, cal)),
-                Err(e) => {
-                    warn!("skipping {p:?}: {e}");
-                    None
-                }
-            })
-            .flat_map(|(p, cal)| {
-                cal.components
-                    .into_iter()
-                    .map(move |c| AnyComponent::new(p.clone(), c))
-            })
+            .iter()
+            .filter_map(|p| read_item(p))
+            .flatten()
             .collect())
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// A loaded vdir. Every item is parsed into memory on load; the files stay
+/// the source of truth and [`Vdir::reload`] picks up changes to them.
+#[derive(Clone)]
 pub struct Vdir {
     pub root: PathBuf,
     /// Sorted by id.
     pub calendars: Vec<Calendar>,
+    /// Parsed components of each item, by path.
+    items: BTreeMap<PathBuf, Vec<AnyComponent>>,
+}
+
+impl fmt::Debug for Vdir {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Vdir")
+            .field("root", &self.root)
+            .field("calendars", &self.calendars)
+            .field("items", &self.items.len())
+            .finish()
+    }
 }
 
 impl Vdir {
@@ -153,10 +165,19 @@ impl Vdir {
 
         calendars.sort_by(|a, b| a.id.cmp(&b.id));
 
-        Ok(Self {
+        let mut vdir = Self {
             root: root.to_owned(),
             calendars,
-        })
+            items: BTreeMap::new(),
+        };
+        for calendar in &vdir.calendars {
+            for path in calendar.item_paths()? {
+                if let Some(components) = read_item(&path) {
+                    vdir.items.insert(path, components);
+                }
+            }
+        }
+        Ok(vdir)
     }
 
     pub fn calendar(&self, id: &str) -> Option<&Calendar> {
@@ -168,6 +189,84 @@ impl Vdir {
         self.calendars
             .iter()
             .find(|c| path.parent() == Some(c.path.as_path()))
+    }
+
+    /// The parsed components of one item.
+    pub fn get(&self, path: &Path) -> Option<&[AnyComponent]> {
+        self.items.get(path).map(Vec::as_slice)
+    }
+
+    /// Every loaded component, with the calendar it belongs to.
+    pub fn components(&self) -> impl Iterator<Item = (&Calendar, &AnyComponent)> {
+        self.items.iter().flat_map(|(path, components)| {
+            let calendar = self.calendar_for_path(path);
+            components
+                .iter()
+                .filter_map(move |c| calendar.map(|cal| (cal, c)))
+        })
+    }
+
+    /// Re-read one item after it changed on disk. A missing or unparseable
+    /// file is dropped. Returns whether anything changed.
+    pub fn reload(&mut self, path: &Path) -> bool {
+        if self.calendar_for_path(path).is_none() || path.extension().is_none_or(|e| e != "ics") {
+            return false;
+        }
+        match path.is_file().then(|| read_item(path)).flatten() {
+            Some(components) => {
+                self.items.insert(path.to_owned(), components);
+                true
+            }
+            None => self.items.remove(path).is_some(),
+        }
+    }
+
+    /// Re-read everything: calendars, their metadata and items.
+    pub fn reload_all(&mut self) -> anyhow::Result<()> {
+        *self = Self::load(&self.root)?;
+        Ok(())
+    }
+
+    /// Every occurrence of the given kinds that overlaps `range`, for a
+    /// viewer in `local`, sorted by start.
+    pub fn query(
+        &self,
+        range: &Range<DateTime<Utc>>,
+        kinds: &[Kind],
+        local: Tz,
+    ) -> Vec<Occurrence> {
+        let mut out = Vec::new();
+        for calendar in &self.calendars {
+            let components = self
+                .items
+                .iter()
+                .filter(|(p, _)| p.parent() == Some(calendar.path.as_path()))
+                .flat_map(|(_, c)| c);
+            out.extend(
+                occurrence::expand(&calendar.id, components, range, local)
+                    .into_iter()
+                    .filter(|o| kinds.contains(&o.kind)),
+            );
+        }
+        out.sort_by(|a, b| {
+            (a.start.to_utc(local), &a.summary).cmp(&(b.start.to_utc(local), &b.summary))
+        });
+        out
+    }
+}
+
+fn read_item(path: &Path) -> Option<Vec<AnyComponent>> {
+    match read_ics_to_calendar(path) {
+        Ok(cal) => Some(
+            cal.components
+                .into_iter()
+                .map(|c| AnyComponent::new(path.to_owned(), c))
+                .collect(),
+        ),
+        Err(e) => {
+            warn!("skipping {path:?}: {e}");
+            None
+        }
     }
 }
 

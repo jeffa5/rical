@@ -6,6 +6,7 @@ use std::{
 use icalendar::{CalendarComponent, Component, Other};
 use serde::{Serialize, ser::SerializeStruct};
 
+#[derive(Debug, Clone)]
 pub struct AnyComponent {
     path: PathBuf,
     component: CalendarComponent,

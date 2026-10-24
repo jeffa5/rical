@@ -73,3 +73,30 @@ fn show_by_short_id() {
     assert!(rows[1].contains("c33-dinner"));
     assert!(rows[1].contains("home/dinner.ics"));
 }
+
+#[test]
+fn agenda_table() {
+    let out = Command::new(env!("CARGO_BIN_EXE_rical"))
+        .args([
+            "agenda",
+            fixtures().to_str().unwrap(),
+            "--from",
+            "2025-03-03",
+            "--days",
+            "3",
+        ])
+        .env("TZ", "Europe/London")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let out = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(
+        lines(&out),
+        [
+            " start             end               calendar  summary                                           location",
+            " 2025-03-03 09:00  2025-03-03 09:15  Work      Standup",
+            " 2025-03-04 14:00  2025-03-04 15:30  Work      Design review with a long summary that is folded",
+            " 2025-03-05 19:00  2025-03-05 21:00  home      Dinner",
+        ]
+    );
+}

@@ -1,12 +1,16 @@
 use std::{path::PathBuf, str::FromStr};
 
-use chrono::{NaiveDateTime, Utc};
+use chrono::{NaiveDate, NaiveDateTime, Utc};
 use clap::Parser as _;
 use log::debug;
-use rical_core::query::{ListKind, ListQuery};
+use rical_core::{
+    Kind,
+    query::{ListKind, ListQuery},
+};
 
-use crate::{format::OutputFormat, show::ShowArgs, stats::StatsArgs};
+use crate::{agenda::AgendaArgs, format::OutputFormat, show::ShowArgs, stats::StatsArgs};
 
+mod agenda;
 mod format;
 mod list;
 mod pretty;
@@ -87,6 +91,25 @@ enum Subcommand {
         #[clap(long)]
         id: String,
     },
+    /// Occurrences in a date range, with recurrences expanded.
+    Agenda {
+        /// Root of the vdir.
+        #[clap()]
+        vdir: PathBuf,
+
+        /// First day to show (YYYY-MM-DD), default today.
+        #[clap(long)]
+        from: Option<NaiveDate>,
+
+        #[clap(long, default_value = "7")]
+        days: u64,
+
+        #[clap(long, value_delimiter = ',', default_value = "event,todo")]
+        kinds: Vec<Kind>,
+
+        #[clap(short, long, default_value = "table")]
+        output: OutputFormat,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -147,6 +170,21 @@ fn main() -> anyhow::Result<()> {
                 paths,
                 recursive,
                 id,
+            })?;
+        }
+        Subcommand::Agenda {
+            vdir,
+            from,
+            days,
+            kinds,
+            output,
+        } => {
+            agenda::agenda(&AgendaArgs {
+                vdir,
+                from,
+                days,
+                kinds,
+                format: output,
             })?;
         }
     }
