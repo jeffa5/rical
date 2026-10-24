@@ -316,6 +316,12 @@ impl Palette {
                 let mut history = w.history.borrow_mut();
                 history.retain(|h| *h != line);
                 history.push(line);
+                drop(history);
+                // unless the command opened something else (a dialog), go back to
+                // the calendar
+                if w.window.visible_dialog().is_none() {
+                    w.focus_view();
+                }
             }
             Err(e) => {
                 // reopen with the line and the problem

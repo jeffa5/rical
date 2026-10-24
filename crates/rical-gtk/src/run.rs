@@ -11,7 +11,7 @@ use rical_core::{
     write::{Draft, Scope},
 };
 
-use super::{Window, palette};
+use super::{Window, palette, search};
 use crate::{
     binds::{self, Key, Lookup},
     cmds::{self, parse_date, parse_shift},
@@ -105,6 +105,23 @@ impl Window {
                 };
                 self.add_task(calendar, p.arg(0).unwrap(), due);
             }
+            "schedule" => {
+                let (local, focused) = {
+                    let s = self.state.borrow();
+                    (s.local, s.date)
+                };
+                let at = p.arg(0).unwrap();
+                let start = parse_at(at, focused, self.today_date(), local)
+                    .filter(|w| !w.is_date())
+                    .ok_or(format!("not a time: “{at}” (e.g. 14:00 or fri 09:30)"))?;
+                let length = match p.flag("for") {
+                    Some(text) => parse_shift(text)
+                        .filter(|d| *d > TimeDelta::zero())
+                        .ok_or(format!("not a duration: “{text}”"))?,
+                    None => TimeDelta::hours(1),
+                };
+                self.schedule_selected(start, length)?;
+            }
             "due" => {
                 let text = p.arg(0).unwrap();
                 let due = match text {
@@ -138,6 +155,7 @@ impl Window {
                 self.split.set_show_sidebar(show);
             }
             "reload" => self.reload_all(),
+            "search" => search::open(self, p.arg(0).unwrap_or_default()),
             "help" => {
                 help::dialog(&self.binds, self.state.borrow().view).present(Some(&self.window))
             }

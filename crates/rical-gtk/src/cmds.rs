@@ -185,6 +185,24 @@ pub static SPECS: &[Spec] = &[
         args: &[arg("date", DATE)],
         ..spec("due", "Set the selected task's due date, or \"none\"")
     },
+    Spec {
+        aliases: &["block"],
+        args: &[Arg {
+            name: "at",
+            kind: Kind::Text("at"),
+            optional: false,
+            rest: true,
+        }],
+        flags: &[Flag {
+            name: "for",
+            kind: Kind::Text("for"),
+            help: "how long, e.g. 30m, 1h30m",
+        }],
+        ..spec(
+            "schedule",
+            "Time-block the selected task, e.g. :schedule tomorrow 14:00 --for 2h",
+        )
+    },
     spec("undo", "Undo the last change"),
     spec("redo", "Redo the last undone change"),
     Spec {
@@ -209,6 +227,16 @@ pub static SPECS: &[Spec] = &[
     Spec {
         args: &[optional("state", Kind::Choice(&["toggle", "show", "hide"]))],
         ..spec("sidebar", "Show or hide the sidebar")
+    },
+    Spec {
+        aliases: &["find"],
+        args: &[Arg {
+            name: "text",
+            kind: Kind::Text("search"),
+            optional: true,
+            rest: true,
+        }],
+        ..spec("search", "Search events and tasks; Enter jumps to one")
     },
     spec("reload", "Reload the vdir from disk"),
     Spec {

@@ -20,6 +20,8 @@ mod ops;
 mod palette;
 #[path = "run.rs"]
 mod run;
+#[path = "search.rs"]
+mod search;
 
 use crate::{
     agenda::AgendaView,

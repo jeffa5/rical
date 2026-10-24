@@ -431,4 +431,29 @@ impl Window {
         });
         Ok(())
     }
+
+    /// Time-block the selected task: give it a start and due time so it
+    /// shows on the grid.
+    pub(super) fn schedule_selected(
+        self: &Rc<Self>,
+        start: When,
+        length: TimeDelta,
+    ) -> Result<(), String> {
+        let occ = self
+            .current_item()
+            .filter(|o| o.kind == Kind::Todo)
+            .ok_or("select a task to schedule")?;
+        let mut draft = self.state.borrow().vdir.draft(&occ);
+        draft.start = start;
+        draft.end = start.add(length);
+        if self.perform("schedule the task", |v| {
+            v.update(&occ, Scope::All, &draft, None)
+        }) {
+            let local = self.state.borrow().local;
+            self.state.borrow_mut().date = start.date(local);
+            self.reselect(&occ.uid, &start);
+            self.toast(&format!("Scheduled “{}”", occ.summary));
+        }
+        Ok(())
+    }
 }
