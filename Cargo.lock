@@ -585,9 +585,21 @@ dependencies = [
  "env_logger",
  "icalendar",
  "log",
+ "rical-core",
  "serde",
  "serde_json",
  "serde_plain",
+]
+
+[[package]]
+name = "rical-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "icalendar",
+ "log",
+ "serde",
 ]
 
 [[package]]

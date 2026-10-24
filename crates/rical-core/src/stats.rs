@@ -3,34 +3,16 @@ use std::{collections::BTreeMap, path::PathBuf};
 use icalendar::Component;
 use serde::Serialize;
 
-use crate::{
-    calendar::read_ics_to_calendar,
-    format::{Formatable, OutputFormat},
-    list::paths_to_files,
-};
+use crate::{files::paths_to_files, ics::read_ics_to_calendar};
 
-pub struct StatsArgs {
-    pub paths: Vec<PathBuf>,
-    pub recursive: bool,
-    pub format: OutputFormat,
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct Stats {
+    pub total: u64,
+    pub by_kind: BTreeMap<String, u64>,
 }
 
-#[derive(Debug, Serialize)]
-struct Stats {
-    total: u64,
-    by_kind: BTreeMap<String, u64>,
-}
-
-impl Formatable for Stats {
-    fn keys(&self) -> Vec<String> {
-        let mut keys = vec!["total".to_owned()];
-        keys.extend(self.by_kind.keys().cloned());
-        keys
-    }
-}
-
-pub fn stats(args: &StatsArgs) -> anyhow::Result<()> {
-    let paths = paths_to_files(&args.paths, args.recursive);
+pub fn stats(paths: &[PathBuf], recursive: bool) -> Stats {
+    let paths = paths_to_files(paths, recursive);
 
     let calendars = paths
         .into_iter()
@@ -51,15 +33,10 @@ pub fn stats(args: &StatsArgs) -> anyhow::Result<()> {
         });
     }
 
-    let stats = Stats {
+    Stats {
         total: total_components,
         by_kind: counts,
-    };
-
-    let s = args.format.render(&stats)?;
-    println!("{}", s);
-
-    Ok(())
+    }
 }
 
 fn component_kind(component: &icalendar::CalendarComponent) -> String {

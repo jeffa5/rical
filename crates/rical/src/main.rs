@@ -3,13 +3,18 @@ use std::{path::PathBuf, str::FromStr};
 use chrono::{NaiveDateTime, Utc};
 use clap::Parser as _;
 use log::debug;
-use rical::{
-    format::OutputFormat,
-    list::{self, ListArgs, ListKind},
-    show::{self, ShowArgs},
-    stats::{self, StatsArgs},
-    unfold,
-};
+use rical_core::query::{ListKind, ListQuery};
+
+use crate::{format::OutputFormat, show::ShowArgs, stats::StatsArgs};
+
+mod format;
+mod list;
+mod pretty;
+mod show;
+mod stats;
+#[allow(dead_code)]
+mod table;
+mod unfold;
 
 fn level_filter_from_verbosity(verbosity: u8) -> log::LevelFilter {
     match verbosity {
@@ -119,17 +124,19 @@ fn main() -> anyhow::Result<()> {
             recursive,
             paths,
         } => {
-            list::list(&ListArgs {
-                paths,
-                format: output,
+            list::list(
+                &ListQuery {
+                    paths,
+                    limit,
+                    from,
+                    to,
+                    recursive,
+                    kinds,
+                    short_id: None,
+                },
+                &output,
                 raw,
-                limit,
-                from,
-                to,
-                recursive,
-                kinds,
-                short_id: None,
-            })?;
+            )?;
         }
         Subcommand::Show {
             paths,
