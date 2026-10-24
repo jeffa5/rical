@@ -2,20 +2,25 @@
 //! Each edit asks whether a repeating event changes as a whole or just this
 //! once, writes through the vdir, and records the change for undo.
 
-use std::rc::Rc;
+use std::{path::PathBuf, rc::Rc};
 
 use adw::prelude::*;
 use chrono::{NaiveTime, TimeDelta, Timelike, Utc};
 use gtk::gio;
 use log::warn;
 use rical_core::{
-    Occurrence, Vdir, When,
+    Kind, Occurrence, Task, Vdir, When,
     when::resolve_local,
     write::{Change, Draft, Scope},
 };
 
 use super::Window;
-use crate::{editor, grid::DragAction, layout::is_all_day_row, state::OccurrenceKey};
+use crate::{
+    editor,
+    grid::DragAction,
+    layout::{ViewKind, is_all_day_row},
+    state::OccurrenceKey,
+};
 
 impl Window {
     pub(super) fn on_drag(self: &Rc<Self>, action: DragAction) {
@@ -33,8 +38,13 @@ impl Window {
         verb: &str,
         f: impl FnOnce(&Rc<Self>, Scope) + 'static,
     ) {
+        let forced = self.forced_scope.take();
         if !occ.recurring {
             f(self, Scope::All);
+            return;
+        }
+        if let Some(scope) = forced {
+            f(self, scope);
             return;
         }
         let dialog = adw::AlertDialog::new(
@@ -124,42 +134,53 @@ impl Window {
             self.toast("There are no calendars to add to");
             return;
         };
+        self.open_new(Draft::new(start, end), calendar);
+    }
+
+    /// Open the editor for a new item starting from `draft`.
+    pub(super) fn open_new(self: &Rc<Self>, draft: Draft, calendar: String) {
         let weak = Rc::downgrade(self);
         editor::open(
             &self.window,
             &self.state,
             editor::Options {
                 title: "New Event",
-                draft: Draft::new(start, end),
+                draft,
                 calendar,
                 is_new: true,
             },
             move |draft, calendar| {
-                let Some(w) = weak.upgrade() else { return };
-                w.state.borrow_mut().last_calendar = Some(calendar.clone());
-                let mut created = None;
-                let ok = w.perform("create the event", |v| {
-                    let change = v.create(&calendar, &draft)?;
-                    created = Some(change.path.clone());
-                    Ok(vec![change])
-                });
-                if ok
-                    && let Some(uid) = created
-                        .as_ref()
-                        .and_then(|p| p.file_stem())
-                        .map(|s| s.to_string_lossy().into_owned())
-                {
-                    let local = w.state.borrow().local;
-                    w.state.borrow_mut().date = draft.start.date(local);
-                    w.reselect(&uid, &draft.start);
+                if let Some(w) = weak.upgrade() {
+                    w.create(draft, calendar);
                 }
             },
             None,
         );
     }
 
+    /// Create an item and select it.
+    pub(super) fn create(self: &Rc<Self>, draft: Draft, calendar: String) {
+        self.state.borrow_mut().last_calendar = Some(calendar.clone());
+        let mut created = None;
+        let ok = self.perform("create the event", |v| {
+            let change = v.create(&calendar, &draft)?;
+            created = Some(change.path.clone());
+            Ok(vec![change])
+        });
+        if ok
+            && let Some(uid) = created
+                .as_ref()
+                .and_then(|p| p.file_stem())
+                .map(|s| s.to_string_lossy().into_owned())
+        {
+            let local = self.state.borrow().local;
+            self.state.borrow_mut().date = draft.start.date(local);
+            self.reselect(&uid, &draft.start);
+        }
+    }
+
     /// An hour from the next full hour today, or 09:00 on other days.
-    fn default_slot(&self) -> (When, When) {
+    pub(super) fn default_slot(&self) -> (When, When) {
         let state = self.state.borrow();
         let local = state.local;
         let now = Utc::now().with_timezone(&local);
@@ -173,7 +194,7 @@ impl Window {
     }
 
     pub(super) fn edit_selected(self: &Rc<Self>) {
-        let Some(occ) = self.state.borrow().selected_occurrence() else {
+        let Some(occ) = self.current_item() else {
             self.toast("Select an event to edit");
             return;
         };
@@ -228,7 +249,7 @@ impl Window {
     }
 
     pub(super) fn delete_selected(self: &Rc<Self>) {
-        match self.state.borrow().selected_occurrence() {
+        match self.current_item() {
             Some(occ) => self.delete_occurrence(occ),
             None => self.toast("Select an event to delete"),
         }
@@ -245,7 +266,8 @@ impl Window {
                 let toast = adw::Toast::builder()
                     .title(format!("Deleted “{}”", occ.summary))
                     .button_label("Undo")
-                    .action_name("win.undo")
+                    .action_name("win.run")
+                    .action_target(&"undo".to_variant())
                     .build();
                 w.toasts.add_toast(toast);
             }
@@ -320,5 +342,93 @@ impl Window {
             Err(e) => self.toast(&format!("Could not redo: {e}")),
         }
         self.refresh();
+    }
+
+    /// What edit and delete act on: the selected task in the tasks view,
+    /// otherwise the selected occurrence.
+    fn current_item(&self) -> Option<Occurrence> {
+        let state = self.state.borrow();
+        if state.view != ViewKind::Tasks {
+            return state.selected_occurrence();
+        }
+        let (path, uid) = state.selected_task.as_ref()?;
+        let t = state.vdir.task(path, uid)?;
+        // undated tasks are edited as due today
+        let start = t.start.or(t.due).unwrap_or(When::Date(state.today()));
+        let end = t.due.unwrap_or(start);
+        let mut occ = t.on_day(state.today());
+        occ.start = start;
+        occ.end = end;
+        occ.all_day = start.is_date();
+        Some(occ)
+    }
+
+    /// The task the user means: selected in the tasks view, or a selected
+    /// task occurrence elsewhere.
+    pub(super) fn selected_task(&self) -> Option<Task> {
+        let state = self.state.borrow();
+        let (path, uid) = if state.view == ViewKind::Tasks {
+            state.selected_task.clone()?
+        } else {
+            let o = state
+                .selected_occurrence()
+                .filter(|o| o.kind == Kind::Todo)?;
+            (o.path, o.uid)
+        };
+        state.vdir.task(&path, &uid)
+    }
+
+    pub(super) fn set_task_done(self: &Rc<Self>, id: &(PathBuf, String), done: bool) {
+        let task = self.state.borrow().vdir.task(&id.0, &id.1);
+        let Some(task) = task else { return };
+        if task.is_done() == done {
+            return;
+        }
+        let summary = task.summary.clone();
+        if self.perform("update the task", |v| {
+            v.set_done(&task, done).map(|c| vec![c])
+        }) && done
+        {
+            let toast = adw::Toast::builder()
+                .title(format!("Done: “{summary}”"))
+                .button_label("Undo")
+                .action_name("win.run")
+                .action_target(&"undo".to_variant())
+                .build();
+            self.toasts.add_toast(toast);
+        }
+    }
+
+    /// Toggle the selected task between done and not done.
+    pub(super) fn toggle_done(self: &Rc<Self>) -> Result<(), String> {
+        let task = self.selected_task().ok_or("select a task first")?;
+        self.set_task_done(&(task.path.clone(), task.uid.clone()), !task.is_done());
+        Ok(())
+    }
+
+    pub(super) fn add_task(self: &Rc<Self>, calendar: String, title: &str, due: Option<When>) {
+        self.state.borrow_mut().last_calendar = Some(calendar.clone());
+        let mut created = None;
+        if self.perform("create the task", |v| {
+            let change = v.create_task(&calendar, title, due)?;
+            created = Some(change.path.clone());
+            Ok(vec![change])
+        }) && let Some(path) = created
+        {
+            let uid = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            self.state.borrow_mut().selected_task = Some((path, uid));
+            self.refresh();
+        }
+    }
+
+    pub(super) fn set_selected_due(self: &Rc<Self>, due: Option<When>) -> Result<(), String> {
+        let task = self.selected_task().ok_or("select a task first")?;
+        self.perform("set the due date", |v| {
+            v.set_due(&task, due).map(|c| vec![c])
+        });
+        Ok(())
     }
 }

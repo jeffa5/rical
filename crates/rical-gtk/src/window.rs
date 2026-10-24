@@ -10,21 +10,26 @@ use std::{
 };
 
 use adw::prelude::*;
-use chrono::{Datelike, Days, TimeDelta, Utc};
-use gtk::{gdk, gio, glib};
+use chrono::{Datelike, Days, Utc};
+use gtk::{gio, glib};
 use log::{info, warn};
 
 #[path = "ops.rs"]
 mod ops;
+#[path = "palette.rs"]
+mod palette;
+#[path = "run.rs"]
+mod run;
 
 use crate::{
     agenda::AgendaView,
+    binds::{Binds, Key},
     details, format,
     grid::{DragAction, TimeGrid},
     layout::{self, ViewKind},
     month::MonthView,
-    shortcuts,
     state::SharedState,
+    tasks::TasksView,
 };
 
 pub struct Window {
@@ -39,6 +44,7 @@ pub struct Window {
     grid: Rc<TimeGrid>,
     month: Rc<MonthView>,
     agenda: Rc<AgendaView>,
+    tasks: Rc<TasksView>,
     syncing: Cell<bool>,
     last_view: Cell<Option<ViewKind>>,
     monitors: RefCell<Vec<gio::FileMonitor>>,
@@ -46,10 +52,16 @@ pub struct Window {
     reload_all_pending: Cell<bool>,
     debounce: RefCell<Option<glib::SourceId>>,
     toasts: adw::ToastOverlay,
+    binds: Binds,
+    pending_keys: RefCell<Vec<Key>>,
+    /// Command line history, oldest first.
+    history: RefCell<Vec<String>>,
+    /// Scope given by a command, so it does not ask.
+    forced_scope: Cell<Option<rical_core::write::Scope>>,
 }
 
 impl Window {
-    pub fn new(app: &adw::Application, state: SharedState) -> Rc<Self> {
+    pub fn new(app: &adw::Application, state: SharedState, binds: Binds) -> Rc<Self> {
         let this = Rc::new_cyclic(|weak: &Weak<Self>| {
             let on_change: Rc<dyn Fn()> = {
                 let weak = weak.clone();
@@ -67,10 +79,18 @@ impl Window {
                     }
                 })
             };
-            Self::build(app, state, on_change, on_drag)
+            let on_toggle: Rc<dyn Fn((PathBuf, String), bool)> = {
+                let weak = weak.clone();
+                Rc::new(move |id, done| {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_task_done(&id, done);
+                    }
+                })
+            };
+            Self::build(app, state, on_change, on_drag, on_toggle, binds)
         });
         this.setup_signals();
-        this.setup_actions(app);
+        this.setup_actions();
         this.setup_keys();
         this.watch();
         this.rebuild_calendar_list();
@@ -93,10 +113,13 @@ impl Window {
         state: SharedState,
         on_change: Rc<dyn Fn()>,
         on_drag: Rc<dyn Fn(DragAction)>,
+        on_toggle: Rc<dyn Fn((PathBuf, String), bool)>,
+        binds: Binds,
     ) -> Self {
         let grid = TimeGrid::new(state.clone(), on_change.clone(), on_drag);
         let month = MonthView::new(state.clone(), on_change.clone());
-        let agenda = AgendaView::new(state.clone(), on_change);
+        let agenda = AgendaView::new(state.clone(), on_change.clone());
+        let tasks = TasksView::new(state.clone(), on_change, on_toggle);
 
         let views = gtk::Stack::builder()
             .transition_type(gtk::StackTransitionType::Crossfade)
@@ -105,6 +128,7 @@ impl Window {
         views.add_named(&grid.widget, Some("grid"));
         views.add_named(&month.area, Some("month"));
         views.add_named(&agenda.widget, Some("agenda"));
+        views.add_named(&tasks.widget, Some("tasks"));
 
         let title = adw::WindowTitle::new("", "");
 
@@ -114,6 +138,7 @@ impl Window {
             (ViewKind::Week, "Week", "w"),
             (ViewKind::Month, "Month", "m"),
             (ViewKind::Agenda, "Agenda", "a"),
+            (ViewKind::Tasks, "Tasks", "T"),
         ] {
             toggle.add(
                 adw::Toggle::builder()
@@ -127,31 +152,36 @@ impl Window {
         let sidebar_button = gtk::ToggleButton::builder()
             .icon_name("sidebar-show-symbolic")
             .tooltip_text("Toggle sidebar (F9)")
-            .action_name("win.toggle-sidebar")
+            .action_name("win.run")
+            .action_target(&"sidebar".to_variant())
             .build();
         let today = gtk::Button::builder()
             .label("Today")
             .tooltip_text("Go to today (t)")
-            .action_name("win.today")
+            .action_name("win.run")
+            .action_target(&"today".to_variant())
             .build();
         let prev = gtk::Button::builder()
             .icon_name("go-previous-symbolic")
             .tooltip_text("Previous (p)")
-            .action_name("win.prev")
+            .action_name("win.run")
+            .action_target(&"prev".to_variant())
             .build();
         let next = gtk::Button::builder()
             .icon_name("go-next-symbolic")
             .tooltip_text("Next (n)")
-            .action_name("win.next")
+            .action_name("win.run")
+            .action_target(&"next".to_variant())
             .build();
         let nav = gtk::Box::builder().css_classes(["linked"]).build();
         nav.append(&prev);
         nav.append(&next);
 
         let menu = gio::Menu::new();
-        menu.append(Some("_Reload"), Some("win.reload"));
-        menu.append(Some("_Keyboard Shortcuts"), Some("win.shortcuts"));
-        menu.append(Some("_Quit"), Some("app.quit"));
+        menu.append(Some("_Command Line"), Some("win.palette"));
+        menu.append(Some("_Reload"), Some("win.run::reload"));
+        menu.append(Some("_Keyboard Shortcuts"), Some("win.run::help"));
+        menu.append(Some("_Quit"), Some("win.run::quit"));
         let menu_button = gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
             .menu_model(&menu)
@@ -166,7 +196,8 @@ impl Window {
             &gtk::Button::builder()
                 .icon_name("list-add-symbolic")
                 .tooltip_text("New event (c)")
-                .action_name("win.new")
+                .action_name("win.run")
+                .action_target(&"new".to_variant())
                 .build(),
         );
         header.pack_end(&menu_button);
@@ -255,6 +286,7 @@ impl Window {
             grid,
             month,
             agenda,
+            tasks,
             syncing: Cell::new(false),
             last_view: Cell::new(None),
             monitors: Default::default(),
@@ -262,6 +294,10 @@ impl Window {
             reload_all_pending: Cell::new(false),
             debounce: Default::default(),
             toasts,
+            binds,
+            pending_keys: Default::default(),
+            history: Default::default(),
+            forced_scope: Cell::new(None),
         }
     }
 
@@ -294,80 +330,32 @@ impl Window {
         });
     }
 
-    fn add_action(self: &Rc<Self>, name: &str, f: impl Fn(&Rc<Self>) + 'static) {
-        let action = gio::SimpleAction::new(name, None);
+    /// Buttons and menus run commands too: `win.run` takes a command line
+    /// (e.g. `win.run::today`) and `win.palette` opens the command line.
+    fn setup_actions(self: &Rc<Self>) {
+        let run = gio::SimpleAction::new("run", Some(glib::VariantTy::STRING));
         let weak = Rc::downgrade(self);
-        action.connect_activate(move |_, _| {
+        run.connect_activate(move |_, param| {
+            let Some(w) = weak.upgrade() else { return };
+            if let Some(line) = param.and_then(|p| p.str())
+                && let Err(e) = w.execute(line)
+            {
+                w.toast(&e);
+            }
+        });
+        self.window.add_action(&run);
+
+        let open = gio::SimpleAction::new("palette", None);
+        let weak = Rc::downgrade(self);
+        open.connect_activate(move |_, _| {
             if let Some(w) = weak.upgrade() {
-                f(&w);
+                palette::open(&w, "");
             }
         });
-        self.window.add_action(&action);
+        self.window.add_action(&open);
     }
 
-    fn setup_actions(self: &Rc<Self>, app: &adw::Application) {
-        self.add_action("today", |w| w.today());
-        self.add_action("next", |w| w.step(true));
-        self.add_action("prev", |w| w.step(false));
-        self.add_action("reload", |w| w.reload_all());
-        self.add_action("toggle-sidebar", |w| {
-            w.split.set_show_sidebar(!w.split.shows_sidebar())
-        });
-        self.add_action("goto", |w| w.goto());
-        self.add_action("shortcuts", |w| {
-            shortcuts::dialog().present(Some(&w.window))
-        });
-        self.add_action("details", |w| w.show_details());
-        self.add_action("new", |w| w.new_item(None));
-        self.add_action("edit", |w| w.edit_selected());
-        self.add_action("delete", |w| w.delete_selected());
-        self.add_action("undo", |w| w.undo());
-        self.add_action("redo", |w| w.redo());
-
-        let view = gio::SimpleAction::new("view", Some(glib::VariantTy::STRING));
-        let weak = Rc::downgrade(self);
-        view.connect_activate(move |_, param| {
-            let Some(w) = weak.upgrade() else { return };
-            if let Some(v) = param.and_then(|p| p.str()).and_then(ViewKind::from_name) {
-                w.set_view(v);
-            }
-        });
-        self.window.add_action(&view);
-
-        let toggle_cal = gio::SimpleAction::new("toggle-calendar", Some(glib::VariantTy::INT32));
-        let weak = Rc::downgrade(self);
-        toggle_cal.connect_activate(move |_, param| {
-            let Some(w) = weak.upgrade() else { return };
-            if let Some(n) = param.and_then(|p| p.get::<i32>()) {
-                w.toggle_calendar(n as usize);
-            }
-        });
-        self.window.add_action(&toggle_cal);
-
-        app.set_accels_for_action("win.reload", &["<Control>r", "F5"]);
-        app.set_accels_for_action("win.toggle-sidebar", &["F9"]);
-        app.set_accels_for_action("win.shortcuts", &["<Control>question"]);
-        app.set_accels_for_action("win.goto", &["<Control>g"]);
-        app.set_accels_for_action("win.new", &["<Control>n"]);
-        app.set_accels_for_action("win.edit", &["<Control>e"]);
-        app.set_accels_for_action("win.undo", &["<Control>z"]);
-        app.set_accels_for_action("win.redo", &["<Control><Shift>z", "<Control>y"]);
-        for (i, view) in ViewKind::ALL.iter().enumerate() {
-            app.set_accels_for_action(
-                &format!("win.view::{}", view.name()),
-                &[&format!("<Control>{}", i + 1)],
-            );
-        }
-        for n in 1..=9 {
-            app.set_accels_for_action(
-                &format!("win.toggle-calendar({n})"),
-                &[&format!("<Alt>{n}")],
-            );
-        }
-    }
-
-    /// Single keys work anywhere except in text entries. Arrows, Enter and
-    /// Escape act on the calendar unless focus is on another control.
+    /// Keys go through the bindings (see `run.rs` and `binds.conf`).
     fn setup_keys(self: &Rc<Self>) {
         let keys = gtk::EventControllerKey::new();
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -377,112 +365,6 @@ impl Window {
             None => glib::Propagation::Proceed,
         });
         self.window.add_controller(keys);
-    }
-
-    fn handle_key(self: &Rc<Self>, key: gdk::Key, mods: gdk::ModifierType) -> glib::Propagation {
-        use gdk::Key;
-        use glib::Propagation::{Proceed, Stop};
-
-        // dialogs (the editor, shortcuts) handle their own keys
-        if self.window.visible_dialog().is_some() {
-            return Proceed;
-        }
-        let focus = gtk::prelude::GtkWindowExt::focus(&self.window);
-        if focus.as_ref().is_some_and(|f| {
-            f.is::<gtk::Text>() || f.is::<gtk::Editable>() || f.is::<gtk::TextView>()
-        }) {
-            return Proceed;
-        }
-        if mods.intersects(
-            gdk::ModifierType::CONTROL_MASK
-                | gdk::ModifierType::ALT_MASK
-                | gdk::ModifierType::SUPER_MASK,
-        ) {
-            return Proceed;
-        }
-        if key == Key::Escape && details::close() {
-            return Stop;
-        }
-        let shift = mods.contains(gdk::ModifierType::SHIFT_MASK);
-        let in_views = focus.as_ref().is_none_or(|f| {
-            f.is_ancestor(&self.views) || f == self.views.upcast_ref::<gtk::Widget>()
-        });
-        let view = self.state.borrow().view;
-        let minutes = TimeDelta::minutes;
-
-        // single-character commands
-        match key {
-            Key::c => self.new_item(None),
-            Key::e => self.edit_selected(),
-            Key::x | Key::Delete => self.delete_selected(),
-            Key::u => self.undo(),
-            Key::U => self.redo(),
-            Key::bracketleft => self.nudge_selected(minutes(-15), true),
-            Key::bracketright => self.nudge_selected(minutes(15), true),
-            Key::braceleft => self.nudge_selected(TimeDelta::days(-1), true),
-            Key::braceright => self.nudge_selected(TimeDelta::days(1), true),
-            Key::J => self.nudge_selected(minutes(15), false),
-            Key::K => self.nudge_selected(minutes(-15), false),
-            Key::H => self.nudge_selected(TimeDelta::days(-1), false),
-            Key::L => self.nudge_selected(TimeDelta::days(1), false),
-            Key::Down | Key::Up | Key::Left | Key::Right if shift && in_views => {
-                let shift = match (key, view) {
-                    (Key::Down, ViewKind::Month) => TimeDelta::days(7),
-                    (Key::Up, ViewKind::Month) => TimeDelta::days(-7),
-                    (Key::Down, _) => minutes(15),
-                    (Key::Up, _) => minutes(-15),
-                    (Key::Left, _) => TimeDelta::days(-1),
-                    _ => TimeDelta::days(1),
-                };
-                self.nudge_selected(shift, false);
-            }
-            Key::t => self.today(),
-            Key::n => self.step(true),
-            Key::p => self.step(false),
-            Key::d => self.set_view(ViewKind::Day),
-            Key::w => self.set_view(ViewKind::Week),
-            Key::m => self.set_view(ViewKind::Month),
-            Key::a => self.set_view(ViewKind::Agenda),
-            Key::g => self.goto(),
-            Key::question => shortcuts::dialog().present(Some(&self.window)),
-            Key::j => self.select_relative(true),
-            Key::k => self.select_relative(false),
-            Key::h => self.move_day(-1),
-            Key::l => self.move_day(1),
-            _ => {
-                if !in_views {
-                    return Proceed;
-                }
-                match key {
-                    Key::Page_Down => self.step(true),
-                    Key::Page_Up => self.step(false),
-                    Key::Escape => {
-                        if self.state.borrow().selected.is_none() {
-                            return Proceed;
-                        }
-                        self.state.borrow_mut().selected = None;
-                        self.refresh();
-                    }
-                    // the agenda list navigates itself
-                    _ if view == ViewKind::Agenda => return Proceed,
-                    Key::Down if view == ViewKind::Month => self.move_day(7),
-                    Key::Up if view == ViewKind::Month => self.move_day(-7),
-                    Key::Down => self.select_relative(true),
-                    Key::Up => self.select_relative(false),
-                    Key::Left => self.move_day(-1),
-                    Key::Right => self.move_day(1),
-                    Key::Return | Key::KP_Enter | Key::space => {
-                        if view == ViewKind::Month && self.state.borrow().selected.is_none() {
-                            self.set_view(ViewKind::Day);
-                        } else {
-                            self.show_details();
-                        }
-                    }
-                    _ => return Proceed,
-                }
-            }
-        }
-        Stop
     }
 
     fn today(&self) {
@@ -538,44 +420,31 @@ impl Window {
     }
 
     fn show_details(&self) {
-        match self.state.borrow().view {
+        let view = self.state.borrow().view;
+        match view {
             ViewKind::Day | ViewKind::Week => self.grid.show_selected_details(),
             ViewKind::Month => self.month.show_selected_details(),
             ViewKind::Agenda => self.agenda.show_selected_details(),
+            ViewKind::Tasks => {}
         }
     }
 
-    fn goto(&self) {
-        self.split.set_show_sidebar(true);
-        self.mini.grab_focus();
-    }
-
+    /// Give the current view keyboard focus. Deferred until idle, as a view
+    /// that was just switched to cannot take focus yet.
     fn focus_view(&self) {
-        match self.state.borrow().view {
-            ViewKind::Day | ViewKind::Week => self.grid.focus(),
-            ViewKind::Month => self.month.focus(),
-            ViewKind::Agenda => self.agenda.focus(),
-        }
-    }
-
-    fn toggle_calendar(&self, n: usize) {
-        {
-            let mut s = self.state.borrow_mut();
-            let Some(id) = s
-                .vdir
-                .calendars
-                .get(n.wrapping_sub(1))
-                .map(|c| c.id.clone())
-            else {
-                return;
-            };
-            if !s.hidden.remove(&id) {
-                s.hidden.insert(id);
-            }
-            s.invalidate();
-        }
-        self.sync_calendar_list();
-        self.refresh();
+        let view = self.state.borrow().view;
+        let (grid, month, agenda, tasks) = (
+            self.grid.clone(),
+            self.month.clone(),
+            self.agenda.clone(),
+            self.tasks.clone(),
+        );
+        glib::idle_add_local_once(move || match view {
+            ViewKind::Day | ViewKind::Week => grid.focus(),
+            ViewKind::Month => month.focus(),
+            ViewKind::Agenda => agenda.focus(),
+            ViewKind::Tasks => tasks.focus(),
+        });
     }
 
     fn rebuild_calendar_list(self: &Rc<Self>) {
@@ -677,6 +546,10 @@ impl Window {
             ViewKind::Agenda => {
                 self.views.set_visible_child_name("agenda");
                 self.agenda.refresh();
+            }
+            ViewKind::Tasks => {
+                self.views.set_visible_child_name("tasks");
+                self.tasks.refresh();
             }
         }
 

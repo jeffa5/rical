@@ -338,7 +338,7 @@ impl Vdir {
 
     /// Apply a change made by an edit, first checking the new text parses
     /// so rical never writes a file it (or others) cannot read back.
-    fn apply_checked(&mut self, change: &Change) -> anyhow::Result<()> {
+    pub(crate) fn apply_checked(&mut self, change: &Change) -> anyhow::Result<()> {
         if let Some(after) = &change.after {
             let invalid = || format!("refusing to write invalid {:?}", change.path);
             crate::ics::parse_calendar(after).with_context(invalid)?;
@@ -374,7 +374,7 @@ impl Vdir {
     /// Copy any VTIMEZONE definitions `doc` refers to but lacks from other
     /// items in the vdir. TZIDs without one elsewhere are left as they are;
     /// servers resolve IANA names themselves.
-    fn add_timezones(&self, doc: &mut Document) {
+    pub(crate) fn add_timezones(&self, doc: &mut Document) {
         let mut tzids = Vec::new();
         for item in doc.items() {
             for line in item.lines() {
@@ -465,7 +465,10 @@ fn set_times(c: &mut Component, kind: Kind, start: &When, end: &When, original: 
     };
     match kind {
         Kind::Todo => {
-            set_if_changed(c, "DTSTART", &start);
+            // a task with only a due date keeps only a due date
+            if c.property("DTSTART").is_some() || start != end {
+                set_if_changed(c, "DTSTART", &start);
+            }
             set_if_changed(c, "DUE", &end);
         }
         Kind::Event | Kind::Journal => {
@@ -484,7 +487,7 @@ fn set_times(c: &mut Component, kind: Kind, start: &When, end: &When, original: 
 }
 
 /// Bump SEQUENCE and the modification stamps.
-fn touch(c: &mut Component) {
+pub(crate) fn touch(c: &mut Component) {
     let seq = c
         .property("SEQUENCE")
         .and_then(|l| l.value().trim().parse::<u32>().ok())
@@ -507,7 +510,7 @@ fn make_override(master: &Component, rid: &When) -> Component {
     o
 }
 
-fn stamp() -> String {
+pub(crate) fn stamp() -> String {
     Utc::now().format("%Y%m%dT%H%M%SZ").to_string()
 }
 

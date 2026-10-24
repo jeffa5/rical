@@ -229,7 +229,7 @@ impl MonthView {
                 let y = y0 + bar.lane as f64 * CHIP_HEIGHT;
                 let h = CHIP_HEIGHT - 2.0;
                 let selected = state.selected.as_ref().is_some_and(|k| k.matches(o));
-                let color = state.color(&o.calendar);
+                let color = state.display_color(o);
                 let spans = bar.first != bar.last || layout::is_all_day_row(o);
 
                 if spans || selected {
@@ -257,9 +257,13 @@ impl MonthView {
                     tx = x + 13.0;
                 }
                 let text = if spans {
-                    o.summary.clone()
+                    format::title(o, state.local)
                 } else {
-                    format!("{} {}", format::time(&o.start, state.local), o.summary)
+                    format!(
+                        "{} {}",
+                        format::time(&o.start, state.local),
+                        format::title(o, state.local)
+                    )
                 };
                 let l = draw::layout(
                     area,
@@ -267,7 +271,7 @@ impl MonthView {
                     &TextStyle {
                         scale: 0.85,
                         bold: false,
-                        strikethrough: format::is_cancelled(o),
+                        strikethrough: format::is_inactive(o),
                     },
                     cw - (tx - x) - 2.0,
                     1,

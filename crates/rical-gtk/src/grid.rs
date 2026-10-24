@@ -389,6 +389,7 @@ impl TimeGrid {
                 end,
                 all_day: false,
                 recurring: false,
+                due: None,
             },
         };
         ghost.start = start;
@@ -750,8 +751,8 @@ fn draw_block(
     selected: bool,
     compact: bool,
 ) {
-    let color = state.color(&o.calendar);
-    let cancelled = format::is_cancelled(o);
+    let color = state.display_color(o);
+    let cancelled = format::is_inactive(o);
     let alpha = if cancelled { 0.5 } else { 1.0 };
 
     cr.save().ok();
@@ -784,7 +785,7 @@ fn draw_block(
     };
 
     let title = match o.kind {
-        Kind::Todo => format!("{} {}", format::todo_mark(o), o.summary),
+        Kind::Todo => format::title(o, state.local),
         _ => o.summary.clone(),
     };
     let tw = w - 10.0;

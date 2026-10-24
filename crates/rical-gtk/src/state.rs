@@ -38,6 +38,8 @@ pub struct State {
     /// The focused day; views are positioned around it.
     pub date: NaiveDate,
     pub selected: Option<OccurrenceKey>,
+    /// In the tasks view: (file, UID) of the selected task.
+    pub selected_task: Option<(std::path::PathBuf, String)>,
     /// Calendar new items go in; the last one used.
     pub last_calendar: Option<String>,
     /// Each entry is the file changes one action made.
@@ -51,6 +53,7 @@ pub struct State {
 struct Cache {
     generation: u64,
     range: Range<DateTime<Utc>>,
+    today: NaiveDate,
     occurrences: Rc<Vec<Occurrence>>,
 }
 
@@ -99,6 +102,7 @@ impl State {
             view: ViewKind::Week,
             date,
             selected: None,
+            selected_task: None,
             last_calendar: None,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -134,25 +138,41 @@ impl State {
         layout::visible_days(self.view, self.date)
     }
 
-    /// Visible occurrences (events and todos of shown calendars) in `days`.
+    /// Visible occurrences (events and tasks of shown calendars) in `days`.
+    /// If today is among them, tasks still to do from earlier days are
+    /// carried forward onto today so they do not get lost.
     pub fn occurrences(&self, days: &[NaiveDate]) -> Rc<Vec<Occurrence>> {
         let range = layout::days_range(days, self.local);
+        let today = self.today();
         if let Some(cache) = &*self.cache.borrow()
             && cache.generation == self.generation
             && cache.range == range
+            && cache.today == today
         {
             return cache.occurrences.clone();
         }
-        let occurrences = Rc::new(
-            self.vdir
-                .query(&range, &[Kind::Event, Kind::Todo], self.local)
-                .into_iter()
-                .filter(|o| !self.hidden.contains(&o.calendar))
-                .collect::<Vec<_>>(),
-        );
+        let mut occurrences = self
+            .vdir
+            .query(&range, &[Kind::Event, Kind::Todo], self.local)
+            .into_iter()
+            .filter(|o| !self.hidden.contains(&o.calendar))
+            .collect::<Vec<_>>();
+        if days.contains(&today) {
+            occurrences.extend(
+                self.vdir
+                    .tasks()
+                    .into_iter()
+                    .filter(|t| {
+                        !self.hidden.contains(&t.calendar) && t.is_overdue(today, self.local)
+                    })
+                    .map(|t| t.on_day(today)),
+            );
+        }
+        let occurrences = Rc::new(occurrences);
         *self.cache.borrow_mut() = Some(Cache {
             generation: self.generation,
             range,
+            today,
             occurrences: occurrences.clone(),
         });
         occurrences
@@ -266,5 +286,35 @@ impl State {
             .iter()
             .find(|o| o.uid == uid && o.start.to_utc(local) == start.to_utc(local))
             .cloned()
+    }
+}
+
+/// Overdue tasks stand out in red whatever their calendar.
+const OVERDUE: Rgb = Rgb {
+    r: 0xe0,
+    g: 0x1b,
+    b: 0x24,
+};
+
+impl State {
+    /// The colour to draw an occurrence in.
+    pub fn display_color(&self, o: &Occurrence) -> Rgb {
+        if crate::format::is_overdue(o, self.local) {
+            OVERDUE
+        } else {
+            self.color(&o.calendar)
+        }
+    }
+
+    pub fn today(&self) -> NaiveDate {
+        chrono::Utc::now().with_timezone(&self.local).date_naive()
+    }
+}
+
+impl State {
+    /// Changes whenever what is shown could have changed (data, hidden
+    /// calendars); views rebuild only then.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 }

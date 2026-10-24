@@ -440,3 +440,80 @@ fn timezone_from_lf_file_is_rewritten_with_crlf() {
         1
     );
 }
+
+const TASKS: &str = "
+    BEGIN:VTODO
+    UID:report
+    DTSTAMP:20250101T000000Z
+    DUE;VALUE=DATE:20250303
+    SUMMARY:Write report
+    STATUS:NEEDS-ACTION
+    PRIORITY:1
+    END:VTODO
+";
+
+#[test]
+fn tasks_list_and_complete() {
+    let (dir, mut vdir) = setup(&[("work/report.ics", TASKS)]);
+    let path = dir.path().join("work/report.ics");
+    let tasks = vdir.tasks();
+    assert_eq!(tasks.len(), 1);
+    let t = &tasks[0];
+    assert_eq!((t.summary.as_str(), t.priority), ("Write report", Some(1)));
+    assert!(!t.is_done());
+    let today = chrono::NaiveDate::from_ymd_opt(2025, 3, 5).unwrap();
+    assert!(t.is_overdue(today, SINGAPORE));
+    assert!(!t.is_overdue(
+        chrono::NaiveDate::from_ymd_opt(2025, 3, 3).unwrap(),
+        SINGAPORE
+    ));
+
+    // carried to today as an all-day item that remembers when it was due
+    let carried = t.on_day(today);
+    assert!(carried.all_day);
+    assert_eq!(carried.due, t.due);
+
+    let before = fs::read_to_string(&path).unwrap();
+    let change = vdir.set_done(t, true).unwrap();
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(text.contains("STATUS:COMPLETED\r\n"));
+    assert!(text.contains("PERCENT-COMPLETE:100\r\n"));
+    assert!(text.contains("\r\nCOMPLETED:"));
+    let t = &vdir.tasks()[0];
+    assert!(t.is_done() && !t.is_overdue(today, SINGAPORE));
+
+    vdir.set_done(t, false).unwrap();
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(text.contains("STATUS:NEEDS-ACTION\r\n"));
+    assert!(!text.contains("COMPLETED:") && !text.contains("PERCENT-COMPLETE"));
+
+    // undo of the first change is refused now the file moved on
+    assert!(vdir.undo(&change).is_err());
+    let _ = before;
+}
+
+#[test]
+fn create_and_date_tasks() {
+    let (_dir, mut vdir) = setup(&[]);
+    let change = vdir.create_task("home", "Buy milk", None).unwrap();
+    let text = change.after.unwrap();
+    assert!(text.contains("BEGIN:VTODO") && text.contains("SUMMARY:Buy milk"));
+    assert!(!text.contains("DUE") && !text.contains("DTSTART"));
+    let t = vdir.tasks().pop().unwrap();
+    assert_eq!(t.due, None);
+
+    vdir.set_due(&t, Some(when("20250310"))).unwrap();
+    let t = vdir.tasks().pop().unwrap();
+    assert_eq!(t.due, Some(when("20250310")));
+    // it now shows on that day
+    let occ = query(&vdir, range("2025-03-09 16:00", "2025-03-10 16:00"));
+    assert_eq!(occ.len(), 1);
+    assert_eq!(occ[0].due, Some(when("20250310")));
+
+    // editing its title through a draft keeps it due-only
+    let mut draft = vdir.draft(&occ[0]);
+    draft.summary = "Buy oat milk".into();
+    vdir.update(&occ[0], Scope::All, &draft, None).unwrap();
+    let t = vdir.tasks().pop().unwrap();
+    assert_eq!((t.summary.as_str(), t.start), ("Buy oat milk", None));
+}

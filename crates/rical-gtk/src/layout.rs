@@ -13,10 +13,17 @@ pub enum ViewKind {
     Week,
     Month,
     Agenda,
+    Tasks,
 }
 
 impl ViewKind {
-    pub const ALL: [ViewKind; 4] = [Self::Day, Self::Week, Self::Month, Self::Agenda];
+    pub const ALL: [ViewKind; 5] = [
+        Self::Day,
+        Self::Week,
+        Self::Month,
+        Self::Agenda,
+        Self::Tasks,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -24,6 +31,7 @@ impl ViewKind {
             Self::Week => "week",
             Self::Month => "month",
             Self::Agenda => "agenda",
+            Self::Tasks => "tasks",
         }
     }
 
@@ -46,6 +54,8 @@ pub fn visible_days(view: ViewKind, date: NaiveDate) -> Vec<NaiveDate> {
         ViewKind::Week => (week_start(date), 7),
         ViewKind::Month => (week_start(date.with_day(1).unwrap()), 42),
         ViewKind::Agenda => (date, AGENDA_DAYS),
+        // tasks are not by date; the focused day still matters for "today"
+        ViewKind::Tasks => (date, 1),
     };
     (0..n).map(|i| first + Days::new(i)).collect()
 }
@@ -63,6 +73,7 @@ pub fn step(view: ViewKind, date: NaiveDate, forward: bool) -> NaiveDate {
         ViewKind::Day => shift(date, 1),
         ViewKind::Week => shift(date, 7),
         ViewKind::Agenda => shift(date, AGENDA_DAYS),
+        ViewKind::Tasks => date,
         ViewKind::Month => {
             let months = chrono::Months::new(1);
             if forward {
@@ -315,6 +326,7 @@ mod tests {
             end,
             all_day: start.is_date(),
             recurring: false,
+            due: None,
         }
     }
 

@@ -63,6 +63,8 @@ pub struct Occurrence {
     pub end: When,
     pub all_day: bool,
     pub recurring: bool,
+    /// For tasks, when they are due (they may be shown on another day).
+    pub due: Option<When>,
 }
 
 impl Occurrence {
@@ -195,6 +197,11 @@ impl<'a> Fields<'a> {
             end: start.add(self.duration),
             all_day: start.is_date(),
             recurring,
+            due: self
+                .component
+                .properties()
+                .get("DUE")
+                .and_then(When::from_property),
         }
     }
 }

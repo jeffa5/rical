@@ -1,0 +1,191 @@
+//! Tasks (VTODO) as a list, independent of dates: listing, completing and
+//! quick creation.
+
+use std::path::PathBuf;
+
+use anyhow::Context as _;
+use chrono::{NaiveDate, Utc};
+use chrono_tz::Tz;
+use icalendar::Component as _;
+
+use crate::{
+    doc::{Component, Document, Line},
+    occurrence::{Kind, Occurrence, unescape_text},
+    vdir::Vdir,
+    when::When,
+    write::Change,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Task {
+    pub calendar: String,
+    pub path: PathBuf,
+    pub uid: String,
+    pub summary: String,
+    pub description: Option<String>,
+    pub status: Option<String>,
+    pub due: Option<When>,
+    pub start: Option<When>,
+    pub completed: Option<When>,
+    /// 1 (highest) to 9; 0 or absent means undefined.
+    pub priority: Option<u8>,
+}
+
+impl Task {
+    pub fn is_done(&self) -> bool {
+        self.completed.is_some()
+            || matches!(self.status.as_deref(), Some("COMPLETED" | "CANCELLED"))
+    }
+
+    /// The day it is due (or starts, without a due date) for `local`.
+    pub fn day(&self, local: Tz) -> Option<NaiveDate> {
+        self.due.or(self.start).map(|w| w.date(local))
+    }
+
+    /// Still to do and due before `today`.
+    pub fn is_overdue(&self, today: NaiveDate, local: Tz) -> bool {
+        !self.is_done() && self.day(local).is_some_and(|d| d < today)
+    }
+
+    /// This task shown on `day` as an all-day item, e.g. to carry an
+    /// overdue task forward to today.
+    pub fn on_day(&self, day: NaiveDate) -> Occurrence {
+        Occurrence {
+            calendar: self.calendar.clone(),
+            path: self.path.clone(),
+            uid: self.uid.clone(),
+            recurrence_id: None,
+            kind: Kind::Todo,
+            summary: self.summary.clone(),
+            location: None,
+            description: self.description.clone(),
+            status: self.status.clone(),
+            start: When::Date(day),
+            end: When::Date(day.succ_opt().unwrap_or(day)),
+            all_day: true,
+            recurring: false,
+            due: self.due,
+        }
+    }
+}
+
+impl Vdir {
+    /// Every task (the master of each VTODO), dated or not.
+    pub fn tasks(&self) -> Vec<Task> {
+        self.components()
+            .filter(|(_, c)| {
+                c.component_kind() == "VTODO" && c.property_value("RECURRENCE-ID").is_none()
+            })
+            .map(|(cal, c)| {
+                let when = |name| c.properties().get(name).and_then(When::from_property);
+                Task {
+                    calendar: cal.id.clone(),
+                    path: c.path().to_owned(),
+                    uid: c.get_uid().unwrap_or_default().to_owned(),
+                    summary: c
+                        .property_value("SUMMARY")
+                        .map(unescape_text)
+                        .unwrap_or_default(),
+                    description: c.property_value("DESCRIPTION").map(unescape_text),
+                    status: c.property_value("STATUS").map(str::to_owned),
+                    due: when("DUE"),
+                    start: when("DTSTART"),
+                    completed: when("COMPLETED"),
+                    priority: c
+                        .property_value("PRIORITY")
+                        .and_then(|p| p.trim().parse().ok())
+                        .filter(|p| *p > 0),
+                }
+            })
+            .collect()
+    }
+
+    pub fn task(&self, path: &std::path::Path, uid: &str) -> Option<Task> {
+        self.tasks()
+            .into_iter()
+            .find(|t| t.path == path && t.uid == uid)
+    }
+
+    /// Mark a task done (STATUS, COMPLETED, PERCENT-COMPLETE) or not done.
+    pub fn set_done(&mut self, task: &Task, done: bool) -> anyhow::Result<Change> {
+        self.edit_task(task, |c| {
+            if done {
+                c.set(Line::new("STATUS:COMPLETED"));
+                c.set(Line::property(
+                    "COMPLETED",
+                    &[],
+                    &Utc::now().format("%Y%m%dT%H%M%SZ").to_string(),
+                ));
+                c.set(Line::new("PERCENT-COMPLETE:100"));
+            } else {
+                c.set(Line::new("STATUS:NEEDS-ACTION"));
+                c.remove("COMPLETED");
+                c.remove("PERCENT-COMPLETE");
+            }
+        })
+    }
+
+    /// Set or clear a task's due date.
+    pub fn set_due(&mut self, task: &Task, due: Option<When>) -> anyhow::Result<Change> {
+        self.edit_task(task, |c| match due {
+            Some(due) => c.set_when("DUE", &due),
+            None => c.remove("DUE"),
+        })
+    }
+
+    fn edit_task(&mut self, task: &Task, f: impl FnOnce(&mut Component)) -> anyhow::Result<Change> {
+        let before = std::fs::read_to_string(&task.path)
+            .with_context(|| format!("reading {:?}", task.path))?;
+        let mut doc = Document::parse(&before)?;
+        let c = doc
+            .find_mut(&task.uid, None)
+            .filter(|c| c.name == "VTODO")
+            .context("task not found in file")?;
+        f(c);
+        crate::write::touch(c);
+        let change = Change {
+            path: task.path.clone(),
+            before: Some(before),
+            after: Some(doc.write()),
+        };
+        self.apply_checked(&change)?;
+        Ok(change)
+    }
+
+    /// Create a task with a title and optional due date.
+    pub fn create_task(
+        &mut self,
+        calendar: &str,
+        summary: &str,
+        due: Option<When>,
+    ) -> anyhow::Result<Change> {
+        let dir = self
+            .calendar(calendar)
+            .with_context(|| format!("no calendar {calendar:?}"))?
+            .path
+            .clone();
+        let uid = uuid::Uuid::new_v4().to_string();
+        let mut doc = Document::new_calendar();
+        let mut c = Component::new("VTODO");
+        c.insert(Line::property("UID", &[], &uid));
+        let now = crate::write::stamp();
+        for name in ["DTSTAMP", "CREATED", "LAST-MODIFIED"] {
+            c.insert(Line::property(name, &[], &now));
+        }
+        c.insert(Line::new("SEQUENCE:0"));
+        c.insert(Line::new("STATUS:NEEDS-ACTION"));
+        c.set_text("SUMMARY", summary);
+        if let Some(due) = due {
+            c.set_when("DUE", &due);
+        }
+        doc.push(c);
+        self.add_timezones(&mut doc);
+        let change = Change {
+            path: dir.join(format!("{uid}.ics")),
+            before: None,
+            after: Some(doc.write()),
+        };
+        self.apply_checked(&change)?;
+        Ok(change)
+    }
+}

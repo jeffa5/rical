@@ -7,15 +7,21 @@ use gtk::glib;
 use rical_core::{Vdir, when::local_timezone};
 
 mod agenda;
+mod binds;
+mod cmds;
+mod command;
 mod details;
 mod draw;
 mod editor;
 mod format;
 mod grid;
+mod help;
 mod layout;
+mod listhead;
 mod month;
-mod shortcuts;
+
 mod state;
+mod tasks;
 mod window;
 
 const APP_ID: &str = "net.jeffas.Rical";
@@ -39,6 +45,10 @@ struct Args {
     /// most items.
     #[clap(long, env = "RICAL_CALENDAR")]
     calendar: Option<String>,
+
+    /// Key bindings file; default ~/.config/rical/binds.conf if it exists.
+    #[clap(long)]
+    binds: Option<PathBuf>,
 }
 
 fn main() -> glib::ExitCode {
@@ -78,15 +88,41 @@ fn main() -> glib::ExitCode {
     let a = app.clone();
     quit.connect_activate(move |_, _| a.quit());
     app.add_action(&quit);
-    app.set_accels_for_action("app.quit", &["<Control>q"]);
+
+    let binds = match load_binds(args.binds.as_deref()) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("rical-gtk: {e}");
+            return glib::ExitCode::FAILURE;
+        }
+    };
 
     let windows = Rc::new(RefCell::new(Vec::new()));
     app.connect_activate(move |app| {
-        let window = window::Window::new(app, state.clone());
+        let window = window::Window::new(app, state.clone(), binds.clone());
         window.present();
         windows.borrow_mut().push(window);
     });
 
     // arguments are ours, not GTK's
     app.run_with_args(&[std::env::args().next().unwrap_or_default()])
+}
+
+/// The default bindings with the user's on top.
+fn load_binds(path: Option<&std::path::Path>) -> Result<binds::Binds, String> {
+    let mut binds =
+        binds::Binds::parse(binds::DEFAULTS).map_err(|e| format!("built-in binds: {e}"))?;
+    let path = match path {
+        Some(p) => Some(p.to_owned()),
+        None => std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+            .map(|c| c.join("rical/binds.conf"))
+            .filter(|p| p.exists()),
+    };
+    if let Some(path) = path {
+        let text = std::fs::read_to_string(&path).map_err(|e| format!("{path:?}: {e}"))?;
+        binds.merge(binds::Binds::parse(&text).map_err(|e| format!("{path:?}: {e}"))?);
+    }
+    Ok(binds)
 }

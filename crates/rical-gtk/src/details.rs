@@ -35,7 +35,7 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
     content.append(&cal_row);
 
     let title = match occ.kind {
-        Kind::Todo => format!("{} {}", format::todo_mark(occ), occ.summary),
+        Kind::Todo => format::title(occ, state.local),
         _ => occ.summary.clone(),
     };
     content.append(

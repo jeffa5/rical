@@ -15,6 +15,7 @@
 #                               drive the pointer (see tools/wlpointer)
 #   "float:@floating enable"    sway commands, ";" separated
 #   "edit:!touch vdir/x.ics"    a shell command
+#   "title:=Lunch with Sam"     type text as is (spaces and quotes too)
 #
 # Needs sway, grim and wtype (in the dev shell).
 set -euo pipefail
@@ -107,6 +108,10 @@ for step in "${steps[@]}"; do
         # shellcheck disable=SC2086
         SWAYSOCK=$sock swaymsg $cmd > /dev/null
       done
+      ;;
+    '='*)
+      # "name:=some text" types the text as is
+      wtype -- "${action:1}"
       ;;
     '!'*)
       sh -c "${action:1}"

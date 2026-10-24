@@ -63,10 +63,6 @@ pub fn todo_mark(o: &Occurrence) -> &'static str {
     }
 }
 
-pub fn is_cancelled(o: &Occurrence) -> bool {
-    matches!(o.status.as_deref(), Some("CANCELLED"))
-}
-
 /// Header title and subtitle for the current view.
 pub fn view_title(view: ViewKind, date: NaiveDate) -> (String, String) {
     match view {
@@ -95,6 +91,38 @@ pub fn view_title(view: ViewKind, date: NaiveDate) -> (String, String) {
             format!("From {}", date.format("%-d %B %Y")),
             format!("Next {} days", layout::AGENDA_DAYS),
         ),
+        ViewKind::Tasks => ("Tasks".to_owned(), String::new()),
+    }
+}
+
+/// A task shown on a later day than it was due: still to do, carried
+/// forward so it is not lost.
+pub fn is_overdue(o: &Occurrence, local: Tz) -> bool {
+    o.kind == rical_core::Kind::Todo
+        && !is_inactive(o)
+        && o.due
+            .is_some_and(|due| due.date(local) < o.start.date(local))
+}
+
+/// Cancelled, or a completed task: drawn faded and struck through.
+pub fn is_inactive(o: &Occurrence) -> bool {
+    matches!(o.status.as_deref(), Some("CANCELLED" | "COMPLETED"))
+}
+
+/// The text to show for an occurrence: tasks get a checkbox, and overdue
+/// tasks say when they were due.
+pub fn title(o: &Occurrence, local: Tz) -> String {
+    match o.kind {
+        rical_core::Kind::Todo => {
+            let mut t = format!("{} {}", todo_mark(o), o.summary);
+            if is_overdue(o, local)
+                && let Some(due) = o.due
+            {
+                t += &format!(" (due {})", due.date(local).format("%-d %b"));
+            }
+            t
+        }
+        _ => o.summary.clone(),
     }
 }
 

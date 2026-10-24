@@ -3,21 +3,24 @@
 use std::{cell::RefCell, rc::Rc};
 
 use adw::prelude::*;
-use chrono::{Days, Utc};
+use chrono::{Days, NaiveDate, Utc};
 use rical_core::{Kind, Occurrence};
 
 use crate::{
-    details, format, layout,
+    details, format, layout, listhead,
     state::{OccurrenceKey, SharedState},
 };
 
 pub struct AgendaView {
     pub widget: gtk::Stack,
     list: gtk::ListBox,
+    headings: listhead::Headings,
     state: SharedState,
     /// Occurrence key of each row, None for day headers.
     rows: Rc<RefCell<Vec<Option<OccurrenceKey>>>>,
     syncing: Rc<std::cell::Cell<bool>>,
+    /// What the rows were built from: (generation, first day, today).
+    built: std::cell::Cell<Option<(u64, NaiveDate, NaiveDate)>>,
 }
 
 impl AgendaView {
@@ -55,10 +58,12 @@ impl AgendaView {
 
         let this = Rc::new(Self {
             widget,
+            headings: listhead::install(&list),
             list,
             state,
             rows: Default::default(),
             syncing: Default::default(),
+            built: Default::default(),
         });
 
         let weak = Rc::downgrade(&this);
@@ -96,8 +101,40 @@ impl AgendaView {
         this
     }
 
+    /// Rebuild the rows if the occurrences may have changed, otherwise just
+    /// show the selection (rebuilding would lose keyboard focus).
     pub fn refresh(&self) {
+        let key = {
+            let s = self.state.borrow();
+            (s.generation(), s.visible_days()[0], s.today())
+        };
+        if self.built.get() != Some(key) {
+            let had_focus = self.list.focus_child().is_some();
+            self.rebuild();
+            self.built.set(Some(key));
+            if had_focus {
+                self.focus();
+            }
+            return;
+        }
+        let index = {
+            let s = self.state.borrow();
+            self.rows
+                .borrow()
+                .iter()
+                .position(|r| r.as_ref().is_some_and(|k| s.selected.as_ref() == Some(k)))
+        };
         self.syncing.set(true);
+        match index.and_then(|i| self.list.row_at_index(i as i32)) {
+            Some(row) => self.list.select_row(Some(&row)),
+            None => self.list.unselect_all(),
+        }
+        self.syncing.set(false);
+    }
+
+    fn rebuild(&self) {
+        self.syncing.set(true);
+        self.headings.borrow_mut().clear();
         while let Some(row) = self.list.row_at_index(0) {
             self.list.remove(&row);
         }
@@ -109,7 +146,7 @@ impl AgendaView {
         let mut rows = Vec::new();
         let mut selected_row = None;
         for day in &days {
-            let on_day = occ
+            let mut on_day = occ
                 .iter()
                 .filter(|o| {
                     // multi-day occurrences show on their first visible day
@@ -117,6 +154,8 @@ impl AgendaView {
                     first == *day
                 })
                 .collect::<Vec<_>>();
+            // all-day items (and tasks carried over) first, then by time
+            on_day.sort_by_key(|o| (!layout::is_all_day_row(o), o.start.to_utc(state.local)));
             if on_day.is_empty() {
                 continue;
             }
@@ -127,24 +166,14 @@ impl AgendaView {
             } else {
                 day.format("%A %-d %B").to_string()
             };
-            let header = gtk::ListBoxRow::builder()
-                .activatable(false)
-                .selectable(false)
-                .child(
-                    &gtk::Label::builder()
-                        .label(&title)
-                        .css_classes(["heading"])
-                        .xalign(0.0)
-                        .margin_top(12)
-                        .margin_bottom(4)
-                        .build(),
-                )
-                .build();
-            self.list.append(&header);
-            rows.push(None);
-
+            // the heading sits on the day's first row, not a row of its own,
+            // so keyboard navigation goes straight through
+            let mut heading = Some(listhead::label(&title));
             for o in on_day {
                 let row = self.row(o, &state);
+                self.headings
+                    .borrow_mut()
+                    .push(heading.take().map(|l| l.upcast()));
                 if state.selected.as_ref().is_some_and(|k| k.matches(o)) {
                     selected_row = Some(row.clone());
                 }
@@ -203,11 +232,11 @@ impl AgendaView {
                 .css_classes(["numeric", "dim-label"])
                 .build(),
         );
-        b.append(&format::color_dot(state.color(&o.calendar), 10));
+        b.append(&format::color_dot(state.display_color(o), 10));
 
         let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
         let title = match o.kind {
-            Kind::Todo => format!("{} {}", format::todo_mark(o), o.summary),
+            Kind::Todo => format::title(o, state.local),
             _ => o.summary.clone(),
         };
         let title = gtk::Label::builder()
@@ -215,7 +244,7 @@ impl AgendaView {
             .xalign(0.0)
             .ellipsize(gtk::pango::EllipsizeMode::End)
             .build();
-        if format::is_cancelled(o) {
+        if format::is_inactive(o) {
             title.add_css_class("dim-label");
         }
         text.append(&title);
@@ -223,14 +252,17 @@ impl AgendaView {
         if let Some(loc) = o.location.as_deref().filter(|l| !l.is_empty()) {
             sub = format!("{sub} · {loc}");
         }
-        text.append(
-            &gtk::Label::builder()
-                .label(&sub)
-                .xalign(0.0)
-                .ellipsize(gtk::pango::EllipsizeMode::End)
-                .css_classes(["caption", "dim-label"])
-                .build(),
-        );
+        let overdue = format::is_overdue(o, state.local);
+        if overdue && let Some(due) = o.due {
+            sub = format!("overdue, was due {}", format::day(due.date(state.local)));
+        }
+        let sub = gtk::Label::builder()
+            .label(&sub)
+            .xalign(0.0)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .css_classes(["caption", if overdue { "error" } else { "dim-label" }])
+            .build();
+        text.append(&sub);
         b.append(&text);
         gtk::ListBoxRow::builder().child(&b).build()
     }
