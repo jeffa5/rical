@@ -1,0 +1,732 @@
+//! The main window: sidebar of calendars, header bar with navigation, and
+//! the stack of views. Owns keyboard handling and the vdir file watcher.
+
+use std::{
+    cell::{Cell, RefCell},
+    collections::BTreeSet,
+    path::PathBuf,
+    rc::{Rc, Weak},
+    time::Duration,
+};
+
+use adw::prelude::*;
+use chrono::{Datelike, Days, Utc};
+use gtk::{gdk, gio, glib};
+use log::{info, warn};
+
+use crate::{
+    agenda::AgendaView,
+    format,
+    grid::TimeGrid,
+    layout::{self, ViewKind},
+    month::MonthView,
+    shortcuts,
+    state::SharedState,
+};
+
+pub struct Window {
+    pub window: adw::ApplicationWindow,
+    state: SharedState,
+    title: adw::WindowTitle,
+    split: adw::OverlaySplitView,
+    views: gtk::Stack,
+    toggle: adw::ToggleGroup,
+    mini: gtk::Calendar,
+    calendar_list: gtk::ListBox,
+    grid: Rc<TimeGrid>,
+    month: Rc<MonthView>,
+    agenda: Rc<AgendaView>,
+    syncing: Cell<bool>,
+    last_view: Cell<Option<ViewKind>>,
+    monitors: RefCell<Vec<gio::FileMonitor>>,
+    pending: RefCell<BTreeSet<PathBuf>>,
+    reload_all_pending: Cell<bool>,
+    debounce: RefCell<Option<glib::SourceId>>,
+}
+
+impl Window {
+    pub fn new(app: &adw::Application, state: SharedState) -> Rc<Self> {
+        let this = Rc::new_cyclic(|weak: &Weak<Self>| {
+            let on_change: Rc<dyn Fn()> = {
+                let weak = weak.clone();
+                Rc::new(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.refresh();
+                    }
+                })
+            };
+            Self::build(app, state, on_change)
+        });
+        this.setup_signals();
+        this.setup_actions(app);
+        this.setup_keys();
+        this.watch();
+        this.rebuild_calendar_list();
+        this.refresh();
+
+        // keep the now line current
+        let weak = Rc::downgrade(&this);
+        glib::timeout_add_seconds_local(30, move || match weak.upgrade() {
+            Some(w) => {
+                w.grid.grid.queue_draw();
+                glib::ControlFlow::Continue
+            }
+            None => glib::ControlFlow::Break,
+        });
+        this
+    }
+
+    fn build(app: &adw::Application, state: SharedState, on_change: Rc<dyn Fn()>) -> Self {
+        let grid = TimeGrid::new(state.clone(), on_change.clone());
+        let month = MonthView::new(state.clone(), on_change.clone());
+        let agenda = AgendaView::new(state.clone(), on_change);
+
+        let views = gtk::Stack::builder()
+            .transition_type(gtk::StackTransitionType::Crossfade)
+            .transition_duration(100)
+            .build();
+        views.add_named(&grid.widget, Some("grid"));
+        views.add_named(&month.area, Some("month"));
+        views.add_named(&agenda.widget, Some("agenda"));
+
+        let title = adw::WindowTitle::new("", "");
+
+        let toggle = adw::ToggleGroup::builder().css_classes(["round"]).build();
+        for (view, label, key) in [
+            (ViewKind::Day, "Day", "d"),
+            (ViewKind::Week, "Week", "w"),
+            (ViewKind::Month, "Month", "m"),
+            (ViewKind::Agenda, "Agenda", "a"),
+        ] {
+            toggle.add(
+                adw::Toggle::builder()
+                    .name(view.name())
+                    .label(label)
+                    .tooltip(format!("{label} view ({key})"))
+                    .build(),
+            );
+        }
+
+        let sidebar_button = gtk::ToggleButton::builder()
+            .icon_name("sidebar-show-symbolic")
+            .tooltip_text("Toggle sidebar (F9)")
+            .action_name("win.toggle-sidebar")
+            .build();
+        let today = gtk::Button::builder()
+            .label("Today")
+            .tooltip_text("Go to today (t)")
+            .action_name("win.today")
+            .build();
+        let prev = gtk::Button::builder()
+            .icon_name("go-previous-symbolic")
+            .tooltip_text("Previous (p)")
+            .action_name("win.prev")
+            .build();
+        let next = gtk::Button::builder()
+            .icon_name("go-next-symbolic")
+            .tooltip_text("Next (n)")
+            .action_name("win.next")
+            .build();
+        let nav = gtk::Box::builder().css_classes(["linked"]).build();
+        nav.append(&prev);
+        nav.append(&next);
+
+        let menu = gio::Menu::new();
+        menu.append(Some("_Reload"), Some("win.reload"));
+        menu.append(Some("_Keyboard Shortcuts"), Some("win.shortcuts"));
+        menu.append(Some("_Quit"), Some("app.quit"));
+        let menu_button = gtk::MenuButton::builder()
+            .icon_name("open-menu-symbolic")
+            .menu_model(&menu)
+            .tooltip_text("Main menu")
+            .build();
+
+        let header = adw::HeaderBar::builder().title_widget(&title).build();
+        header.pack_start(&sidebar_button);
+        header.pack_start(&today);
+        header.pack_start(&nav);
+        header.pack_end(&menu_button);
+        header.pack_end(&toggle);
+
+        let content = adw::ToolbarView::new();
+        content.add_top_bar(&header);
+        content.set_content(Some(&views));
+
+        let mini = gtk::Calendar::builder()
+            .show_week_numbers(true)
+            .margin_start(6)
+            .margin_end(6)
+            .build();
+        let calendar_list = gtk::ListBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .css_classes(["navigation-sidebar"])
+            .build();
+        calendar_list.update_property(&[gtk::accessible::Property::Label("Calendars")]);
+        let sidebar_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        sidebar_box.append(&mini);
+        sidebar_box.append(
+            &gtk::Label::builder()
+                .label("Calendars")
+                .css_classes(["heading"])
+                .xalign(0.0)
+                .margin_start(12)
+                .margin_top(6)
+                .build(),
+        );
+        sidebar_box.append(&calendar_list);
+        let sidebar_scroll = gtk::ScrolledWindow::builder()
+            .child(&sidebar_box)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vexpand(true)
+            .build();
+        let sidebar = adw::ToolbarView::new();
+        sidebar.add_top_bar(
+            &adw::HeaderBar::builder()
+                .title_widget(&adw::WindowTitle::new("rical", ""))
+                .show_end_title_buttons(false)
+                .build(),
+        );
+        sidebar.set_content(Some(&sidebar_scroll));
+
+        let split = adw::OverlaySplitView::builder()
+            .sidebar(&sidebar)
+            .content(&content)
+            .min_sidebar_width(250.0)
+            .max_sidebar_width(300.0)
+            .build();
+        split
+            .bind_property("show-sidebar", &sidebar_button, "active")
+            .bidirectional()
+            .sync_create()
+            .build();
+
+        let window = adw::ApplicationWindow::builder()
+            .application(app)
+            .title("rical")
+            .default_width(1280)
+            .default_height(860)
+            .content(&split)
+            .build();
+
+        // collapse the sidebar on narrow windows
+        let breakpoint = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
+            adw::BreakpointConditionLengthType::MaxWidth,
+            800.0,
+            adw::LengthUnit::Sp,
+        ));
+        breakpoint.add_setter(&split, "collapsed", Some(&true.to_value()));
+        window.add_breakpoint(breakpoint);
+
+        Self {
+            window,
+            state,
+            title,
+            split,
+            views,
+            toggle,
+            mini,
+            calendar_list,
+            grid,
+            month,
+            agenda,
+            syncing: Cell::new(false),
+            last_view: Cell::new(None),
+            monitors: Default::default(),
+            pending: Default::default(),
+            reload_all_pending: Cell::new(false),
+            debounce: Default::default(),
+        }
+    }
+
+    fn setup_signals(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        self.toggle.connect_active_name_notify(move |t| {
+            let Some(w) = weak.upgrade() else { return };
+            if w.syncing.get() {
+                return;
+            }
+            if let Some(view) = t.active_name().and_then(|n| ViewKind::from_name(&n)) {
+                w.set_view(view);
+            }
+        });
+
+        let weak = Rc::downgrade(self);
+        self.mini.connect_day_selected(move |cal| {
+            let Some(w) = weak.upgrade() else { return };
+            if w.syncing.get() {
+                return;
+            }
+            let d = cal.date();
+            if let Some(date) =
+                chrono::NaiveDate::from_ymd_opt(d.year(), d.month() as u32, d.day_of_month() as u32)
+            {
+                w.state.borrow_mut().date = date;
+                w.state.borrow_mut().selected = None;
+                w.refresh();
+            }
+        });
+    }
+
+    fn add_action(self: &Rc<Self>, name: &str, f: impl Fn(&Rc<Self>) + 'static) {
+        let action = gio::SimpleAction::new(name, None);
+        let weak = Rc::downgrade(self);
+        action.connect_activate(move |_, _| {
+            if let Some(w) = weak.upgrade() {
+                f(&w);
+            }
+        });
+        self.window.add_action(&action);
+    }
+
+    fn setup_actions(self: &Rc<Self>, app: &adw::Application) {
+        self.add_action("today", |w| w.today());
+        self.add_action("next", |w| w.step(true));
+        self.add_action("prev", |w| w.step(false));
+        self.add_action("reload", |w| w.reload_all());
+        self.add_action("toggle-sidebar", |w| {
+            w.split.set_show_sidebar(!w.split.shows_sidebar())
+        });
+        self.add_action("goto", |w| w.goto());
+        self.add_action("shortcuts", |w| {
+            shortcuts::dialog().present(Some(&w.window))
+        });
+        self.add_action("details", |w| w.show_details());
+
+        let view = gio::SimpleAction::new("view", Some(glib::VariantTy::STRING));
+        let weak = Rc::downgrade(self);
+        view.connect_activate(move |_, param| {
+            let Some(w) = weak.upgrade() else { return };
+            if let Some(v) = param.and_then(|p| p.str()).and_then(ViewKind::from_name) {
+                w.set_view(v);
+            }
+        });
+        self.window.add_action(&view);
+
+        let toggle_cal = gio::SimpleAction::new("toggle-calendar", Some(glib::VariantTy::INT32));
+        let weak = Rc::downgrade(self);
+        toggle_cal.connect_activate(move |_, param| {
+            let Some(w) = weak.upgrade() else { return };
+            if let Some(n) = param.and_then(|p| p.get::<i32>()) {
+                w.toggle_calendar(n as usize);
+            }
+        });
+        self.window.add_action(&toggle_cal);
+
+        app.set_accels_for_action("win.reload", &["<Control>r", "F5"]);
+        app.set_accels_for_action("win.toggle-sidebar", &["F9"]);
+        app.set_accels_for_action("win.shortcuts", &["<Control>question"]);
+        app.set_accels_for_action("win.goto", &["<Control>g"]);
+        for (i, view) in ViewKind::ALL.iter().enumerate() {
+            app.set_accels_for_action(
+                &format!("win.view::{}", view.name()),
+                &[&format!("<Control>{}", i + 1)],
+            );
+        }
+        for n in 1..=9 {
+            app.set_accels_for_action(
+                &format!("win.toggle-calendar({n})"),
+                &[&format!("<Alt>{n}")],
+            );
+        }
+    }
+
+    /// Single keys work anywhere except in text entries. Arrows, Enter and
+    /// Escape act on the calendar unless focus is on another control.
+    fn setup_keys(self: &Rc<Self>) {
+        let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = Rc::downgrade(self);
+        keys.connect_key_pressed(move |_, key, _, mods| match weak.upgrade() {
+            Some(w) => w.handle_key(key, mods),
+            None => glib::Propagation::Proceed,
+        });
+        self.window.add_controller(keys);
+    }
+
+    fn handle_key(self: &Rc<Self>, key: gdk::Key, mods: gdk::ModifierType) -> glib::Propagation {
+        use gdk::Key;
+        use glib::Propagation::{Proceed, Stop};
+
+        let focus = gtk::prelude::GtkWindowExt::focus(&self.window);
+        if focus
+            .as_ref()
+            .is_some_and(|f| f.is::<gtk::Text>() || f.is::<gtk::Editable>())
+        {
+            return Proceed;
+        }
+        if mods.intersects(
+            gdk::ModifierType::CONTROL_MASK
+                | gdk::ModifierType::ALT_MASK
+                | gdk::ModifierType::SUPER_MASK,
+        ) {
+            return Proceed;
+        }
+        let in_views = focus.as_ref().is_none_or(|f| {
+            f.is_ancestor(&self.views) || f == self.views.upcast_ref::<gtk::Widget>()
+        });
+        let view = self.state.borrow().view;
+
+        // single-character commands
+        match key {
+            Key::t => self.today(),
+            Key::n => self.step(true),
+            Key::p => self.step(false),
+            Key::d => self.set_view(ViewKind::Day),
+            Key::w => self.set_view(ViewKind::Week),
+            Key::m => self.set_view(ViewKind::Month),
+            Key::a => self.set_view(ViewKind::Agenda),
+            Key::g => self.goto(),
+            Key::question => shortcuts::dialog().present(Some(&self.window)),
+            Key::j => self.select_relative(true),
+            Key::k => self.select_relative(false),
+            Key::h => self.move_day(-1),
+            Key::l => self.move_day(1),
+            _ => {
+                if !in_views {
+                    return Proceed;
+                }
+                match key {
+                    Key::Page_Down => self.step(true),
+                    Key::Page_Up => self.step(false),
+                    Key::Escape => {
+                        if self.state.borrow().selected.is_none() {
+                            return Proceed;
+                        }
+                        self.state.borrow_mut().selected = None;
+                        self.refresh();
+                    }
+                    // the agenda list navigates itself
+                    _ if view == ViewKind::Agenda => return Proceed,
+                    Key::Down if view == ViewKind::Month => self.move_day(7),
+                    Key::Up if view == ViewKind::Month => self.move_day(-7),
+                    Key::Down => self.select_relative(true),
+                    Key::Up => self.select_relative(false),
+                    Key::Left => self.move_day(-1),
+                    Key::Right => self.move_day(1),
+                    Key::Return | Key::KP_Enter | Key::space => {
+                        if view == ViewKind::Month && self.state.borrow().selected.is_none() {
+                            self.set_view(ViewKind::Day);
+                        } else {
+                            self.show_details();
+                        }
+                    }
+                    _ => return Proceed,
+                }
+            }
+        }
+        Stop
+    }
+
+    fn today(&self) {
+        {
+            let mut s = self.state.borrow_mut();
+            s.date = Utc::now().with_timezone(&s.local).date_naive();
+            s.selected = None;
+        }
+        self.refresh();
+        if matches!(self.state.borrow().view, ViewKind::Day | ViewKind::Week) {
+            self.grid.scroll_to_now_or_morning();
+        }
+    }
+
+    fn step(&self, forward: bool) {
+        {
+            let mut s = self.state.borrow_mut();
+            s.date = layout::step(s.view, s.date, forward);
+            s.selected = None;
+        }
+        self.refresh();
+    }
+
+    fn set_view(&self, view: ViewKind) {
+        self.state.borrow_mut().view = view;
+        self.refresh();
+        self.focus_view();
+    }
+
+    fn move_day(&self, days: i64) {
+        {
+            let mut s = self.state.borrow_mut();
+            let d = if days >= 0 {
+                s.date + Days::new(days as u64)
+            } else {
+                s.date - Days::new(days.unsigned_abs())
+            };
+            s.date = d;
+            if s.view == ViewKind::Month {
+                s.selected = None;
+            } else {
+                s.select_first_on_date();
+            }
+        }
+        self.refresh();
+        self.grid.reveal_selected();
+    }
+
+    fn select_relative(&self, forward: bool) {
+        self.state.borrow_mut().select_relative(forward);
+        self.refresh();
+        self.grid.reveal_selected();
+    }
+
+    fn show_details(&self) {
+        match self.state.borrow().view {
+            ViewKind::Day | ViewKind::Week => self.grid.show_selected_details(),
+            ViewKind::Month => self.month.show_selected_details(),
+            ViewKind::Agenda => self.agenda.show_selected_details(),
+        }
+    }
+
+    fn goto(&self) {
+        self.split.set_show_sidebar(true);
+        self.mini.grab_focus();
+    }
+
+    fn focus_view(&self) {
+        match self.state.borrow().view {
+            ViewKind::Day | ViewKind::Week => self.grid.focus(),
+            ViewKind::Month => self.month.focus(),
+            ViewKind::Agenda => self.agenda.focus(),
+        }
+    }
+
+    fn toggle_calendar(&self, n: usize) {
+        {
+            let mut s = self.state.borrow_mut();
+            let Some(id) = s
+                .vdir
+                .calendars
+                .get(n.wrapping_sub(1))
+                .map(|c| c.id.clone())
+            else {
+                return;
+            };
+            if !s.hidden.remove(&id) {
+                s.hidden.insert(id);
+            }
+            s.invalidate();
+        }
+        self.sync_calendar_list();
+        self.refresh();
+    }
+
+    fn rebuild_calendar_list(self: &Rc<Self>) {
+        while let Some(row) = self.calendar_list.row_at_index(0) {
+            self.calendar_list.remove(&row);
+        }
+        let state = self.state.borrow();
+        for (i, cal) in state.vdir.calendars.iter().enumerate() {
+            let check = gtk::CheckButton::builder()
+                .active(!state.hidden.contains(&cal.id))
+                .valign(gtk::Align::Center)
+                .build();
+            let id = cal.id.clone();
+            let weak = Rc::downgrade(self);
+            check.connect_toggled(move |c| {
+                let Some(w) = weak.upgrade() else { return };
+                if w.syncing.get() {
+                    return;
+                }
+                {
+                    let mut s = w.state.borrow_mut();
+                    if c.is_active() {
+                        s.hidden.remove(&id);
+                    } else {
+                        s.hidden.insert(id.clone());
+                    }
+                    s.invalidate();
+                }
+                w.refresh();
+            });
+            let row = adw::ActionRow::builder()
+                .title(&cal.name)
+                .activatable_widget(&check)
+                .build();
+            row.add_prefix(&format::color_dot(state.color(&cal.id), 12));
+            if i < 9 {
+                row.add_suffix(
+                    &gtk::Label::builder()
+                        .label(format!("Alt+{}", i + 1))
+                        .css_classes(["dim-label", "caption"])
+                        .build(),
+                );
+            }
+            row.add_suffix(&check);
+            self.calendar_list.append(&row);
+        }
+    }
+
+    fn sync_calendar_list(&self) {
+        self.syncing.set(true);
+        let state = self.state.borrow();
+        for (i, cal) in state.vdir.calendars.iter().enumerate() {
+            let check = self
+                .calendar_list
+                .row_at_index(i as i32)
+                .and_then(|r| r.downcast::<adw::ActionRow>().ok())
+                .and_then(|r| r.activatable_widget())
+                .and_then(|w| w.downcast::<gtk::CheckButton>().ok());
+            if let Some(check) = check {
+                check.set_active(!state.hidden.contains(&cal.id));
+            }
+        }
+        self.syncing.set(false);
+    }
+
+    /// Bring every part of the window in line with the state.
+    pub fn refresh(&self) {
+        self.syncing.set(true);
+        let state = self.state.borrow();
+        let view = state.view;
+        let date = state.date;
+
+        let (title, subtitle) = format::view_title(view, date);
+        self.title.set_title(&title);
+        self.title.set_subtitle(&subtitle);
+        self.toggle.set_active_name(Some(view.name()));
+        if let Ok(dt) = glib::DateTime::from_local(
+            date.year(),
+            date.month() as i32,
+            date.day() as i32,
+            12,
+            0,
+            0.0,
+        ) {
+            self.mini.select_day(&dt);
+        }
+        drop(state);
+
+        match view {
+            ViewKind::Day | ViewKind::Week => {
+                self.views.set_visible_child_name("grid");
+                self.grid.refresh();
+            }
+            ViewKind::Month => {
+                self.views.set_visible_child_name("month");
+                self.month.refresh();
+            }
+            ViewKind::Agenda => {
+                self.views.set_visible_child_name("agenda");
+                self.agenda.refresh();
+            }
+        }
+
+        let first_grid = matches!(view, ViewKind::Day | ViewKind::Week)
+            && !matches!(self.last_view.get(), Some(ViewKind::Day | ViewKind::Week));
+        self.last_view.set(Some(view));
+        if first_grid {
+            // after allocation, so the scroller knows its size
+            let grid = self.grid.clone();
+            glib::timeout_add_local_once(Duration::from_millis(50), move || {
+                grid.scroll_to_now_or_morning();
+            });
+        }
+        self.syncing.set(false);
+    }
+
+    pub fn present(&self) {
+        self.window.present();
+        self.focus_view();
+    }
+
+    fn reload_all(self: &Rc<Self>) {
+        let result = self.state.borrow_mut().vdir.reload_all();
+        if let Err(e) = result {
+            warn!("reload failed: {e:#}");
+        }
+        self.state.borrow_mut().invalidate();
+        self.watch();
+        self.rebuild_calendar_list();
+        self.refresh();
+    }
+
+    /// Watch the vdir root and each calendar folder, reloading changed items
+    /// after a short debounce (vdirsyncer writes many files at once).
+    fn watch(self: &Rc<Self>) {
+        let mut monitors = Vec::new();
+        let state = self.state.borrow();
+        let root = state.vdir.root.clone();
+        let dirs = std::iter::once((root.clone(), true)).chain(
+            state
+                .vdir
+                .calendars
+                .iter()
+                .filter(|c| c.path != root)
+                .map(|c| (c.path.clone(), false)),
+        );
+        for (dir, is_root) in dirs {
+            let file = gio::File::for_path(&dir);
+            let monitor = match file.monitor_directory(
+                gio::FileMonitorFlags::WATCH_MOVES,
+                None::<&gio::Cancellable>,
+            ) {
+                Ok(m) => m,
+                Err(e) => {
+                    warn!("cannot watch {dir:?}: {e}");
+                    continue;
+                }
+            };
+            let weak = Rc::downgrade(self);
+            monitor.connect_changed(move |_, file, other, event| {
+                let Some(w) = weak.upgrade() else { return };
+                if matches!(
+                    event,
+                    gio::FileMonitorEvent::ChangesDoneHint
+                        | gio::FileMonitorEvent::AttributeChanged
+                ) {
+                    return;
+                }
+                let paths = [Some(file), other]
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|f| f.path());
+                for path in paths {
+                    let is_item = path.extension().is_some_and(|e| e == "ics");
+                    if is_root || !is_item {
+                        // a calendar was added or removed, or its metadata changed
+                        w.reload_all_pending.set(true);
+                    } else {
+                        w.pending.borrow_mut().insert(path);
+                    }
+                }
+                w.schedule_reload();
+            });
+            monitors.push(monitor);
+        }
+        drop(state);
+        *self.monitors.borrow_mut() = monitors;
+    }
+
+    fn schedule_reload(self: &Rc<Self>) {
+        if let Some(id) = self.debounce.borrow_mut().take() {
+            id.remove();
+        }
+        let weak = Rc::downgrade(self);
+        let id = glib::timeout_add_local_once(Duration::from_millis(300), move || {
+            let Some(w) = weak.upgrade() else { return };
+            w.debounce.borrow_mut().take();
+            if w.reload_all_pending.take() {
+                info!("reloading vdir");
+                w.pending.borrow_mut().clear();
+                w.reload_all();
+                return;
+            }
+            let paths = std::mem::take(&mut *w.pending.borrow_mut());
+            let mut changed = false;
+            {
+                let mut s = w.state.borrow_mut();
+                for path in &paths {
+                    changed |= s.vdir.reload(path);
+                }
+                if changed {
+                    info!("reloaded {} item(s)", paths.len());
+                    s.invalidate();
+                }
+            }
+            if changed {
+                w.refresh();
+            }
+        });
+        *self.debounce.borrow_mut() = Some(id);
+    }
+}

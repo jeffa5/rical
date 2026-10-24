@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/rical-core", "crates/rical"]
+members = ["crates/rical-core", "crates/rical", "crates/rical-gtk"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,7 +10,7 @@ edition = "2024"
 rical-core = { path = "crates/rical-core" }
 anyhow = "1.0.100"
 chrono = "0.4.42"
-clap = { version = "4.5.49", features = ["derive"] }
+clap = { version = "4.5.49", features = ["derive", "env"] }
 comfy-table = "7.2.1"
 env_logger = { version = "0.11.8", features = ["kv"] }
 icalendar = { version = "0.17.5", features = ["serde", "chrono-tz"] }
