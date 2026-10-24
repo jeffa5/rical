@@ -80,7 +80,14 @@ fn show(window: &Rc<Window>, text: &str, problem: Option<&str>) {
         .has_arrow(false)
         .build();
     popover.set_parent(&window.title);
-    popover.connect_closed(|p| {
+    let w = Rc::downgrade(window);
+    popover.connect_closed(move |p| {
+        // back to the calendar, unless a command opened a dialog
+        if let Some(w) = w.upgrade()
+            && w.window.visible_dialog().is_none()
+        {
+            w.focus_view();
+        }
         let p = p.clone();
         glib::idle_add_local_once(move || p.unparent());
     });
