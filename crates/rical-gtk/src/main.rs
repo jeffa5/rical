@@ -9,6 +9,7 @@ use rical_core::{Vdir, when::local_timezone};
 mod agenda;
 mod details;
 mod draw;
+mod editor;
 mod format;
 mod grid;
 mod layout;
@@ -33,6 +34,11 @@ struct Args {
     /// View to open: day, week, month or agenda.
     #[clap(long, default_value = "week")]
     view: String,
+
+    /// Calendar (folder name) for new events; default is the one with the
+    /// most items.
+    #[clap(long, env = "RICAL_CALENDAR")]
+    calendar: Option<String>,
 }
 
 fn main() -> glib::ExitCode {
@@ -60,6 +66,7 @@ fn main() -> glib::ExitCode {
 
     let mut state = state::State::new(vdir, local, date);
     state.view = view;
+    state.last_calendar = args.calendar;
     let state = Rc::new(RefCell::new(state));
 
     let app = adw::Application::builder()

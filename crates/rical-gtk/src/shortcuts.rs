@@ -32,6 +32,24 @@ pub const SECTIONS: &[(&str, &[(&str, &str)])] = &[
         ],
     ),
     (
+        "Editing",
+        &[
+            ("New event", "c <Control>n"),
+            ("Edit event", "e <Control>e"),
+            ("Delete event", "x Delete"),
+            (
+                "Move 15 minutes later / earlier",
+                "<Shift>Down <Shift>Up J K",
+            ),
+            ("Move a day later / earlier", "<Shift>Right <Shift>Left L H"),
+            ("End 15 minutes earlier / later", "bracketleft bracketright"),
+            ("End a day earlier / later", "braceleft braceright"),
+            ("Undo", "u <Control>z"),
+            ("Redo", "<Shift>u <Control><Shift>z"),
+            ("Save in the editor", "<Control>Return"),
+        ],
+    ),
+    (
         "General",
         &[
             ("Show / hide calendar 1–9", "<Alt>1"),

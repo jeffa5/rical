@@ -1,4 +1,5 @@
 pub mod component;
+pub mod doc;
 pub mod event;
 pub mod files;
 pub mod ics;
@@ -10,6 +11,7 @@ pub mod time;
 pub mod todo;
 pub mod vdir;
 pub mod when;
+pub mod write;
 
 pub use component::AnyComponent;
 pub use event::Event;

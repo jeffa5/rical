@@ -1,12 +1,14 @@
 //! The day and week time grid: a header of days, an all-day row, and a
 //! scrollable 24 hour grid with events drawn as blocks sized by duration.
+//! Events can be dragged to move or resize them, and dragging on empty grid
+//! creates one.
 
 use std::{cell::RefCell, rc::Rc};
 
 use adw::prelude::*;
-use chrono::{NaiveDate, Timelike, Utc};
+use chrono::{NaiveDate, TimeDelta, Timelike, Utc};
 use gtk::cairo;
-use rical_core::{Kind, Occurrence};
+use rical_core::{Kind, Occurrence, When};
 
 use crate::{
     details,
@@ -22,8 +24,56 @@ const HEADER_HEIGHT: i32 = 52;
 const LANE_HEIGHT: f64 = 24.0;
 /// Short events are drawn at least this long so their title fits.
 const MIN_EVENT_MINUTES: f64 = 22.0;
+/// Drags snap to this many minutes.
+const SNAP_MINUTES: f64 = 15.0;
 
 type Hits<T> = Rc<RefCell<Vec<Hit<T>>>>;
+
+/// What a finished drag asks for.
+pub enum DragAction {
+    Move {
+        occ: Box<Occurrence>,
+        start: When,
+        end: When,
+    },
+    Create {
+        start: When,
+        end: When,
+    },
+}
+
+enum DragKind {
+    Move {
+        occ: Occurrence,
+        /// Minutes between the event's start and the pointer.
+        grab_min: f64,
+        press_day: NaiveDate,
+    },
+    Resize {
+        occ: Occurrence,
+    },
+    Create {
+        day: NaiveDate,
+        start_min: f64,
+    },
+}
+
+struct Drag {
+    kind: DragKind,
+    /// In the all-day row rather than the grid.
+    all_day: bool,
+    hit_rect: Option<gtk::gdk::Rectangle>,
+    moved: bool,
+    preview: Option<(When, When)>,
+}
+
+fn minute_at(y: f64) -> f64 {
+    y / HOUR_HEIGHT * 60.0
+}
+
+fn snap(minutes: f64) -> f64 {
+    (minutes / SNAP_MINUTES).round() * SNAP_MINUTES
+}
 
 pub struct TimeGrid {
     pub widget: gtk::Box,
@@ -34,10 +84,16 @@ pub struct TimeGrid {
     state: SharedState,
     grid_hits: Hits<OccurrenceKey>,
     all_day_hits: Hits<OccurrenceKey>,
+    drag: RefCell<Option<Drag>>,
+    on_drag: Rc<dyn Fn(DragAction)>,
 }
 
 impl TimeGrid {
-    pub fn new(state: SharedState, on_change: Rc<dyn Fn()>) -> Rc<Self> {
+    pub fn new(
+        state: SharedState,
+        on_change: Rc<dyn Fn()>,
+        on_drag: Rc<dyn Fn(DragAction)>,
+    ) -> Rc<Self> {
         let header = gtk::DrawingArea::builder()
             .content_height(HEADER_HEIGHT)
             .hexpand(true)
@@ -74,9 +130,12 @@ impl TimeGrid {
             state,
             grid_hits: Default::default(),
             all_day_hits: Default::default(),
+            drag: RefCell::new(None),
+            on_drag,
         });
         this.setup_drawing();
         this.setup_clicks(on_change);
+        this.setup_cursor();
         this
     }
 
@@ -118,32 +177,223 @@ impl TimeGrid {
         });
         self.header.add_controller(click);
 
-        for (area, hits) in [
-            (self.grid.clone(), self.grid_hits.clone()),
-            (self.all_day.clone(), self.all_day_hits.clone()),
-        ] {
-            let click = gtk::GestureClick::new();
-            let this = Rc::downgrade(self);
-            let changed = on_change.clone();
-            let target = area.clone();
-            click.connect_pressed(move |_, _, x, y| {
-                let Some(this) = this.upgrade() else { return };
-                this.grid.grab_focus();
-                let hit = hit_at(&hits.borrow(), x, y);
-                {
-                    let mut s = this.state.borrow_mut();
-                    if let Some(day) = this.day_at(x, target.width() as f64) {
-                        s.date = day;
-                    }
-                    s.selected = hit.as_ref().map(|h| h.target.clone());
+        self.setup_drag(
+            &self.grid.clone(),
+            self.grid_hits.clone(),
+            false,
+            on_change.clone(),
+        );
+        self.setup_drag(
+            &self.all_day.clone(),
+            self.all_day_hits.clone(),
+            true,
+            on_change,
+        );
+    }
+
+    /// Press selects (and opens details if released without moving); drag
+    /// moves or resizes an event, or on empty grid creates one.
+    fn setup_drag(
+        self: &Rc<Self>,
+        area: &gtk::DrawingArea,
+        hits: Hits<OccurrenceKey>,
+        all_day: bool,
+        on_change: Rc<dyn Fn()>,
+    ) {
+        let gesture = gtk::GestureDrag::new();
+
+        let this = Rc::downgrade(self);
+        let target = area.clone();
+        let changed = on_change.clone();
+        gesture.connect_drag_begin(move |_, x, y| {
+            let Some(this) = this.upgrade() else { return };
+            this.grid.grab_focus();
+            let hit = hit_at(&hits.borrow(), x, y);
+            let width = target.width() as f64;
+            let day = this.day_at(x, width);
+            let kind = {
+                let mut s = this.state.borrow_mut();
+                if let Some(day) = day {
+                    s.date = day;
                 }
-                changed();
-                if let Some(hit) = hit {
-                    this.show_details_at(&target, hit.rect());
+                s.selected = hit.as_ref().map(|h| h.target.clone());
+                let occ = s.selected_occurrence();
+                match (&hit, occ, day) {
+                    (Some(h), Some(occ), Some(_)) if !all_day && y > h.y + h.h - 6.0 => {
+                        Some(DragKind::Resize { occ })
+                    }
+                    (Some(_), Some(occ), Some(day)) => {
+                        let into_day = (occ.start.to_utc(s.local) - layout::day_start(day, s.local))
+                            .num_minutes() as f64;
+                        Some(DragKind::Move {
+                            occ,
+                            grab_min: minute_at(y) - into_day,
+                            press_day: day,
+                        })
+                    }
+                    (None, _, Some(day)) if !all_day => Some(DragKind::Create {
+                        day,
+                        start_min: snap(minute_at(y) - 7.5),
+                    }),
+                    _ => None,
+                }
+            };
+            *this.drag.borrow_mut() = kind.map(|kind| Drag {
+                kind,
+                all_day,
+                hit_rect: hit.map(|h| h.rect()),
+                moved: false,
+                preview: None,
+            });
+            changed();
+        });
+
+        let this = Rc::downgrade(self);
+        let target = area.clone();
+        gesture.connect_drag_update(move |g, dx, dy| {
+            let Some(this) = this.upgrade() else { return };
+            let Some((sx, sy)) = g.start_point() else {
+                return;
+            };
+            let mut drag = this.drag.borrow_mut();
+            let Some(drag) = drag.as_mut() else { return };
+            if !drag.moved && dx.abs() < 4.0 && dy.abs() < 4.0 {
+                return;
+            }
+            drag.moved = true;
+            let (x, y) = (sx + dx, sy + dy);
+            let state = this.state.borrow();
+            let local = state.local;
+            let days = state.visible_days();
+            let width = target.width() as f64;
+            let day = this
+                .day_at(x.clamp(GUTTER, width - 1.0), width)
+                .unwrap_or(days[0]);
+            let at = |day: NaiveDate, min: f64| {
+                When::Zoned(
+                    (layout::day_start(day, local) + TimeDelta::minutes(min as i64))
+                        .with_timezone(&local),
+                )
+            };
+            drag.preview = match &drag.kind {
+                DragKind::Move { occ, press_day, .. } if all_day => {
+                    let shift = TimeDelta::days((day - *press_day).num_days());
+                    Some((occ.start.add(shift), occ.end.add(shift)))
+                }
+                DragKind::Move { occ, grab_min, .. } => {
+                    let start = at(day, snap(minute_at(y) - grab_min));
+                    Some((start, start.add(occ.duration())))
+                }
+                DragKind::Resize { occ } => {
+                    let day = day.max(occ.start.date(local));
+                    let end = at(day, snap(minute_at(y)));
+                    let min_end = occ.start.add(TimeDelta::minutes(15));
+                    let end = if end.to_utc(local) < min_end.to_utc(local) {
+                        min_end
+                    } else {
+                        end
+                    };
+                    Some((occ.start, end))
+                }
+                DragKind::Create { day, start_min } => {
+                    let here = snap(minute_at(y));
+                    let (lo, hi) = (start_min.min(here), start_min.max(here));
+                    Some((at(*day, lo), at(*day, hi.max(lo + 15.0))))
+                }
+            };
+            drop(state);
+            this.grid.queue_draw();
+            this.all_day.queue_draw();
+        });
+
+        let this = Rc::downgrade(self);
+        let target = area.clone();
+        gesture.connect_drag_end(move |_, _, _| {
+            let Some(this) = this.upgrade() else { return };
+            let Some(drag) = this.drag.borrow_mut().take() else {
+                return;
+            };
+            this.grid.queue_draw();
+            this.all_day.queue_draw();
+            match (drag.moved, drag.preview, drag.kind) {
+                (false, _, DragKind::Move { .. } | DragKind::Resize { .. }) => {
+                    if let Some(rect) = drag.hit_rect {
+                        this.show_details_at(&target, rect);
+                    }
+                }
+                (
+                    true,
+                    Some((start, end)),
+                    DragKind::Move { occ, .. } | DragKind::Resize { occ },
+                ) => {
+                    (this.on_drag)(DragAction::Move {
+                        occ: Box::new(occ),
+                        start,
+                        end,
+                    });
+                }
+                (true, Some((start, end)), DragKind::Create { .. }) => {
+                    (this.on_drag)(DragAction::Create { start, end });
+                }
+                _ => {}
+            }
+        });
+        area.add_controller(gesture);
+    }
+
+    /// Hint what dragging will do: move or, near the bottom edge, resize.
+    fn setup_cursor(self: &Rc<Self>) {
+        let motion = gtk::EventControllerMotion::new();
+        let this = Rc::downgrade(self);
+        motion.connect_motion(move |_, x, y| {
+            let Some(this) = this.upgrade() else { return };
+            let hit = hit_at(&this.grid_hits.borrow(), x, y);
+            let cursor = hit.map(|h| {
+                if y > h.y + h.h - 6.0 {
+                    "ns-resize"
+                } else {
+                    "grab"
                 }
             });
-            area.add_controller(click);
-        }
+            this.grid.set_cursor_from_name(cursor);
+        });
+        self.grid.add_controller(motion);
+    }
+    /// Whether `o` is being moved or resized; the ghost stands in for it.
+    fn is_dragging(&self, o: &Occurrence) -> bool {
+        self.drag.borrow().as_ref().is_some_and(|d| {
+            d.preview.is_some()
+                && matches!(&d.kind, DragKind::Move { occ, .. } | DragKind::Resize { occ }
+                    if OccurrenceKey::of(occ).matches(o))
+        })
+    }
+
+    /// The occurrence being dragged with its previewed times.
+    fn drag_ghost(&self, all_day: bool) -> Option<Occurrence> {
+        let drag = self.drag.borrow();
+        let drag = drag.as_ref().filter(|d| d.all_day == all_day)?;
+        let (start, end) = drag.preview?;
+        let mut ghost = match &drag.kind {
+            DragKind::Move { occ, .. } | DragKind::Resize { occ } => occ.clone(),
+            DragKind::Create { .. } => Occurrence {
+                calendar: self.state.borrow().default_calendar().unwrap_or_default(),
+                path: Default::default(),
+                uid: String::new(),
+                recurrence_id: None,
+                kind: Kind::Event,
+                summary: "New event".into(),
+                location: None,
+                description: None,
+                status: None,
+                start,
+                end,
+                all_day: false,
+                recurring: false,
+            },
+        };
+        ghost.start = start;
+        ghost.end = end;
+        Some(ghost)
     }
 
     fn day_at(&self, x: f64, width: f64) -> Option<NaiveDate> {
@@ -326,6 +576,9 @@ impl TimeGrid {
             let w = (bar.last - bar.first + 1) as f64 * col_w - 4.0;
             let y = 3.0 + bar.lane as f64 * LANE_HEIGHT;
             let h = LANE_HEIGHT - 3.0;
+            if self.is_dragging(o) {
+                continue;
+            }
             let selected = state.selected.as_ref().is_some_and(|k| k.matches(o));
             draw_block(area, cr, &pal, o, &state, x, y, w, h, selected, true);
             hits.push(Hit {
@@ -335,6 +588,26 @@ impl TimeGrid {
                 h,
                 target: OccurrenceKey::of(o),
             });
+        }
+
+        if let Some(ghost) = self.drag_ghost(true) {
+            let ghosts = [ghost];
+            for bar in layout::all_day_bars(&ghosts, &days, state.local) {
+                let x = GUTTER + bar.first as f64 * col_w + 2.0;
+                let w = (bar.last - bar.first + 1) as f64 * col_w - 4.0;
+                draw_ghost(
+                    area,
+                    cr,
+                    &pal,
+                    &ghosts[0],
+                    &state,
+                    x,
+                    3.0,
+                    w,
+                    LANE_HEIGHT - 3.0,
+                    true,
+                );
+            }
         }
     }
 
@@ -404,6 +677,9 @@ impl TimeGrid {
                 let x = x0 + 2.0 + seg.column as f64 * w;
                 let y = seg.start_min / 60.0 * HOUR_HEIGHT + 1.0;
                 let h = (seg.end_min - seg.start_min) / 60.0 * HOUR_HEIGHT - 2.0;
+                if self.is_dragging(o) {
+                    continue;
+                }
                 let selected = state.selected.as_ref().is_some_and(|k| k.matches(o));
                 draw_block(area, cr, &pal, o, &state, x, y, w - 2.0, h, selected, false);
                 hits.push(Hit {
@@ -413,6 +689,29 @@ impl TimeGrid {
                     h,
                     target: OccurrenceKey::of(o),
                 });
+            }
+        }
+
+        if let Some(ghost) = self.drag_ghost(false) {
+            let ghosts = [ghost];
+            for (i, day) in days.iter().enumerate() {
+                for seg in layout::day_segments(&ghosts, *day, state.local, MIN_EVENT_MINUTES) {
+                    let x = GUTTER + i as f64 * col_w + 2.0;
+                    let y = seg.start_min / 60.0 * HOUR_HEIGHT + 1.0;
+                    let h = (seg.end_min - seg.start_min) / 60.0 * HOUR_HEIGHT - 2.0;
+                    draw_ghost(
+                        area,
+                        cr,
+                        &pal,
+                        &ghosts[0],
+                        &state,
+                        x,
+                        y,
+                        col_w - 6.0,
+                        h,
+                        false,
+                    );
+                }
             }
         }
 
@@ -535,4 +834,30 @@ fn draw_block(
         let _ = cr.stroke();
     }
     cr.restore().ok();
+}
+
+/// The previewed position of an event being dragged.
+#[allow(clippy::too_many_arguments)]
+fn draw_ghost(
+    area: &gtk::DrawingArea,
+    cr: &cairo::Context,
+    pal: &Palette,
+    o: &Occurrence,
+    state: &crate::state::State,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    compact: bool,
+) {
+    cr.push_group();
+    draw_block(area, cr, pal, o, state, x, y, w, h, true, compact);
+    let _ = cr.pop_group_to_source();
+    let _ = cr.paint_with_alpha(0.85);
+    pal.fg(cr, 0.9);
+    cr.set_line_width(1.5);
+    cr.set_dash(&[4.0, 3.0], 0.0);
+    draw::rounded_rect(cr, x + 0.75, y + 0.75, w - 1.5, h - 1.5, 5.0);
+    let _ = cr.stroke();
+    cr.set_dash(&[], 0.0);
 }

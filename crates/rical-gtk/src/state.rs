@@ -4,7 +4,7 @@ use std::{cell::RefCell, collections::BTreeSet, ops::Range, rc::Rc};
 
 use chrono::{DateTime, NaiveDate, Utc};
 use chrono_tz::Tz;
-use rical_core::{Calendar, Kind, Occurrence, Rgb, Vdir, When};
+use rical_core::{Calendar, Kind, Occurrence, Rgb, Vdir, When, write::Change};
 
 use crate::layout::{self, ViewKind};
 
@@ -38,6 +38,11 @@ pub struct State {
     /// The focused day; views are positioned around it.
     pub date: NaiveDate,
     pub selected: Option<OccurrenceKey>,
+    /// Calendar new items go in; the last one used.
+    pub last_calendar: Option<String>,
+    /// Each entry is the file changes one action made.
+    pub undo: Vec<Vec<Change>>,
+    pub redo: Vec<Vec<Change>>,
     /// Bumped whenever the data or the hidden set changes.
     generation: u64,
     cache: RefCell<Option<Cache>>,
@@ -94,6 +99,9 @@ impl State {
             view: ViewKind::Week,
             date,
             selected: None,
+            last_calendar: None,
+            undo: Vec::new(),
+            redo: Vec::new(),
             generation: 0,
             cache: RefCell::new(None),
         }
@@ -217,5 +225,46 @@ impl State {
             .iter()
             .find(|o| o.start.date(local) <= date && o.end.date(local) >= date)
             .map(OccurrenceKey::of);
+    }
+}
+
+impl State {
+    /// The calendar for new items: the last used, else the shown calendar
+    /// with the most items (birthday calendars aside), else the first.
+    pub fn default_calendar(&self) -> Option<String> {
+        if let Some(id) = self
+            .last_calendar
+            .as_ref()
+            .filter(|id| self.vdir.calendar(id).is_some())
+        {
+            return Some(id.clone());
+        }
+        let mut counts = std::collections::BTreeMap::<&str, usize>::new();
+        for (cal, _) in self.vdir.components() {
+            *counts.entry(cal.id.as_str()).or_default() += 1;
+        }
+        self.vdir
+            .calendars
+            .iter()
+            .filter(|c| !self.hidden.contains(&c.id) && !c.id.contains("birthday"))
+            .max_by_key(|c| counts.get(c.id.as_str()).copied().unwrap_or(0))
+            .or_else(|| self.vdir.calendars.first())
+            .map(|c| c.id.clone())
+    }
+
+    /// Record changes made by one action so it can be undone.
+    pub fn record(&mut self, changes: Vec<Change>) {
+        self.undo.push(changes);
+        self.redo.clear();
+        self.invalidate();
+    }
+
+    /// Find an occurrence of `uid` starting at `start` among visible ones.
+    pub fn find(&self, uid: &str, start: &When) -> Option<Occurrence> {
+        let local = self.local;
+        self.visible_occurrences()
+            .iter()
+            .find(|o| o.uid == uid && o.start.to_utc(local) == start.to_utc(local))
+            .cloned()
     }
 }

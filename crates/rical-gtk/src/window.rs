@@ -10,14 +10,17 @@ use std::{
 };
 
 use adw::prelude::*;
-use chrono::{Datelike, Days, Utc};
+use chrono::{Datelike, Days, TimeDelta, Utc};
 use gtk::{gdk, gio, glib};
 use log::{info, warn};
 
+#[path = "ops.rs"]
+mod ops;
+
 use crate::{
     agenda::AgendaView,
-    format,
-    grid::TimeGrid,
+    details, format,
+    grid::{DragAction, TimeGrid},
     layout::{self, ViewKind},
     month::MonthView,
     shortcuts,
@@ -42,6 +45,7 @@ pub struct Window {
     pending: RefCell<BTreeSet<PathBuf>>,
     reload_all_pending: Cell<bool>,
     debounce: RefCell<Option<glib::SourceId>>,
+    toasts: adw::ToastOverlay,
 }
 
 impl Window {
@@ -55,7 +59,15 @@ impl Window {
                     }
                 })
             };
-            Self::build(app, state, on_change)
+            let on_drag: Rc<dyn Fn(DragAction)> = {
+                let weak = weak.clone();
+                Rc::new(move |action| {
+                    if let Some(w) = weak.upgrade() {
+                        w.on_drag(action);
+                    }
+                })
+            };
+            Self::build(app, state, on_change, on_drag)
         });
         this.setup_signals();
         this.setup_actions(app);
@@ -76,8 +88,13 @@ impl Window {
         this
     }
 
-    fn build(app: &adw::Application, state: SharedState, on_change: Rc<dyn Fn()>) -> Self {
-        let grid = TimeGrid::new(state.clone(), on_change.clone());
+    fn build(
+        app: &adw::Application,
+        state: SharedState,
+        on_change: Rc<dyn Fn()>,
+        on_drag: Rc<dyn Fn(DragAction)>,
+    ) -> Self {
+        let grid = TimeGrid::new(state.clone(), on_change.clone(), on_drag);
         let month = MonthView::new(state.clone(), on_change.clone());
         let agenda = AgendaView::new(state.clone(), on_change);
 
@@ -145,12 +162,21 @@ impl Window {
         header.pack_start(&sidebar_button);
         header.pack_start(&today);
         header.pack_start(&nav);
+        header.pack_end(
+            &gtk::Button::builder()
+                .icon_name("list-add-symbolic")
+                .tooltip_text("New event (c)")
+                .action_name("win.new")
+                .build(),
+        );
         header.pack_end(&menu_button);
         header.pack_end(&toggle);
 
         let content = adw::ToolbarView::new();
         content.add_top_bar(&header);
-        content.set_content(Some(&views));
+        let toasts = adw::ToastOverlay::new();
+        toasts.set_child(Some(&views));
+        content.set_content(Some(&toasts));
 
         let mini = gtk::Calendar::builder()
             .show_week_numbers(true)
@@ -235,6 +261,7 @@ impl Window {
             pending: Default::default(),
             reload_all_pending: Cell::new(false),
             debounce: Default::default(),
+            toasts,
         }
     }
 
@@ -291,6 +318,11 @@ impl Window {
             shortcuts::dialog().present(Some(&w.window))
         });
         self.add_action("details", |w| w.show_details());
+        self.add_action("new", |w| w.new_item(None));
+        self.add_action("edit", |w| w.edit_selected());
+        self.add_action("delete", |w| w.delete_selected());
+        self.add_action("undo", |w| w.undo());
+        self.add_action("redo", |w| w.redo());
 
         let view = gio::SimpleAction::new("view", Some(glib::VariantTy::STRING));
         let weak = Rc::downgrade(self);
@@ -316,6 +348,10 @@ impl Window {
         app.set_accels_for_action("win.toggle-sidebar", &["F9"]);
         app.set_accels_for_action("win.shortcuts", &["<Control>question"]);
         app.set_accels_for_action("win.goto", &["<Control>g"]);
+        app.set_accels_for_action("win.new", &["<Control>n"]);
+        app.set_accels_for_action("win.edit", &["<Control>e"]);
+        app.set_accels_for_action("win.undo", &["<Control>z"]);
+        app.set_accels_for_action("win.redo", &["<Control><Shift>z", "<Control>y"]);
         for (i, view) in ViewKind::ALL.iter().enumerate() {
             app.set_accels_for_action(
                 &format!("win.view::{}", view.name()),
@@ -347,11 +383,14 @@ impl Window {
         use gdk::Key;
         use glib::Propagation::{Proceed, Stop};
 
+        // dialogs (the editor, shortcuts) handle their own keys
+        if self.window.visible_dialog().is_some() {
+            return Proceed;
+        }
         let focus = gtk::prelude::GtkWindowExt::focus(&self.window);
-        if focus
-            .as_ref()
-            .is_some_and(|f| f.is::<gtk::Text>() || f.is::<gtk::Editable>())
-        {
+        if focus.as_ref().is_some_and(|f| {
+            f.is::<gtk::Text>() || f.is::<gtk::Editable>() || f.is::<gtk::TextView>()
+        }) {
             return Proceed;
         }
         if mods.intersects(
@@ -361,13 +400,42 @@ impl Window {
         ) {
             return Proceed;
         }
+        if key == Key::Escape && details::close() {
+            return Stop;
+        }
+        let shift = mods.contains(gdk::ModifierType::SHIFT_MASK);
         let in_views = focus.as_ref().is_none_or(|f| {
             f.is_ancestor(&self.views) || f == self.views.upcast_ref::<gtk::Widget>()
         });
         let view = self.state.borrow().view;
+        let minutes = TimeDelta::minutes;
 
         // single-character commands
         match key {
+            Key::c => self.new_item(None),
+            Key::e => self.edit_selected(),
+            Key::x | Key::Delete => self.delete_selected(),
+            Key::u => self.undo(),
+            Key::U => self.redo(),
+            Key::bracketleft => self.nudge_selected(minutes(-15), true),
+            Key::bracketright => self.nudge_selected(minutes(15), true),
+            Key::braceleft => self.nudge_selected(TimeDelta::days(-1), true),
+            Key::braceright => self.nudge_selected(TimeDelta::days(1), true),
+            Key::J => self.nudge_selected(minutes(15), false),
+            Key::K => self.nudge_selected(minutes(-15), false),
+            Key::H => self.nudge_selected(TimeDelta::days(-1), false),
+            Key::L => self.nudge_selected(TimeDelta::days(1), false),
+            Key::Down | Key::Up | Key::Left | Key::Right if shift && in_views => {
+                let shift = match (key, view) {
+                    (Key::Down, ViewKind::Month) => TimeDelta::days(7),
+                    (Key::Up, ViewKind::Month) => TimeDelta::days(-7),
+                    (Key::Down, _) => minutes(15),
+                    (Key::Up, _) => minutes(-15),
+                    (Key::Left, _) => TimeDelta::days(-1),
+                    _ => TimeDelta::days(1),
+                };
+                self.nudge_selected(shift, false);
+            }
             Key::t => self.today(),
             Key::n => self.step(true),
             Key::p => self.step(false),
@@ -575,6 +643,7 @@ impl Window {
 
     /// Bring every part of the window in line with the state.
     pub fn refresh(&self) {
+        details::close();
         self.syncing.set(true);
         let state = self.state.borrow();
         let view = state.view;

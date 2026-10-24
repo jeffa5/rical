@@ -1,0 +1,13 @@
+# Dev tool for scripts/screenshot.sh: a virtual pointer for headless sway.
+# Kept out of the main workspace so its dependencies stay separate.
+[package]
+name = "wlpointer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+wayland-client = "0.31"
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }

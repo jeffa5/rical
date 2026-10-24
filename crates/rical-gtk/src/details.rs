@@ -1,5 +1,7 @@
 //! The event details popover.
 
+use std::cell::RefCell;
+
 use adw::prelude::*;
 use gtk::{gdk, glib};
 use rical_core::{Kind, Occurrence};
@@ -83,10 +85,15 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
         content.append(&scroller);
     }
 
+    close();
+    // Not modal: keys keep going to the window, so j/k/e/x still work while
+    // it is open. It closes on the next change or with Escape.
     let popover = gtk::Popover::builder()
         .child(&content)
         .pointing_to(&rect)
         .position(gtk::PositionType::Right)
+        .autohide(false)
+        .can_focus(false)
         .build();
     popover.set_parent(parent.as_ref());
     popover.connect_closed(|p| {
@@ -95,6 +102,22 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
         glib::idle_add_local_once(move || p.unparent());
     });
     popover.popup();
+    OPEN.with(|open| *open.borrow_mut() = Some(popover));
+}
+
+thread_local! {
+    static OPEN: RefCell<Option<gtk::Popover>> = const { RefCell::new(None) };
+}
+
+/// Close the open details popover. Returns whether one was open.
+pub fn close() -> bool {
+    OPEN.with(|open| match open.borrow_mut().take() {
+        Some(p) => {
+            p.popdown();
+            true
+        }
+        None => false,
+    })
 }
 
 fn row(icon: &str, text: &str) -> gtk::Box {

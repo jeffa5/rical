@@ -119,3 +119,101 @@ pub fn color_dot(color: Rgb, size: i32) -> gtk::DrawingArea {
     });
     area
 }
+
+/// Text for a date/time entry: "2025-03-04 09:00", or "2025-03-04" for dates.
+pub fn input(w: &When, local: Tz) -> String {
+    match w {
+        When::Date(d) => d.format("%Y-%m-%d").to_string(),
+        _ => w.to_tz(local).format("%Y-%m-%d %H:%M").to_string(),
+    }
+}
+
+/// Parse what was typed in a start or end field. Accepts "YYYY-MM-DD HH:MM",
+/// "YYYY-MM-DD", "HH:MM" (on `base`'s day) and, for ends, a duration after
+/// `base` such as "+1h30m" or "45m". All-day values are dates.
+pub fn parse_input(text: &str, all_day: bool, base: &When, local: Tz) -> Option<When> {
+    use chrono::{NaiveDateTime, NaiveTime, TimeDelta};
+
+    let text = text.trim();
+    let duration = text.strip_prefix('+').unwrap_or(text);
+    if !duration.is_empty()
+        && duration.ends_with(['m', 'h', 'd', 'w'])
+        && duration.starts_with(|c: char| c.is_ascii_digit())
+    {
+        let mut total = TimeDelta::zero();
+        let mut num = String::new();
+        for c in duration.chars() {
+            match c {
+                '0'..='9' => num.push(c),
+                'm' | 'h' | 'd' | 'w' => {
+                    let n: i64 = num.parse().ok()?;
+                    num.clear();
+                    total += match c {
+                        'm' => TimeDelta::minutes(n),
+                        'h' => TimeDelta::hours(n),
+                        'd' => TimeDelta::days(n),
+                        _ => TimeDelta::weeks(n),
+                    };
+                }
+                ' ' => {}
+                _ => return None,
+            }
+        }
+        return Some(base.add(total));
+    }
+
+    if all_day {
+        let d = NaiveDate::parse_from_str(text, "%Y-%m-%d")
+            .ok()
+            .or_else(|| {
+                NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M")
+                    .ok()
+                    .map(|dt| dt.date())
+            })?;
+        return Some(When::Date(d));
+    }
+    let ndt = NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M")
+        .ok()
+        .or_else(|| {
+            NaiveDate::parse_from_str(text, "%Y-%m-%d")
+                .ok()
+                .map(|d| d.and_time(NaiveTime::from_hms_opt(9, 0, 0).unwrap()))
+        })
+        .or_else(|| {
+            let t = NaiveTime::parse_from_str(text, "%H:%M").ok()?;
+            Some(base.date(local).and_time(t))
+        })?;
+    Some(When::Zoned(rical_core::when::resolve_local(local, ndt)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const LONDON: Tz = Tz::Europe__London;
+
+    #[test]
+    fn inputs() {
+        let base = When::parse("20250304T090000", Some("Europe/London")).unwrap();
+        let p = |s, all_day| parse_input(s, all_day, &base, LONDON).map(|w| input(&w, LONDON));
+        assert_eq!(
+            p("2025-03-05 14:30", false).as_deref(),
+            Some("2025-03-05 14:30")
+        );
+        assert_eq!(p("2025-03-05", false).as_deref(), Some("2025-03-05 09:00"));
+        assert_eq!(p("17:15", false).as_deref(), Some("2025-03-04 17:15"));
+        assert_eq!(p("+1h30m", false).as_deref(), Some("2025-03-04 10:30"));
+        assert_eq!(p("45m", false).as_deref(), Some("2025-03-04 09:45"));
+        assert_eq!(p("2025-03-05", true).as_deref(), Some("2025-03-05"));
+        assert_eq!(p("tomorrow", false), None);
+        assert_eq!(p("", false), None);
+
+        let day = When::parse("20250304", None).unwrap();
+        assert_eq!(
+            parse_input("+2d", true, &day, LONDON)
+                .map(|w| input(&w, LONDON))
+                .as_deref(),
+            Some("2025-03-06")
+        );
+    }
+}
