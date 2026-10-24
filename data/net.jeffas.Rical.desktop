@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=rical
+GenericName=Calendar
+Comment=Calendar and tasks for a vdir of .ics files
+Exec=rical-gtk
+Icon=x-office-calendar
+Terminal=false
+Categories=Office;Calendar;GTK;
+Keywords=calendar;events;tasks;todo;vdir;
+StartupNotify=true
