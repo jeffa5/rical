@@ -30,7 +30,7 @@ fn list_table() {
             " short_id  kind   start                    end                      duration  status        summary                                           attendees",
             " b         todo                                                               NEEDS-ACTION  Write report",
             " aaa       event  2025-03-03 09:00:00 UTC  2025-03-03 09:15:00 UTC  15m       CONFIRMED     Standup",
-            " aab       event  2025-03-04 14:00:00 UTC  2025-03-04 15:30:00 UTC  30m       TENTATIVE     Design review with a long summary that is folded",
+            " aab       event  2025-03-04 14:00:00 UTC  2025-03-04 15:30:00 UTC  1h30m     TENTATIVE     Design review with a long summary that is folded",
             " c         event  2025-03-05 19:00:00 UTC  2025-03-05 21:00:00 UTC  2h        CONFIRMED     Dinner",
         ]
     );

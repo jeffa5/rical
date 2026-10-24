@@ -110,19 +110,37 @@ impl From<AnyComponent> for PrettyProperties {
 fn time_delta_to_string(d: chrono::TimeDelta) -> String {
     let mut s = String::new();
     if d.num_weeks() > 0 {
-        s = format!("{}w", d.num_weeks());
+        s += &format!("{}w", d.num_weeks());
     }
     if d.num_days() % 7 > 0 {
-        s = format!("{}d", d.num_days() % 7);
+        s += &format!("{}d", d.num_days() % 7);
     }
     if d.num_hours() % 24 > 0 {
-        s = format!("{}h", d.num_hours() % 24);
+        s += &format!("{}h", d.num_hours() % 24);
     }
     if d.num_minutes() % 60 > 0 {
-        s = format!("{}m", d.num_minutes() % 60);
+        s += &format!("{}m", d.num_minutes() % 60);
     }
     if d.num_seconds() % 60 > 0 {
-        s = format!("{}s", d.num_seconds() % 60);
+        s += &format!("{}s", d.num_seconds() % 60);
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeDelta;
+
+    use super::time_delta_to_string;
+
+    #[test]
+    fn durations() {
+        assert_eq!(time_delta_to_string(TimeDelta::minutes(15)), "15m");
+        assert_eq!(time_delta_to_string(TimeDelta::minutes(90)), "1h30m");
+        assert_eq!(time_delta_to_string(TimeDelta::days(1)), "1d");
+        assert_eq!(
+            time_delta_to_string(TimeDelta::days(8) + TimeDelta::hours(2)),
+            "1w1d2h"
+        );
+    }
 }
