@@ -96,11 +96,19 @@ impl Window {
         this.rebuild_calendar_list();
         this.refresh();
 
-        // keep the now line current
+        // keep the now line current, and everything else when the day
+        // changes (today's highlight, tasks carried over to today)
         let weak = Rc::downgrade(&this);
+        let mut today = this.state.borrow().today();
         glib::timeout_add_seconds_local(30, move || match weak.upgrade() {
             Some(w) => {
-                w.grid.grid.queue_draw();
+                let now = w.state.borrow().today();
+                if now != today {
+                    today = now;
+                    w.refresh();
+                } else {
+                    w.grid.grid.queue_draw();
+                }
                 glib::ControlFlow::Continue
             }
             None => glib::ControlFlow::Break,

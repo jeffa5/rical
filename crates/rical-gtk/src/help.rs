@@ -45,7 +45,12 @@ fn accelerator(keys: &[Key]) -> Option<String> {
             gdk::Key::from_name(name.to_uppercase())?
         }
         name => {
-            let c = name.chars().next()?;
+            let mut c = name.chars().next()?;
+            // show "T" as Shift+T, as GTK draws plain "t" as "T" too
+            if c.is_ascii_uppercase() {
+                mods |= gdk::ModifierType::SHIFT_MASK;
+                c = c.to_ascii_lowercase();
+            }
             // the plain FFI call: no GTK initialisation needed for this
             unsafe { glib::translate::from_glib(gdk::ffi::gdk_unicode_to_keyval(c as u32)) }
         }
@@ -92,6 +97,9 @@ fn title(action: &Action) -> String {
     }
 }
 
+/// An action with its single-key accelerators and longer key sequences.
+type Group = (Action, Vec<String>, Vec<String>);
+
 pub fn dialog(binds: &Binds, view: ViewKind) -> adw::ShortcutsDialog {
     let dialog = adw::ShortcutsDialog::new();
 
@@ -112,13 +120,33 @@ pub fn dialog(binds: &Binds, view: ViewKind) -> adw::ShortcutsDialog {
         let Some(binds) = binds.sections.get(name) else {
             continue;
         };
-        // group keys by what they do
-        let mut by_action: BTreeMap<String, (Action, Vec<String>, Vec<String>)> = BTreeMap::new();
+        // group keys by what they do; actions differing only in a trailing
+        // number (":calendar toggle 1".."9") become one item
+        let mut by_action: BTreeMap<(usize, String), Group> = BTreeMap::new();
         for (keys, action) in binds {
             let Some(action) = action else { continue };
+            let mut action = action.clone();
+            for line in &mut action.run {
+                if let Some((head, n)) = line.rsplit_once(' ')
+                    && n.parse::<u32>().is_ok()
+                {
+                    *line = format!("{head} N");
+                }
+            }
+            let order = action
+                .run
+                .first()
+                .or(action.prefill.as_ref())
+                .and_then(|l| l.split_whitespace().next())
+                .and_then(|name| {
+                    cmds::SPECS
+                        .iter()
+                        .position(|s| s.names().any(|n| n == name))
+                })
+                .unwrap_or(usize::MAX);
             let entry = by_action
-                .entry(format!("{:?}{:?}", action.run, action.prefill))
-                .or_insert_with(|| (action.clone(), Vec::new(), Vec::new()));
+                .entry((order, format!("{:?}{:?}", action.run, action.prefill)))
+                .or_insert_with(|| (action, Vec::new(), Vec::new()));
             match accelerator(keys) {
                 Some(accel) => entry.1.push(accel),
                 None => entry.2.push(keys_to_string(keys)),
@@ -159,6 +187,7 @@ mod tests {
     fn accelerators() {
         let a = |s| accelerator(&parse_keys(s).unwrap());
         assert_eq!(a("t").as_deref(), Some("t"));
+        assert_eq!(a("T").as_deref(), Some("<Shift>t"));
         assert_eq!(a("<C-z>").as_deref(), Some("<Control>z"));
         assert_eq!(a("<S-Down>").as_deref(), Some("<Shift>Down"));
         assert_eq!(a("]").as_deref(), Some("bracketright"));

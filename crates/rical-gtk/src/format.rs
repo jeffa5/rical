@@ -51,8 +51,13 @@ pub fn time_range(o: &Occurrence, local: Tz) -> String {
     }
 }
 
+/// e.g. "Thu 23 Oct", with the year when it is not this year.
 pub fn day(d: NaiveDate) -> String {
-    d.format("%a %-d %b").to_string()
+    if d.year() == chrono::Utc::now().year() {
+        d.format("%a %-d %b").to_string()
+    } else {
+        d.format("%a %-d %b %Y").to_string()
+    }
 }
 
 pub fn todo_mark(o: &Occurrence) -> &'static str {
