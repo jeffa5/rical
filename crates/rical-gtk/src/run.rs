@@ -3,11 +3,11 @@
 use std::rc::Rc;
 
 use adw::prelude::*;
-use chrono::{NaiveTime, TimeDelta, Utc};
+use chrono::{TimeDelta, Utc};
 use gtk::{gdk, glib};
 use rical_core::{
     Kind, When,
-    when::resolve_local,
+    input::parse_at,
     write::{Draft, Scope},
 };
 
@@ -393,50 +393,10 @@ pub fn key_of(keyval: gdk::Key, mods: gdk::ModifierType) -> Option<Key> {
     })
 }
 
-/// "[date] [HH:MM]": a date alone means all day; a time alone is on the
-/// focused day.
-fn parse_at(
-    text: &str,
-    focused: chrono::NaiveDate,
-    today: chrono::NaiveDate,
-    local: chrono_tz::Tz,
-) -> Option<When> {
-    let mut date = None;
-    let mut time = None;
-    for word in text.split_whitespace() {
-        if let Ok(t) = NaiveTime::parse_from_str(word, "%H:%M") {
-            time = Some(t);
-        } else {
-            date = Some(parse_date(word, today)?);
-        }
-    }
-    match (date, time) {
-        (Some(d), None) => Some(When::Date(d)),
-        (d, Some(t)) => Some(When::Zoned(resolve_local(
-            local,
-            d.unwrap_or(focused).and_time(t),
-        ))),
-        (None, None) => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use chrono::NaiveDate;
 
     use super::*;
-
-    #[test]
-    fn at() {
-        let focused = NaiveDate::from_ymd_opt(2025, 3, 4).unwrap();
-        let today = NaiveDate::from_ymd_opt(2025, 3, 1).unwrap();
-        let tz = chrono_tz::Tz::UTC;
-        let p = |s| parse_at(s, focused, today, tz).map(|w| w.to_string());
-        assert_eq!(p("14:30").as_deref(), Some("2025-03-04 14:30 UTC"));
-        assert_eq!(p("tomorrow 09:00").as_deref(), Some("2025-03-02 09:00 UTC"));
-        assert_eq!(p("fri").as_deref(), Some("2025-03-07"));
-        assert_eq!(p("whenever"), None);
-    }
 
     #[test]
     fn gdk_keys() {

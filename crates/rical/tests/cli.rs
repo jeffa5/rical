@@ -100,3 +100,78 @@ fn agenda_table() {
         ]
     );
 }
+
+#[test]
+fn new_done_delete() {
+    let dir = tempfile::tempdir().unwrap();
+    for cal in ["home", "work"] {
+        std::fs::create_dir(dir.path().join(cal)).unwrap();
+    }
+    let vdir = dir.path().to_str().unwrap();
+    let run = |args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_rical"))
+            .args(args)
+            .env("TZ", "Europe/London")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    };
+
+    let path = run(&[
+        "new",
+        vdir,
+        "--calendar",
+        "work",
+        "--at",
+        "2025-03-04 14:00",
+        "--for",
+        "45m",
+        "Design",
+        "review",
+    ]);
+    let text = std::fs::read_to_string(path.trim()).unwrap();
+    assert!(text.contains("SUMMARY:Design review"));
+    assert!(text.contains("DTSTART;TZID=Europe/London:20250304T140000"));
+    assert!(text.contains("DTEND;TZID=Europe/London:20250304T144500"));
+
+    let task = run(&[
+        "new",
+        vdir,
+        "--calendar",
+        "home",
+        "--todo",
+        "--due",
+        "2025-03-05",
+        "Buy",
+        "milk",
+    ]);
+    let uid = std::path::Path::new(task.trim())
+        .file_stem()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        run(&["done", vdir, "--id", &uid[..8]]).trim(),
+        "done: \"Buy milk\""
+    );
+    assert!(
+        std::fs::read_to_string(task.trim())
+            .unwrap()
+            .contains("STATUS:COMPLETED")
+    );
+    run(&["done", vdir, "--id", &uid[..8], "--undo"]);
+    assert!(
+        std::fs::read_to_string(task.trim())
+            .unwrap()
+            .contains("STATUS:NEEDS-ACTION")
+    );
+
+    run(&["delete", vdir, "--id", &uid[..8]]);
+    assert!(!std::path::Path::new(task.trim()).exists());
+}

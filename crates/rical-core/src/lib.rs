@@ -3,6 +3,7 @@ pub mod doc;
 pub mod event;
 pub mod files;
 pub mod ics;
+pub mod input;
 pub mod occurrence;
 pub mod query;
 pub mod short_id;

@@ -11,6 +11,7 @@ use rical_core::{
 use crate::{agenda::AgendaArgs, format::OutputFormat, show::ShowArgs, stats::StatsArgs};
 
 mod agenda;
+mod edit;
 mod format;
 mod list;
 mod pretty;
@@ -110,6 +111,59 @@ enum Subcommand {
         #[clap(short, long, default_value = "table")]
         output: OutputFormat,
     },
+    /// Add an event (or with --todo, a task) and print its file.
+    New {
+        /// Root of the vdir.
+        vdir: PathBuf,
+
+        /// Calendar: folder name, display name or number. Default: the one
+        /// with the most items.
+        #[clap(long)]
+        calendar: Option<String>,
+
+        /// Start: "[date] [HH:MM]", e.g. "fri 14:00", "2025-03-04" (all
+        /// day). Default: the next full hour.
+        #[clap(long)]
+        at: Option<String>,
+
+        /// Length, e.g. 30m, 1h30m, 2d. Default: 1h, or 1d for all day.
+        #[clap(long = "for")]
+        length: Option<String>,
+
+        /// Add a task instead of an event.
+        #[clap(long)]
+        todo: bool,
+
+        /// Due date for a task, e.g. fri, +1w, 2025-03-04.
+        #[clap(long, requires = "todo")]
+        due: Option<String>,
+
+        #[clap(required = true, num_args = 1..)]
+        title: Vec<String>,
+    },
+    /// Mark a task done (or with --undo, not done).
+    Done {
+        vdir: PathBuf,
+        /// The start of the item's UID (see `list`).
+        #[clap(long)]
+        id: String,
+        #[clap(long)]
+        undo: bool,
+    },
+    /// Delete an item (every occurrence of a repeating one).
+    Delete {
+        vdir: PathBuf,
+        /// The start of the item's UID (see `list`).
+        #[clap(long)]
+        id: String,
+    },
+    /// Edit an item's file in $VISUAL or $EDITOR.
+    Edit {
+        vdir: PathBuf,
+        /// The start of the item's UID (see `list`).
+        #[clap(long)]
+        id: String,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -187,6 +241,28 @@ fn main() -> anyhow::Result<()> {
                 format: output,
             })?;
         }
+        Subcommand::New {
+            vdir,
+            calendar,
+            at,
+            length,
+            todo,
+            due,
+            title,
+        } => {
+            edit::new(&edit::NewArgs {
+                vdir,
+                calendar,
+                at,
+                length,
+                todo,
+                due,
+                title: title.join(" "),
+            })?;
+        }
+        Subcommand::Done { vdir, id, undo } => edit::done(&vdir, &id, undo)?,
+        Subcommand::Delete { vdir, id } => edit::delete(&vdir, &id)?,
+        Subcommand::Edit { vdir, id } => edit::edit(&vdir, &id)?,
     }
 
     Ok(())
