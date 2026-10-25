@@ -322,7 +322,6 @@ impl Registry {
             let mut c = self
                 .active(ctx)
                 .flat_map(|s| s.names().map(move |n| (n, s)))
-                .filter(|(n, _)| n.starts_with(current.as_str()))
                 .map(|(n, s)| Candidate {
                     value: n.to_owned(),
                     help: s.help.to_owned(),
@@ -330,7 +329,8 @@ impl Registry {
                 })
                 .collect::<Vec<_>>();
             c.sort_by(|a, b| a.value.cmp(&b.value));
-            c
+            // best match first, by name (alphabetical while nothing typed)
+            fuzzy(c, &current, |c| c.value.clone())
         } else {
             match self.resolve(&before[0], ctx) {
                 Ok(spec) => complete_args(spec, &before[1..], &current, values),
@@ -368,17 +368,9 @@ fn complete_args(
     };
     let of_kind = |kind: &Kind, help: &str| -> Vec<Candidate> {
         if let Kind::Dynamic(key) = kind {
-            let lower = current.to_lowercase();
-            return values
-                .described(key)
+            // the description counts too: a guest's name, say
+            return fuzzy(values.described(key), current, |(v, d)| format!("{v} {d}"))
                 .into_iter()
-                .filter(|(v, d)| {
-                    starts_with_smart(v, current)
-                        || (!lower.is_empty()
-                            && d.to_lowercase()
-                                .split_whitespace()
-                                .any(|w| w.starts_with(&lower)))
-                })
                 .map(|(v, d)| candidate(v, if d.is_empty() { help } else { &d }))
                 .collect();
         }
@@ -387,8 +379,8 @@ fn complete_args(
             Kind::Dynamic(key) => values.values(key),
             Kind::Text(key) => values.suggestions(key),
         };
-        all.into_iter()
-            .filter(|v| starts_with_smart(v, current))
+        fuzzy(all, current, String::clone)
+            .into_iter()
             .map(|v| candidate(v, help))
             .collect()
     };
@@ -401,11 +393,9 @@ fn complete_args(
         return of_kind(&flag.kind, flag.help);
     }
     if current.starts_with('-') {
-        return spec
-            .flags
-            .iter()
-            .map(|f| format!("--{}", f.name))
-            .filter(|f| f.starts_with(current))
+        let flags = spec.flags.iter().map(|f| format!("--{}", f.name)).collect();
+        return fuzzy(flags, current.trim_start_matches('-'), String::clone)
+            .into_iter()
             .map(|f| candidate(f, ""))
             .collect();
     }
@@ -437,13 +427,31 @@ fn complete_args(
     out
 }
 
-/// Prefix match, case-insensitive unless the prefix has capitals (as aerc).
-fn starts_with_smart(value: &str, prefix: &str) -> bool {
-    if prefix.chars().any(char::is_uppercase) {
-        value.starts_with(prefix)
-    } else {
-        value.to_lowercase().starts_with(&prefix.to_lowercase())
+/// `items` that match `query` fzf-style (its letters in order, anywhere;
+/// case-insensitive unless it has capitals), best first by nucleo's fzf
+/// scoring. An empty query keeps them all, in order.
+fn fuzzy<T>(items: Vec<T>, query: &str, text: impl Fn(&T) -> String) -> Vec<T> {
+    use nucleo_matcher::{
+        Config, Matcher, Utf32Str,
+        pattern::{CaseMatching, Normalization, Pattern},
+    };
+    if query.is_empty() {
+        return items;
     }
+    let pattern = Pattern::parse(query, CaseMatching::Smart, Normalization::Smart);
+    let mut matcher = Matcher::new(Config::DEFAULT);
+    let mut buf = Vec::new();
+    let mut scored = items
+        .into_iter()
+        .filter_map(|item| {
+            let haystack = text(&item);
+            let score = pattern.score(Utf32Str::new(&haystack, &mut buf), &mut matcher)?;
+            Some((score, item))
+        })
+        .collect::<Vec<_>>();
+    // stable: equal scores keep their order
+    scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+    scored.into_iter().map(|(_, item)| item).collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -691,5 +699,35 @@ mod tests {
         // quoted word in progress
         let c = r.complete("toggle \"Work s", ALL, &V);
         assert_eq!(c.start, "toggle ".len());
+    }
+
+    #[test]
+    fn fuzzy_matches_like_fzf() {
+        let zones = vec![
+            "America/Anchorage".to_owned(),
+            "America/Los_Angeles".to_owned(),
+            "Europe/London".to_owned(),
+        ];
+        // anywhere in the name, not only at the start: Los Angeles first,
+        // then Anchorage (A-n…g-e) as fzf would
+        assert_eq!(
+            fuzzy(zones.clone(), "Ange", String::clone),
+            ["America/Los_Angeles", "America/Anchorage"]
+        );
+        // letters in order, with gaps, best first
+        assert_eq!(
+            fuzzy(zones.clone(), "lon", String::clone)[0],
+            "Europe/London"
+        );
+        assert!(
+            fuzzy(zones.clone(), "amla", String::clone).contains(&"America/Los_Angeles".to_owned())
+        );
+        // smart case: capitals must match
+        assert!(
+            fuzzy(zones.clone(), "ange", String::clone).len()
+                > fuzzy(zones.clone(), "ANGE", String::clone).len()
+        );
+        // nothing typed keeps everything, in order
+        assert_eq!(fuzzy(zones.clone(), "", String::clone), zones);
     }
 }
