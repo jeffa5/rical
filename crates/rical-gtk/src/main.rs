@@ -18,6 +18,7 @@ mod grid;
 mod help;
 mod layout;
 mod listhead;
+mod minimonth;
 mod month;
 mod repeat;
 

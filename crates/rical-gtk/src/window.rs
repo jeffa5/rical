@@ -10,7 +10,7 @@ use std::{
 };
 
 use adw::prelude::*;
-use chrono::{Datelike, Days, Utc};
+use chrono::{Days, Utc};
 use gtk::{gio, glib};
 use log::{info, warn};
 
@@ -31,6 +31,7 @@ use crate::{
     details, format,
     grid::{DragAction, TimeGrid},
     layout::{self, ViewKind},
+    minimonth::MiniMonth,
     month::MonthView,
     sidetasks::SideTasks,
     state::SharedState,
@@ -45,7 +46,7 @@ pub struct Window {
     views: gtk::Stack,
     /// View switchers: in the header, and in the bottom bar on narrow windows.
     toggles: [adw::ToggleGroup; 2],
-    mini: gtk::Calendar,
+    mini: Rc<MiniMonth>,
     calendar_list: gtk::ListBox,
     grid: Rc<TimeGrid>,
     month: Rc<MonthView>,
@@ -150,7 +151,7 @@ impl Window {
         let month = MonthView::new(state.clone(), on_change.clone());
         let agenda = AgendaView::new(state.clone(), on_change.clone());
         let side_tasks = SideTasks::new(state.clone(), on_toggle.clone());
-        let tasks = TasksView::new(state.clone(), on_change, on_toggle);
+        let tasks = TasksView::new(state.clone(), on_change.clone(), on_toggle);
 
         let views = gtk::Stack::builder()
             .transition_type(gtk::StackTransitionType::Crossfade)
@@ -238,18 +239,24 @@ impl Window {
         toasts.set_child(Some(&views));
         content.set_content(Some(&toasts));
 
-        let mini = gtk::Calendar::builder()
-            .show_week_numbers(true)
-            .margin_start(6)
-            .margin_end(6)
-            .build();
+        let mini = MiniMonth::new(state.clone(), {
+            let (state, changed) = (state.clone(), on_change.clone());
+            Rc::new(move |day| {
+                {
+                    let mut s = state.borrow_mut();
+                    s.date = day;
+                    s.selected = None;
+                }
+                changed();
+            })
+        });
         let calendar_list = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::None)
             .css_classes(["navigation-sidebar"])
             .build();
         calendar_list.update_property(&[gtk::accessible::Property::Label("Calendars")]);
         let sidebar_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        sidebar_box.append(&mini);
+        sidebar_box.append(&mini.widget);
         sidebar_box.append(
             &gtk::Label::builder()
                 .label("Calendars")
@@ -364,22 +371,6 @@ impl Window {
                 }
             });
         }
-
-        let weak = Rc::downgrade(self);
-        self.mini.connect_day_selected(move |cal| {
-            let Some(w) = weak.upgrade() else { return };
-            if w.syncing.get() {
-                return;
-            }
-            let d = cal.date();
-            if let Some(date) =
-                chrono::NaiveDate::from_ymd_opt(d.year(), d.month() as u32, d.day_of_month() as u32)
-            {
-                w.state.borrow_mut().date = date;
-                w.state.borrow_mut().selected = None;
-                w.refresh();
-            }
-        });
     }
 
     /// Buttons and menus run commands too: `win.run` takes a command line
@@ -594,16 +585,7 @@ impl Window {
         for toggle in &self.toggles {
             toggle.set_active_name(Some(view.toggle_name()));
         }
-        if let Ok(dt) = glib::DateTime::from_local(
-            date.year(),
-            date.month() as i32,
-            date.day() as i32,
-            12,
-            0,
-            0.0,
-        ) {
-            self.mini.select_day(&dt);
-        }
+        self.mini.refresh();
         drop(state);
 
         match view {
