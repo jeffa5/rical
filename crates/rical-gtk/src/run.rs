@@ -237,14 +237,19 @@ impl Window {
             "zones" => {
                 {
                     let mut s = self.state.borrow_mut();
-                    match (p.arg(0).unwrap_or("toggle"), p.arg(1)) {
-                        ("toggle", _) => s.zones_shown = !s.zones_shown,
-                        ("show", _) => s.zones_shown = true,
-                        ("hide", _) => s.zones_shown = false,
-                        ("add", Some(name)) => {
-                            let z = crate::zones::Zone::parse(name)?;
-                            if !s.zones.contains(&z) {
-                                s.zones.push(z);
+                    let text = p.arg(0).unwrap_or("toggle").trim();
+                    let (word, rest) = text.split_once(' ').unwrap_or((text, ""));
+                    let rest = Some(rest.trim()).filter(|r| !r.is_empty());
+                    match (word, rest) {
+                        ("toggle", None) => s.zones_shown = !s.zones_shown,
+                        ("show", None) => s.zones_shown = true,
+                        ("hide", None) => s.zones_shown = false,
+                        ("none" | "clear", None) => s.zones.clear(),
+                        ("add", Some(list)) => {
+                            for z in crate::zones::Zone::parse_list(list)? {
+                                if !s.zones.contains(&z) {
+                                    s.zones.push(z);
+                                }
                             }
                             s.zones_shown = true;
                         }
@@ -258,13 +263,18 @@ impl Window {
                                 return Err(format!("“{name}” is not shown"));
                             }
                         }
-                        (action, _) => return Err(format!("{action} which zone?")),
+                        ("toggle" | "show" | "hide" | "none" | "clear" | "add" | "remove", _) => {
+                            return Err(format!("“{text}”: see :help zones"));
+                        }
+                        // anything else is a list of zones to show instead
+                        _ => {
+                            s.zones = crate::zones::Zone::parse_list(text)?;
+                            s.zones_shown = true;
+                        }
                     }
-                    if s.zones.is_empty() && s.zones_shown {
+                    if s.zones.is_empty() && s.zones_shown && word != "none" && word != "clear" {
                         drop(s);
-                        self.toast(
-                            "No extra zones: set zones = … in the config, or :zones add NAME",
-                        );
+                        self.toast("No extra zones: set zones = … in the config, or :zones NAME");
                     }
                 }
                 self.refresh();

@@ -23,8 +23,8 @@ pub const GUTTER: f64 = 56.0;
 const HEADER_HEIGHT: i32 = 52;
 /// Width of each extra time zone's column of hour labels.
 const ZONE_WIDTH: f64 = 64.0;
-/// Below this width extra time zones are hidden.
-const ZONES_MIN_WIDTH: f64 = 760.0;
+/// Extra time zones show only while the days keep at least this much room.
+const MIN_DAY_WIDTH: f64 = 90.0;
 const LANE_HEIGHT: f64 = 24.0;
 /// The all-day row shows this many lanes before scrolling.
 const MAX_ALL_DAY_LANES: f64 = 4.5;
@@ -453,11 +453,16 @@ impl TimeGrid {
         Some(ghost)
     }
 
-    /// The extra time zones to show at this width: none in narrow windows,
-    /// where they would squeeze the events.
+    /// The extra time zones to show at this width: none if hidden, or if
+    /// their columns would squeeze the days below `MIN_DAY_WIDTH`.
     fn zones(&self, width: f64) -> Vec<crate::zones::Zone> {
         let state = self.state.borrow();
-        if !state.zones_shown || width < ZONES_MIN_WIDTH {
+        if !state.zones_shown || state.zones.is_empty() {
+            return Vec::new();
+        }
+        let days = state.visible_days().len().max(1) as f64;
+        let full = GUTTER + state.zones.len() as f64 * ZONE_WIDTH;
+        if (width - full) / days < MIN_DAY_WIDTH {
             return Vec::new();
         }
         state.zones.clone()
@@ -616,13 +621,20 @@ impl TimeGrid {
                 }
             };
             for (i, z) in zones.iter().enumerate() {
+                // and +1 or −1 when it is already another day there
+                let (time, days_off) = z.at(now, today);
+                let note = match days_off {
+                    0 => z.abbreviation(now),
+                    d if d > 0 => format!("{} +{d}", z.abbreviation(now)),
+                    d => format!("{} −{}", z.abbreviation(now), -d),
+                };
                 column(
                     i as f64 * ZONE_WIDTH,
                     ZONE_WIDTH,
                     [
                         (z.label.clone(), 0.75, true),
-                        (z.at(now, today).0, 0.9, false),
-                        (z.abbreviation(now), 0.5, false),
+                        (time, 0.9, false),
+                        (note, 0.5, false),
                     ],
                 );
             }
@@ -797,22 +809,16 @@ impl TimeGrid {
             for hour in 1..24 {
                 let y = hour as f64 * HOUR_HEIGHT;
                 let at = layout::at_wall(day, hour as f64 * 60.0, state.local);
+                let before = layout::at_wall(day, (hour - 1) as f64 * 60.0, state.local);
                 for (i, z) in zones.iter().enumerate() {
-                    let (time, days_off) = z.at(at, day);
-                    let text = match days_off {
-                        0 => time,
-                        d => format!(
-                            "{time} {}",
-                            if d > 0 {
-                                format!("+{d}")
-                            } else {
-                                format!("−{}", -d)
-                            }
-                        ),
+                    let (text, new_day) = zone_label(at, before, z.tz);
+                    let style = TextStyle {
+                        bold: new_day,
+                        ..TextStyle::SMALL
                     };
-                    let l = draw::layout(area, &text, &TextStyle::SMALL, ZONE_WIDTH - 4.0, 1);
+                    let l = draw::layout(area, &text, &style, ZONE_WIDTH - 4.0, 1);
                     let (lw, lh) = l.pixel_size();
-                    pal.fg(cr, if days_off == 0 { 0.45 } else { 0.3 });
+                    pal.fg(cr, if new_day { 0.75 } else { 0.45 });
                     let right = (i + 1) as f64 * ZONE_WIDTH - 6.0;
                     draw::show_layout(cr, &l, right - lw as f64, y - lh as f64 / 2.0);
                 }
@@ -899,7 +905,8 @@ impl TimeGrid {
             let x = g + i as f64 * col_w;
             cr.set_source_rgba(0.88, 0.11, 0.14, 0.35);
             cr.set_line_width(1.0);
-            cr.move_to(g, y);
+            // across the extra zones too, to read their times off it
+            cr.move_to(if zones.is_empty() { g } else { 0.0 }, y);
             cr.line_to(width, y);
             let _ = cr.stroke();
             cr.set_source_rgb(0.88, 0.11, 0.14);
@@ -1080,8 +1087,62 @@ fn draw_ghost(
     cr.set_dash(&[], 0.0);
 }
 
+/// What an extra zone's column says on the row for `at` (the row above
+/// being `before`): the time there, or in bold the weekday on the row
+/// where its day begins.
+fn zone_label<T: chrono::TimeZone>(
+    at: chrono::DateTime<T>,
+    before: chrono::DateTime<T>,
+    tz: chrono_tz::Tz,
+) -> (String, bool) {
+    let there = at.with_timezone(&tz);
+    if there.date_naive() != before.with_timezone(&tz).date_naive() {
+        (there.format("%a").to_string(), true)
+    } else {
+        (there.format("%H:%M").to_string(), false)
+    }
+}
+
 /// The label of the row `hours` down: the grid is laid out by the clock,
 /// so it is the hour itself, whatever the day.
 fn hour_label(hours: i64) -> String {
     format!("{hours:02}:00")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zone_labels_mark_the_new_day() {
+        let day = NaiveDate::from_ymd_opt(2026, 10, 26).unwrap();
+        let london = chrono_tz::Tz::Europe__London;
+        let row = |h: f64| {
+            (
+                layout::at_wall(day, h * 60.0, london),
+                layout::at_wall(day, (h - 1.0) * 60.0, london),
+            )
+        };
+        // 09:00 in London is 05:00 in New York and 17:00 in Taipei
+        let (at, before) = row(9.0);
+        assert_eq!(
+            zone_label(at, before, chrono_tz::Tz::America__New_York),
+            ("05:00".into(), false)
+        );
+        assert_eq!(
+            zone_label(at, before, chrono_tz::Tz::Asia__Taipei),
+            ("17:00".into(), false)
+        );
+        // half-hour zones: 09:00 London is 14:30 in Kolkata
+        assert_eq!(
+            zone_label(at, before, chrono_tz::Tz::Asia__Kolkata),
+            ("14:30".into(), false)
+        );
+        // 16:00 in London is midnight in Taipei: Tuesday begins there
+        let (at, before) = row(16.0);
+        assert_eq!(
+            zone_label(at, before, chrono_tz::Tz::Asia__Taipei),
+            ("Tue".into(), true)
+        );
+    }
 }

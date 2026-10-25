@@ -342,23 +342,16 @@ pub static SPECS: &[Spec] = &[
         )
     },
     Spec {
-        args: &[
-            Arg {
-                name: "action",
-                kind: Kind::Choice(&["toggle", "show", "hide", "add", "remove"]),
-                optional: true,
-                rest: false,
-            },
-            Arg {
-                name: "zone",
-                kind: Kind::Dynamic("zone"),
-                optional: true,
-                rest: false,
-            },
-        ],
+        args: &[Arg {
+            name: "zones",
+            kind: Kind::Dynamic("zone"),
+            optional: true,
+            rest: true,
+        }],
         ..spec(
             "zones",
-            "Show or hide the extra time zones beside the hours, or add one for now",
+            "Extra time zones beside the hours: nothing to show or hide them; a list \
+             (NYC=America/New_York, Asia/Taipei) to set them; add, remove, none",
         )
     },
     spec("reload", "Reload the vdir from disk"),
@@ -386,7 +379,11 @@ impl Values for StateValues<'_> {
                 .map(|c| c.name.clone())
                 .collect(),
             "guest" => self.described(key).into_iter().map(|(v, _)| v).collect(),
-            "zone" => crate::zones::names(),
+            "zone" => ["toggle", "show", "hide", "add", "remove", "none"]
+                .into_iter()
+                .map(str::to_owned)
+                .chain(crate::zones::names())
+                .collect(),
             _ => Vec::new(),
         }
     }
