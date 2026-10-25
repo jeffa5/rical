@@ -11,32 +11,35 @@
     pkgs = nixpkgs.legacyPackages.${system};
     lib = pkgs.lib;
 
+    # Every crate is its own derivation (crate2nix), so a change to rical
+    # rebuilds only rical's crates; dependencies come from the store.
+    # Regenerate Cargo.nix after changing dependencies: `crate2nix generate`
+    # (the pre-commit hook checks it is current).
+    cargoNix = import ./Cargo.nix {
+      inherit pkgs;
+      defaultCrateOverrides =
+        pkgs.defaultCrateOverrides
+        // {
+          # not in nixpkgs' overrides
+          libadwaita-sys = _: {
+            nativeBuildInputs = [pkgs.pkg-config];
+            buildInputs = [pkgs.libadwaita pkgs.gtk4];
+          };
+        };
+    };
+
     # rical (CLI) and rical-gtk (GUI)
-    rical = pkgs.rustPlatform.buildRustPackage {
+    rical = pkgs.stdenv.mkDerivation {
       pname = "rical";
       version = "0.1.0";
-      src = lib.fileset.toSource {
-        root = ./.;
-        fileset = lib.fileset.unions [
-          ./Cargo.toml
-          ./Cargo.lock
-          ./crates
-          ./data
-        ];
-      };
-      cargoLock = {
-        lockFile = ./Cargo.lock;
-        outputHashes = {
-          "icalendar-0.17.5" = "sha256-ARg8hJNMCdUGIQHfxbCgJj/06wF1cQNg9BvDl+33lQc=";
-        };
-      };
-      nativeBuildInputs = [pkgs.pkg-config pkgs.wrapGAppsHook4];
+      dontUnpack = true;
+      nativeBuildInputs = [pkgs.wrapGAppsHook4];
       buildInputs = [pkgs.gtk4 pkgs.libadwaita];
-      # the CLI tests format times in a fixed zone
-      nativeCheckInputs = [pkgs.tzdata];
-      preCheck = "export TZDIR=${pkgs.tzdata}/share/zoneinfo";
-      postInstall = ''
-        install -Dm644 data/net.jeffas.Rical.desktop -t $out/share/applications
+      installPhase = ''
+        mkdir -p $out/bin
+        cp ${cargoNix.workspaceMembers.rical.build}/bin/rical $out/bin/
+        cp ${cargoNix.workspaceMembers.rical-gtk.build}/bin/rical-gtk $out/bin/
+        install -Dm644 ${./data/net.jeffas.Rical.desktop} $out/share/applications/net.jeffas.Rical.desktop
       '';
       meta = {
         description = "Calendar and tasks over a vdir of .ics files";
@@ -203,6 +206,8 @@
         pkgs.cargo
         pkgs.rustfmt
         pkgs.clippy
+        # regenerate Cargo.nix after changing dependencies
+        pkgs.crate2nix
 
         # rical-gtk
         pkgs.pkg-config
