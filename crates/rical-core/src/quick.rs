@@ -64,6 +64,30 @@ impl Quick {
         d.exact_zones = self.zone.is_some();
         d
     }
+
+    /// A journal entry: dated by the day the text names, else `default_day`
+    /// (None for an undated note). Only the date is kept, and a place goes
+    /// back into the title, as VJOURNAL has no LOCATION.
+    pub fn note_draft(&self, default_day: Option<NaiveDate>, local: Tz) -> Draft {
+        let day = self
+            .start
+            .or(self.due)
+            .map(|w| match w {
+                When::Zoned(z) => z.date_naive(),
+                w => w.date(local),
+            })
+            .or(default_day);
+        let start = When::Date(day.unwrap_or_default());
+        let mut d = Draft::new(start, start.add(TimeDelta::days(1)));
+        d.kind = Kind::Journal;
+        d.has_start = day.is_some();
+        d.has_due = false;
+        d.summary = match &self.location {
+            Some(place) => format!("{} @ {place}", self.title),
+            None => self.title.clone(),
+        };
+        d
+    }
 }
 
 /// What a line says.

@@ -182,7 +182,7 @@ impl Vdir {
             organizer: None,
             exact_zones: false,
             // which dates a task has (an event always has a start)
-            has_start: occ.kind != Kind::Todo || has("DTSTART"),
+            has_start: occ.kind == Kind::Event || has("DTSTART"),
             has_due: occ.kind != Kind::Todo || has("DUE"),
             priority: master
                 .and_then(|c| c.property_value("PRIORITY"))
@@ -881,6 +881,11 @@ fn set_times(
             }
         }
         Kind::Event | Kind::Journal => {
+            // an undated note has no DTSTART
+            if kind == Kind::Journal && !has_start {
+                c.remove("DTSTART");
+                return;
+            }
             set_if_changed(c, "DTSTART", &start);
             if kind == Kind::Journal {
                 return;

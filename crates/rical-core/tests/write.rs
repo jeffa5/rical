@@ -1331,3 +1331,210 @@ fn a_zone_no_file_defines_gets_a_generated_vtimezone() {
         "{call:?}"
     );
 }
+
+#[test]
+fn events_and_tasks_convert_both_ways() {
+    let lunch = "
+        BEGIN:VEVENT
+        UID:lunch
+        DTSTAMP:20250101T000000Z
+        DTSTART;TZID=Europe/London:20250304T120000
+        DTEND;TZID=Europe/London:20250304T130000
+        SUMMARY:Lunch
+        LOCATION:Bistro 21
+        STATUS:CONFIRMED
+        TRANSP:OPAQUE
+        X-UNKNOWN:keep me
+        END:VEVENT
+    ";
+    let holiday = "
+        BEGIN:VEVENT
+        UID:holiday
+        DTSTAMP:20250101T000000Z
+        DTSTART;VALUE=DATE:20250310
+        DTEND;VALUE=DATE:20250311
+        SUMMARY:Pay rent
+        END:VEVENT
+    ";
+    let file = format!("{LONDON_TZ}{lunch}");
+    let (dir, mut vdir) = setup(&[
+        ("home/lunch.ics", file.as_str()),
+        ("home/holiday.ics", holiday),
+        ("home/standup.ics", STANDUP),
+    ]);
+    let today = chrono::NaiveDate::from_ymd_opt(2025, 3, 1).unwrap();
+    let find = |vdir: &Vdir, summary: &str| {
+        query(vdir, range("2025-03-01 00:00", "2025-04-01 00:00"))
+            .into_iter()
+            .find(|o| o.summary == summary)
+            .unwrap()
+    };
+    let read = |p: &std::path::Path| fs::read_to_string(p).unwrap();
+
+    // an event: a task from its start, due when it ended, in its zone
+    let occ = find(&vdir, "Lunch");
+    let (changes, uid) = vdir.convert(&occ, today, SINGAPORE).unwrap();
+    assert!(!occ.path.exists(), "the old file is gone");
+    let text = read(&changes[0].path);
+    assert!(text.contains("BEGIN:VTODO\r\n"), "{text}");
+    assert!(text.contains(&format!("UID:{uid}\r\n")), "{text}");
+    assert!(
+        text.contains("DTSTART;TZID=Europe/London:20250304T120000\r\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("DUE;TZID=Europe/London:20250304T130000\r\n"),
+        "{text}"
+    );
+    assert!(text.contains("STATUS:NEEDS-ACTION\r\n"), "{text}");
+    assert!(text.contains("LOCATION:Bistro 21\r\n") && text.contains("X-UNKNOWN:keep me\r\n"));
+    assert!(
+        !text.contains("DTEND") && !text.contains("TRANSP"),
+        "{text}"
+    );
+    assert!(
+        text.contains("BEGIN:VTIMEZONE\r\nTZID:Europe/London"),
+        "{text}"
+    );
+    let task = vdir
+        .tasks()
+        .into_iter()
+        .find(|t| t.summary == "Lunch")
+        .unwrap();
+
+    // and back: the same times again
+    let occ = Occurrence {
+        kind: Kind::Todo,
+        ..find(&vdir, "Lunch")
+    };
+    assert_eq!(occ.path, task.path);
+    let (changes, _) = vdir.convert(&occ, today, SINGAPORE).unwrap();
+    let text = read(&changes[0].path);
+    assert!(text.contains("BEGIN:VEVENT\r\n"), "{text}");
+    assert!(
+        text.contains("DTSTART;TZID=Europe/London:20250304T120000\r\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("DTEND;TZID=Europe/London:20250304T130000\r\n"),
+        "{text}"
+    );
+    assert!(!text.contains("DUE") && !text.contains("STATUS"), "{text}");
+
+    // a one-day all-day event: a task due that day
+    let occ = find(&vdir, "Pay rent");
+    let (changes, _) = vdir.convert(&occ, today, SINGAPORE).unwrap();
+    let text = read(&changes[0].path);
+    assert!(text.contains("DUE;VALUE=DATE:20250310\r\n"), "{text}");
+    assert!(!text.contains("DTSTART"), "{text}");
+    let task = vdir
+        .tasks()
+        .into_iter()
+        .find(|t| t.summary == "Pay rent")
+        .unwrap();
+    assert_eq!(
+        task.due,
+        Some(When::Date(
+            chrono::NaiveDate::from_ymd_opt(2025, 3, 10).unwrap()
+        ))
+    );
+
+    // a repeating event keeps its rule, and a DURATION becomes a DUE
+    let occ = find(&vdir, "Standup");
+    let (changes, _) = vdir.convert(&occ, today, SINGAPORE).unwrap();
+    let text = read(&changes[0].path);
+    assert!(text.contains("RRULE:FREQ=DAILY;COUNT=5\r\n"), "{text}");
+    assert!(text.contains("DUE:20250303T091500Z\r\n"), "{text}");
+
+    // undone, the event is back as it was and the task gone
+    for change in changes.iter().rev() {
+        vdir.undo(change).unwrap();
+    }
+    assert_eq!(read(&dir.path().join("home/standup.ics")), ics(STANDUP));
+    assert!(!changes[0].path.exists());
+}
+
+#[test]
+fn tasks_without_times_become_all_day_events() {
+    let (_dir, mut vdir) = setup(&[(
+        "home/t.ics",
+        "
+        BEGIN:VTODO
+        UID:someday
+        DTSTAMP:20250101T000000Z
+        SUMMARY:Someday
+        STATUS:NEEDS-ACTION
+        PERCENT-COMPLETE:10
+        END:VTODO
+        BEGIN:VTODO
+        UID:by-five
+        DTSTAMP:20250101T000000Z
+        DUE:20250305T170000Z
+        SUMMARY:By five
+        END:VTODO
+    ",
+    )]);
+    let today = chrono::NaiveDate::from_ymd_opt(2025, 3, 1).unwrap();
+    let tasks = vdir.tasks();
+    let occ = |summary: &str| {
+        tasks
+            .iter()
+            .find(|t| t.summary == summary)
+            .unwrap()
+            .on_day(today)
+    };
+    let (changes, _) = vdir.convert(&occ("Someday"), today, SINGAPORE).unwrap();
+    let text = fs::read_to_string(&changes[0].path).unwrap();
+    assert!(
+        text.contains("DTSTART;VALUE=DATE:20250301\r\nDTEND;VALUE=DATE:20250302\r\n"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("PERCENT") && !text.contains("STATUS"),
+        "{text}"
+    );
+    // the other task is still in the old file
+    let rest = changes[1].after.as_deref().unwrap();
+    assert!(
+        rest.contains("UID:by-five") && !rest.contains("UID:someday"),
+        "{rest}"
+    );
+
+    let (changes, _) = vdir.convert(&occ("By five"), today, SINGAPORE).unwrap();
+    let text = fs::read_to_string(&changes[0].path).unwrap();
+    assert!(
+        text.contains("DTSTART:20250305T170000Z\r\nDTEND:20250305T180000Z\r\n"),
+        "{text}"
+    );
+    assert_eq!(changes[1].after, None, "the emptied file is deleted");
+}
+
+#[test]
+fn converting_refuses_what_would_hurt() {
+    let parent = "
+        BEGIN:VTODO
+        UID:parent
+        DTSTAMP:20250101T000000Z
+        SUMMARY:Move house
+        END:VTODO
+        BEGIN:VTODO
+        UID:child
+        DTSTAMP:20250101T000000Z
+        SUMMARY:Book van
+        RELATED-TO;RELTYPE=PARENT:parent
+        END:VTODO
+    ";
+    let (_dir, mut vdir) = setup(&[("home/meeting.ics", MEETING), ("home/p.ics", parent)]);
+    let today = chrono::NaiveDate::from_ymd_opt(2025, 3, 1).unwrap();
+    let meeting = query(&vdir, range("2025-03-04 00:00", "2025-03-05 00:00")).remove(0);
+    let err = vdir.convert(&meeting, today, SINGAPORE).unwrap_err();
+    assert!(err.to_string().contains("guests"), "{err}");
+    let task = vdir
+        .tasks()
+        .into_iter()
+        .find(|t| t.uid == "parent")
+        .unwrap()
+        .on_day(today);
+    let err = vdir.convert(&task, today, SINGAPORE).unwrap_err();
+    assert!(err.to_string().contains("subtasks"), "{err}");
+}

@@ -275,6 +275,13 @@ impl Component {
         self.set(when_line(name, when));
     }
 
+    /// Change what kind of component this is, e.g. VEVENT to VTODO.
+    pub fn rename(&mut self, name: &str) {
+        self.name = name.to_ascii_uppercase();
+        self.begin = Line::new(format!("BEGIN:{}", self.name));
+        self.end = Line::new(format!("END:{}", self.name));
+    }
+
     /// Forget the original text of every line so the component is written
     /// fresh, e.g. before moving it into a file with other line endings.
     pub fn detach(&mut self) {
