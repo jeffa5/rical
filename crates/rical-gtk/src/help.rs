@@ -348,6 +348,32 @@ fn keys_widget(keys: &[Vec<Key>]) -> gtk::Box {
     b
 }
 
+/// The items whose text matches `query` fzf-style (each word's letters in
+/// order, smart case), best first; all of them, in order, for no query.
+fn rank<'a, T>(items: &'a [(T, String)], query: &str) -> Vec<&'a T> {
+    use nucleo_matcher::{
+        Config, Matcher, Utf32Str,
+        pattern::{CaseMatching, Normalization, Pattern},
+    };
+    if query.trim().is_empty() {
+        return items.iter().map(|(t, _)| t).collect();
+    }
+    let pattern = Pattern::parse(query, CaseMatching::Smart, Normalization::Smart);
+    let mut matcher = Matcher::new(Config::DEFAULT);
+    let mut buf = Vec::new();
+    let mut scored = items
+        .iter()
+        .filter_map(|(t, text)| {
+            Some((
+                pattern.score(Utf32Str::new(text, &mut buf), &mut matcher)?,
+                t,
+            ))
+        })
+        .collect::<Vec<_>>();
+    scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+    scored.into_iter().map(|(_, t)| t).collect()
+}
+
 /// A group of rows under a heading, and what each row matches.
 type Group = (gtk::Label, gtk::ListBox, Vec<(adw::ActionRow, String)>);
 
@@ -404,21 +430,16 @@ pub fn dialog(binds: &Binds, view: ViewKind) -> adw::Dialog {
 
     let groups = Rc::new(groups);
     search.connect_search_changed(move |s| {
-        let words = s
-            .text()
-            .to_lowercase()
-            .split_whitespace()
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
+        let query = s.text();
         let mut any = false;
         for (heading, list, rows) in groups.iter() {
-            let mut shown = false;
-            for (row, haystack) in rows {
-                // every word must appear somewhere in the row
-                let m = words.iter().all(|w| haystack.contains(w.as_str()));
-                row.set_visible(m);
-                shown |= m;
+            // fzf-style, best match first; all of them, in order, when empty
+            let ranked = rank(rows, &query);
+            list.remove_all();
+            for row in &ranked {
+                list.append(*row);
             }
+            let shown = !ranked.is_empty();
             heading.set_visible(shown);
             list.set_visible(shown);
             any |= shown;
@@ -491,13 +512,18 @@ mod tests {
             .into_iter()
             .flat_map(|(_, e)| e)
             .collect::<Vec<_>>();
-        let find = |q: &str| {
-            entries
-                .iter()
-                .filter(|e| q.split_whitespace().all(|w| e.haystack.contains(w)))
-                .map(|e| e.subtitle.clone())
-                .collect::<Vec<_>>()
-        };
+        let rows = entries
+            .iter()
+            .map(|e| (e.subtitle.clone(), e.haystack.clone()))
+            .collect::<Vec<_>>();
+        let find = |q: &str| rank(&rows, q).into_iter().cloned().collect::<Vec<_>>();
+        // fuzzy, fzf style: letters in order, best first
+        assert!(find("lft").iter().any(|s| s == ":focus -1"));
+        assert!(
+            find("zones")[0].starts_with(":zones"),
+            "{:?}",
+            find("zones")
+        );
         // by key words
         assert!(
             find("left").iter().any(|s| s == ":focus -1"),
@@ -510,7 +536,7 @@ mod tests {
         // by description and command
         assert!(find("undo").iter().any(|s| s.starts_with(":undo")));
         assert!(find("schedule").iter().any(|s| s.starts_with(":schedule")));
-        assert!(find("zzzz").is_empty());
+        assert!(find("qxjqxj").is_empty());
         // a command a key runs as it is isn't listed again
         assert_eq!(
             find("today")
