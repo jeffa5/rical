@@ -242,11 +242,14 @@ impl State {
     /// focused day stays among them, so selecting something on another
     /// shown day does not scroll it; it starts afresh from a day outside.
     pub fn visible_days(&self) -> Vec<NaiveDate> {
-        let ViewKind::Days(n) = self.view else {
-            return layout::visible_days(self.view, self.date);
+        // the agenda too: selecting a row below must not make it the top
+        let n = match self.view {
+            ViewKind::Days(n) => n as u64,
+            ViewKind::Agenda => layout::AGENDA_DAYS,
+            _ => return layout::visible_days(self.view, self.date),
         };
         let from = self.days_from.get();
-        let shown = self.date >= from && self.date < from + chrono::Days::new(n as u64);
+        let shown = self.date >= from && self.date < from + chrono::Days::new(n);
         let from = if shown { from } else { self.date };
         self.days_from.set(from);
         layout::visible_days(self.view, from)
@@ -254,7 +257,7 @@ impl State {
 
     /// Move a view-length forward or back.
     pub fn step(&mut self, forward: bool) {
-        if let ViewKind::Days(_) = self.view {
+        if matches!(self.view, ViewKind::Days(_) | ViewKind::Agenda) {
             let from = self.visible_days()[0];
             self.days_from.set(layout::step(self.view, from, forward));
         }

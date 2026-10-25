@@ -88,7 +88,10 @@ impl AgendaView {
             });
             if let Some(key) = key {
                 let mut s = this.state.borrow_mut();
-                s.date = key.start.date(s.local);
+                // something begun earlier (a weekend away) focuses the first
+                // day shown rather than moving the list back to its start
+                let first = s.visible_days()[0];
+                s.date = key.start.date(s.local).max(first);
                 s.selected = Some(key);
                 drop(s);
                 changed();

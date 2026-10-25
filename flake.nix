@@ -114,6 +114,22 @@
           '';
           description = "Extra key bindings, in binds.conf format, layered over the defaults.";
         };
+        settings = lib.mkOption {
+          type = with lib.types; attrsOf (oneOf [str bool int (listOf str)]);
+          default = {};
+          example = {
+            me = ["me@example.com"];
+            contacts = "~/contacts/nextcloud";
+            view = "3days";
+          };
+          description = "Settings for ~/.config/rical/config: any rical-gtk flag by its long name.";
+        };
+        extraConfig = lib.mkOption {
+          type = lib.types.lines;
+          default = "";
+          example = "include-if-exists = local.conf";
+          description = "Lines added to ~/.config/rical/config after `settings`, e.g. includes.";
+        };
       };
 
       config = lib.mkIf cfg.enable {
@@ -155,6 +171,18 @@
         };
         xdg.configFile."rical/binds.conf" = lib.mkIf (cfg.binds != "") {
           text = cfg.binds;
+        };
+        xdg.configFile."rical/config" = lib.mkIf (cfg.settings != {} || cfg.extraConfig != "") {
+          text = let
+            value = v:
+              if builtins.isBool v
+              then lib.boolToString v
+              else if builtins.isList v
+              then lib.concatStringsSep ", " v
+              else toString v;
+          in
+            lib.concatStrings (lib.mapAttrsToList (k: v: "${k} = ${value v}\n") cfg.settings)
+            + cfg.extraConfig;
         };
       };
     };

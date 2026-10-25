@@ -2,7 +2,6 @@ use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
 use adw::prelude::*;
 use chrono::{NaiveDate, Utc};
-use clap::Parser as _;
 use gtk::glib;
 use rical_core::{Vdir, when::local_timezone};
 
@@ -11,6 +10,7 @@ mod binds;
 mod cmds;
 mod colors;
 mod command;
+mod config;
 mod details;
 mod draw;
 mod editor;
@@ -34,11 +34,21 @@ mod window;
 const APP_ID: &str = "net.jeffas.Rical";
 
 #[derive(Debug, clap::Parser)]
-#[clap(about = "Calendar for a vdir of .ics files")]
+#[clap(
+    about = "Calendar for a vdir of .ics files",
+    after_help = "Every flag can also be set in the config file as `name = value` (e.g. \
+                  `week = workweek`, `vdir = ~/.calendars`), with `include = FILE` to read \
+                  another. The command line wins over the environment, which wins over the file.",
+    args_override_self = true
+)]
 struct Args {
     /// Root of the vdir (a folder of calendar folders).
     #[clap(env = "RICAL_VDIR")]
-    vdir: PathBuf,
+    vdir: Option<PathBuf>,
+
+    /// Config file; default ~/.config/rical/config if it exists.
+    #[clap(long, env = "RICAL_CONFIG")]
+    config: Option<PathBuf>,
 
     /// Day to open on (YYYY-MM-DD), default today.
     #[clap(long)]
@@ -88,10 +98,22 @@ fn main() -> glib::ExitCode {
         .filter_level(log::LevelFilter::Warn)
         .parse_default_env()
         .init();
-    let args = Args::parse();
+    let args = match parse_args() {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("rical-gtk: {e}");
+            return glib::ExitCode::FAILURE;
+        }
+    };
+    let Some(vdir_path) = &args.vdir else {
+        eprintln!(
+            "rical-gtk: which vdir? Give it as an argument, RICAL_VDIR, or `vdir = PATH` in the config"
+        );
+        return glib::ExitCode::FAILURE;
+    };
 
     let local = local_timezone();
-    let vdir = match Vdir::load(&args.vdir) {
+    let vdir = match Vdir::load(vdir_path) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("rical-gtk: {e:#}");
@@ -168,6 +190,50 @@ fn main() -> glib::ExitCode {
 
     // arguments are ours, not GTK's
     app.run_with_args(&[std::env::args().next().unwrap_or_default()])
+}
+
+/// The command line, with the config file's settings under it.
+fn parse_args() -> Result<Args, String> {
+    use clap::{CommandFactory as _, FromArgMatches as _};
+    let argv = std::env::args().collect::<Vec<_>>();
+    // the config file to read: --config, RICAL_CONFIG or the default
+    let named = argv
+        .iter()
+        .enumerate()
+        .find_map(|(i, a)| match a.strip_prefix("--config") {
+            Some(rest) if rest.starts_with('=') => Some(PathBuf::from(&rest[1..])),
+            Some("") => argv.get(i + 1).map(PathBuf::from),
+            _ => None,
+        })
+        .or_else(|| std::env::var_os("RICAL_CONFIG").map(PathBuf::from));
+    let path = match named {
+        Some(p) => Some(p),
+        None => config::default_path().filter(|p| p.exists()),
+    };
+    let mut settings = match &path {
+        Some(p) => config::load(p)?,
+        None => Vec::new(),
+    };
+    // paths in the file are relative to it, and may start with ~
+    for s in &mut settings {
+        if matches!(s.name.as_str(), "vdir" | "binds" | "contacts") {
+            s.value = config::expand(&s.value, &s.base).display().to_string();
+        }
+    }
+    let cmd = Args::command();
+    let (from_file, vdir) = config::to_args(&settings, &cmd, "vdir")?;
+    let full = argv
+        .first()
+        .cloned()
+        .into_iter()
+        .chain(from_file)
+        .chain(argv.into_iter().skip(1));
+    let matches = cmd.try_get_matches_from(full).unwrap_or_else(|e| e.exit());
+    let mut args = Args::from_arg_matches(&matches).map_err(|e| e.to_string())?;
+    if args.vdir.is_none() {
+        args.vdir = vdir.map(|(v, _)| PathBuf::from(v));
+    }
+    Ok(args)
 }
 
 /// The default bindings with the user's on top.
