@@ -243,7 +243,14 @@ impl<'a> Fields<'a> {
         };
 
         let duration = match end {
+            // a task is due on its DUE date, so it covers that day too: as
+            // for events, an occurrence's end is exclusive
+            Some(end) if kind == Kind::Todo && end.is_date() => {
+                start.until(&end) + TimeDelta::days(1)
+            }
             Some(end) => start.until(&end),
+            // a dated task with only a start or a due date is on that day
+            None if start.is_date() && kind == Kind::Todo => TimeDelta::days(1),
             None => match component
                 .property_value("DURATION")
                 .and_then(parse_duration)

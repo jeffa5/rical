@@ -203,15 +203,106 @@ fn create_copies_timezone_and_round_trips() {
 #[test]
 fn create_all_day_todo() {
     let (_dir, mut vdir) = setup(&[]);
+    // like an event, the end is exclusive: 10th to 11th is due on the 10th
     let mut draft = Draft::new(when("20250310"), when("20250311"));
     draft.kind = Kind::Todo;
     draft.summary = "Pay rent".into();
+    draft.has_start = false;
     let change = vdir.create("home", &draft).unwrap();
     let text = change.after.unwrap();
     assert!(text.contains("BEGIN:VTODO"));
-    assert!(text.contains("DUE;VALUE=DATE:20250311"));
+    assert!(text.contains("DUE;VALUE=DATE:20250310"), "{text}");
+    assert!(!text.contains("DTSTART"), "only a due date: {text}");
     let occ = query(&vdir, range("2025-03-10 00:00", "2025-03-11 00:00"));
     assert_eq!(occ[0].kind, Kind::Todo);
+}
+
+const TRIP_TASK: &str = "
+    BEGIN:VTODO
+    UID:pack
+    DTSTAMP:20261001T000000Z
+    DTSTART;VALUE=DATE:20261215
+    DUE;VALUE=DATE:20261218
+    SUMMARY:Pack for the UK
+    PRIORITY:5
+    END:VTODO
+";
+
+#[test]
+fn a_task_covers_its_due_day() {
+    let (_dir, vdir) = setup(&[("home/pack.ics", TRIP_TASK)]);
+    // started on the 15th, due on the 18th: there on both, and between
+    for day in ["2026-12-15", "2026-12-18"] {
+        let from = format!("{day} 00:00");
+        let to = format!("{day} 23:59");
+        let occ = query(&vdir, range(&from, &to));
+        assert_eq!(occ.len(), 1, "on {day}");
+    }
+    let occ = query(&vdir, range("2026-12-19 00:00", "2026-12-20 00:00"));
+    assert!(occ.is_empty(), "not after it is due");
+}
+
+#[test]
+fn task_dates_are_kept_as_they_are() {
+    let (dir, mut vdir) = setup(&[("home/pack.ics", TRIP_TASK)]);
+    let path = dir.path().join("home/pack.ics");
+    let occ = query(&vdir, range("2026-12-15 00:00", "2026-12-16 00:00"));
+    let draft = vdir.draft(&occ[0]);
+    assert!(draft.has_start && draft.has_due);
+    assert_eq!(draft.priority, Some(5));
+    assert_eq!(draft.done, Some(false));
+
+    // moved two days: both dates move, the due date stays a due date
+    let mut moved = draft.clone();
+    moved.start = draft.start.add(TimeDelta::days(2));
+    moved.end = draft.end.add(TimeDelta::days(2));
+    vdir.update(&occ[0], Scope::All, &moved, None).unwrap();
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(text.contains("DTSTART;VALUE=DATE:20261217\r\n"), "{text}");
+    assert!(text.contains("DUE;VALUE=DATE:20261220\r\n"), "{text}");
+
+    // no start any more: only DUE; then no due either: undated
+    let occ = query(&vdir, range("2026-12-17 00:00", "2026-12-18 00:00"));
+    let mut d = vdir.draft(&occ[0]);
+    d.has_start = false;
+    d.priority = None;
+    vdir.update(&occ[0], Scope::All, &d, None).unwrap();
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(!text.contains("DTSTART"), "{text}");
+    assert!(text.contains("DUE;VALUE=DATE:20261220\r\n"));
+    assert!(!text.contains("PRIORITY"));
+    let occ = query(&vdir, range("2026-12-20 00:00", "2026-12-21 00:00"));
+    let mut d = vdir.draft(&occ[0]);
+    d.has_due = false;
+    vdir.update(&occ[0], Scope::All, &d, None).unwrap();
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(!text.contains("DUE") && !text.contains("DTSTART"), "{text}");
+    assert_eq!(vdir.tasks()[0].summary, "Pack for the UK");
+}
+
+#[test]
+fn a_due_time_task_keeps_just_its_due_time() {
+    let task = "
+        BEGIN:VTODO
+        UID:call
+        DTSTAMP:20261001T000000Z
+        DUE;TZID=Europe/London:20261221T170000
+        SUMMARY:Call the bank before it shuts
+        END:VTODO
+    ";
+    let (dir, mut vdir) = setup(&[("home/call.ics", &format!("{LONDON_TZ}{task}"))]);
+    let occ = query(&vdir, range("2026-12-21 00:00", "2026-12-22 00:00"));
+    let mut d = vdir.draft(&occ[0]);
+    assert!(!d.has_start && d.has_due);
+    d.start = d.start.add(TimeDelta::hours(1));
+    d.end = d.end.add(TimeDelta::hours(1));
+    vdir.update(&occ[0], Scope::All, &d, None).unwrap();
+    let text = fs::read_to_string(dir.path().join("home/call.ics")).unwrap();
+    assert!(
+        text.contains("DUE;TZID=Europe/London:20261221T180000\r\n"),
+        "{text}"
+    );
+    assert!(!text.contains("DTSTART;TZID"), "{text}");
 }
 
 #[test]

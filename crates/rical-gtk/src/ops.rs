@@ -119,6 +119,10 @@ impl Window {
         let o = occ.clone();
         self.with_scope(&o, "Move", move |w, scope| {
             let mut draft = w.state.borrow().vdir.draft(&occ);
+            // stretching a task that only had a due time gives it a start
+            if occ.kind == Kind::Todo && start.until(&end) != occ.start.until(&occ.end) {
+                draft.has_start = true;
+            }
             draft.start = start;
             draft.end = end;
             if w.perform("move the event", |v| v.update(&occ, scope, &draft, None)) {
@@ -252,13 +256,26 @@ impl Window {
             let original = original.clone();
             move |draft: Draft, calendar: String| {
                 let Some(w) = weak.upgrade() else { return };
-                // changing the rule or calendar only makes sense for the series
-                let whole = draft.repeat != original.repeat || calendar != occ.calendar;
+                // changing the rule or calendar only makes sense for the
+                // series, and a task is edited as a whole
+                let whole = draft.repeat != original.repeat
+                    || calendar != occ.calendar
+                    || occ.kind == Kind::Todo;
                 let save = {
                     let occ = occ.clone();
+                    let was_done = original.done;
                     move |w: &Rc<Self>, scope| {
                         if w.perform("save the event", |v| {
-                            v.update(&occ, scope, &draft, Some(&calendar))
+                            let mut changes = v.update(&occ, scope, &draft, Some(&calendar))?;
+                            // done or not through set_done, so a repeating
+                            // task moves on to its next date instead
+                            if let Some(done) = draft.done
+                                && Some(done) != was_done
+                                && let Some(task) = v.tasks().into_iter().find(|t| t.uid == occ.uid)
+                            {
+                                changes.push(v.set_done(&task, done)?);
+                            }
+                            Ok(changes)
                         }) {
                             w.reselect(&occ.uid, &draft.start);
                         }
@@ -277,10 +294,11 @@ impl Window {
             &self.window,
             &self.state,
             editor::Options {
-                title: if occ.recurring {
-                    "Edit Repeating Event"
-                } else {
-                    "Edit Event"
+                title: match (occ.kind, occ.recurring) {
+                    (Kind::Todo, true) => "Edit Repeating Task",
+                    (Kind::Todo, false) => "Edit Task",
+                    (_, true) => "Edit Repeating Event",
+                    _ => "Edit Event",
                 },
                 draft: original,
                 calendar: occ.calendar.clone(),
@@ -491,6 +509,14 @@ impl Window {
         Ok(())
     }
 
+    pub(super) fn set_selected_start(self: &Rc<Self>, start: Option<When>) -> Result<(), String> {
+        let task = self.selected_task().ok_or("select a task first")?;
+        self.perform("set the start", |v| {
+            v.set_start(&task, start).map(|c| vec![c])
+        });
+        Ok(())
+    }
+
     /// Time-block the selected task: give it a start and due time so it
     /// shows on the grid.
     pub(super) fn schedule_selected(
@@ -510,6 +536,9 @@ impl Window {
         let mut draft = self.state.borrow().vdir.draft(&occ);
         draft.start = start;
         draft.end = start.add(length);
+        // a time block: it starts then and is due at its end
+        draft.has_start = true;
+        draft.has_due = true;
         if self.perform("schedule the task", |v| {
             v.update(&occ, Scope::All, &draft, None)
         }) {
@@ -564,9 +593,16 @@ impl Window {
 }
 
 /// A task as an occurrence for editing: on its dates, or today if undated.
+/// As for events the end is exclusive, so a date due is the day after.
 fn task_occurrence(t: &Task, today: chrono::NaiveDate) -> Occurrence {
+    let day = TimeDelta::days(1);
     let start = t.start.or(t.due).unwrap_or(When::Date(today));
-    let end = t.due.unwrap_or(start);
+    let end = match t.due {
+        Some(When::Date(d)) => When::Date(d).add(day),
+        Some(due) => due,
+        None if start.is_date() => start.add(day),
+        None => start,
+    };
     let mut occ = t.on_day(today);
     occ.start = start;
     occ.end = end;

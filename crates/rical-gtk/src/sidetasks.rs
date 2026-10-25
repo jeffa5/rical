@@ -63,9 +63,15 @@ impl SideTasks {
                 .tasks()
                 .into_iter()
                 .filter(|t| {
+                    // what is on now: due by today, started, or undated;
+                    // not what starts later
+                    let by_today =
+                        |w: Option<rical_core::When>| w.is_some_and(|w| w.date(s.local) <= today);
                     !t.is_done()
                         && !s.hidden.contains(&t.calendar)
-                        && t.day(s.local).is_none_or(|d| d <= today)
+                        && ((t.start.is_none() && t.due.is_none())
+                            || by_today(t.due)
+                            || by_today(t.start))
                 })
                 .collect::<Vec<_>>();
             // overdue first, then today, then undated

@@ -83,6 +83,16 @@ pub struct Draft {
     /// in the editor), each its own; otherwise they are converted to the
     /// item's existing zone, as a drag does.
     pub exact_zones: bool,
+    /// For a task: whether it has a start (DTSTART) and a due date (DUE);
+    /// either or both may be missing. `start`/`end` hold its dates as for
+    /// an event, the end exclusive (a task due on a day ends after it).
+    pub has_start: bool,
+    pub has_due: bool,
+    /// For a task: PRIORITY, 1 (highest) to 9; None for none.
+    pub priority: Option<u8>,
+    /// For a task: whether it is done. Not written by `update`: completing
+    /// goes through [`Vdir::set_done`], as a repeating task moves on instead.
+    pub done: Option<bool>,
 }
 
 /// Someone invited, or to invite.
@@ -105,6 +115,10 @@ impl Draft {
             guests: None,
             organizer: None,
             exact_zones: false,
+            has_start: true,
+            has_due: true,
+            priority: None,
+            done: None,
         }
     }
 }
@@ -130,15 +144,13 @@ impl Change {
 impl Vdir {
     /// The draft to start editing `occ` from.
     pub fn draft(&self, occ: &Occurrence) -> Draft {
-        let rrule = self.get(&occ.path).and_then(|components| {
-            components
-                .iter()
-                .find(|c| {
-                    c.get_uid() == Some(occ.uid.as_str())
-                        && c.property_value("RECURRENCE-ID").is_none()
-                })
-                .and_then(|c| c.property_value("RRULE").map(str::to_owned))
+        let master = self.get(&occ.path).and_then(|components| {
+            components.iter().find(|c| {
+                c.get_uid() == Some(occ.uid.as_str()) && c.property_value("RECURRENCE-ID").is_none()
+            })
         });
+        let rrule = master.and_then(|c| c.property_value("RRULE").map(str::to_owned));
+        let has = |name| master.is_none_or(|c| c.property_value(name).is_some());
         Draft {
             kind: occ.kind,
             summary: occ.summary.clone(),
@@ -162,6 +174,19 @@ impl Vdir {
             ),
             organizer: None,
             exact_zones: false,
+            // which dates a task has (an event always has a start)
+            has_start: occ.kind != Kind::Todo || has("DTSTART"),
+            has_due: occ.kind != Kind::Todo || has("DUE"),
+            priority: master
+                .and_then(|c| c.property_value("PRIORITY"))
+                .and_then(|p| p.trim().parse().ok())
+                .filter(|p| *p > 0),
+            done: (occ.kind == Kind::Todo).then(|| {
+                master.is_some_and(|c| {
+                    c.property_value("COMPLETED").is_some()
+                        || matches!(c.property_value("STATUS"), Some("COMPLETED" | "CANCELLED"))
+                })
+            }),
         }
     }
 
@@ -195,6 +220,7 @@ impl Vdir {
             &draft.end,
             None,
             draft.exact_zones,
+            (draft.has_start, draft.has_due),
         );
         doc.push(c);
         self.add_timezones(&mut doc);
@@ -239,6 +265,7 @@ impl Vdir {
                 &draft.end,
                 None,
                 draft.exact_zones,
+                (draft.has_start, draft.has_due),
             );
             touch(c);
         } else if occ.recurring {
@@ -288,6 +315,7 @@ impl Vdir {
                 &end,
                 Some(&master_start),
                 draft.exact_zones,
+                (draft.has_start, draft.has_due),
             );
             touch(master);
             if draft.repeat == Repeat::None {
@@ -310,6 +338,7 @@ impl Vdir {
                 &draft.end,
                 original.as_ref(),
                 draft.exact_zones,
+                (draft.has_start, draft.has_due),
             );
             touch(c);
         }
@@ -503,6 +532,18 @@ fn set_fields(c: &mut Component, draft: &Draft, repeat: bool) {
     if let Some(guests) = &draft.guests {
         set_guests(c, guests, draft.organizer.as_ref());
     }
+    if draft.kind == Kind::Todo {
+        let current = c
+            .property("PRIORITY")
+            .and_then(|l| l.value().trim().parse::<u8>().ok())
+            .filter(|p| *p > 0);
+        if current != draft.priority {
+            match draft.priority {
+                Some(p) => c.set(Line::property("PRIORITY", &[], &p.to_string())),
+                None => c.remove("PRIORITY"),
+            }
+        }
+    }
     if repeat {
         // UNTIL is written relative to the series' own start form
         let start = c
@@ -621,6 +662,7 @@ fn set_times(
     end: &When,
     original: Option<&When>,
     exact: bool,
+    (has_start, has_due): (bool, bool),
 ) {
     let original = original
         .copied()
@@ -641,11 +683,22 @@ fn set_times(
     };
     match kind {
         Kind::Todo => {
-            // a task with only a due date keeps only a due date
-            if c.property("DTSTART").is_some() || start != end {
+            // only the dates it has: a task due on a day keeps just DUE
+            if has_start {
                 set_if_changed(c, "DTSTART", &start);
+            } else {
+                c.remove("DTSTART");
             }
-            set_if_changed(c, "DUE", &end);
+            if has_due {
+                // the end is exclusive; a date DUE is the day itself
+                let due = match end {
+                    When::Date(d) => When::Date(d.pred_opt().unwrap_or(d)),
+                    w => w,
+                };
+                set_if_changed(c, "DUE", &due);
+            } else {
+                c.remove("DUE");
+            }
         }
         Kind::Event | Kind::Journal => {
             set_if_changed(c, "DTSTART", &start);

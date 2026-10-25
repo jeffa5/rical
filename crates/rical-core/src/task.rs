@@ -156,6 +156,14 @@ impl Vdir {
         })
     }
 
+    /// Set or clear when a task starts.
+    pub fn set_start(&mut self, task: &Task, start: Option<When>) -> anyhow::Result<Change> {
+        self.edit_task(task, |c| match start {
+            Some(start) => c.set_when("DTSTART", &start),
+            None => c.remove("DTSTART"),
+        })
+    }
+
     fn edit_task(&mut self, task: &Task, f: impl FnOnce(&mut Component)) -> anyhow::Result<Change> {
         let before = std::fs::read_to_string(&task.path)
             .with_context(|| format!("reading {:?}", task.path))?;

@@ -197,16 +197,27 @@ impl Window {
                 };
                 self.schedule_selected(start, length)?;
             }
-            "due" => {
-                let text = p.arg(0).unwrap();
-                let due = match text {
+            "due" | "start" => {
+                // a date (all day), or a date and time
+                let text = p.arg(0).unwrap().trim();
+                let when = match text {
                     "none" => None,
-                    _ => Some(When::Date(
-                        parse_date(text, self.today_date())
-                            .ok_or(format!("not a date: “{text}”"))?,
-                    )),
+                    _ => {
+                        let (focused, local) = {
+                            let s = self.state.borrow();
+                            (s.date, s.local)
+                        };
+                        Some(
+                            rical_core::input::parse_at(text, focused, self.today_date(), local)
+                                .ok_or(format!("not a date: “{text}”"))?,
+                        )
+                    }
                 };
-                self.set_selected_due(due)?;
+                if p.spec == "due" {
+                    self.set_selected_due(when)?;
+                } else {
+                    self.set_selected_start(when)?;
+                }
             }
             "delete" => {
                 self.forced_scope.set(scope(0));

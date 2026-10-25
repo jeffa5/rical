@@ -82,19 +82,34 @@ pub fn open(
     };
     // the zones the times are typed in: the event's own, mine for new ones
     let zones = Rc::new(ZonePicker::new(local, &draft));
+    // a task's dates are each optional: empty for none
+    let task = draft.kind == Kind::Todo;
     let starts = adw::EntryRow::builder()
-        .title("Starts")
-        .text(format::input(&draft.start, zones.start_tz()))
+        .title(labels(task).0)
+        .text(if task && !draft.has_start {
+            String::new()
+        } else {
+            format::input(&draft.start, zones.start_tz())
+        })
         .build();
     let ends = adw::EntryRow::builder()
-        .title("Ends  (time, date or +duration)")
-        .text(format::input(&shown_end(&draft), zones.end_tz()))
+        .title(labels(task).1)
+        .text(if task && !draft.has_due {
+            String::new()
+        } else {
+            format::input(&shown_end(&draft), zones.end_tz())
+        })
         .build();
     zones.set_visible(!draft.start.is_date());
     // what the times are for me, when typed in another zone
     let hints: Rc<dyn Fn()> = {
-        let (zones, starts, ends, all_day) =
-            (zones.clone(), starts.clone(), ends.clone(), all_day.clone());
+        let (zones, starts, ends, all_day, kind) = (
+            zones.clone(),
+            starts.clone(),
+            ends.clone(),
+            all_day.clone(),
+            kind.clone(),
+        );
         let base = draft.start;
         Rc::new(move || {
             let hint = |w: Option<When>| match w {
@@ -106,15 +121,16 @@ pub fn open(
                 }
                 _ => String::new(),
             };
+            let (start_label, end_label) = labels(kind.selected() == 1);
             if all_day.is_active() {
-                starts.set_title("Starts");
-                ends.set_title("Ends");
+                starts.set_title(start_label);
+                ends.set_title(end_label);
                 return;
             }
             let start = zones.parse_start(&starts.text(), &base);
-            starts.set_title(&format!("Starts{}", hint(start)));
-            let end = start.and_then(|s| zones.parse_end(&ends.text(), &s));
-            ends.set_title(&format!("Ends  (time, date or +duration){}", hint(end)));
+            starts.set_title(&format!("{start_label}{}", hint(start)));
+            let end = zones.parse_end(&ends.text(), &start.unwrap_or(base));
+            ends.set_title(&format!("{end_label}{}", hint(end)));
         })
     };
     hints();
@@ -125,6 +141,33 @@ pub fn open(
     zones.on_change(hints.clone());
 
     let repeat = RepeatEditor::new(&draft.repeat);
+
+    // for tasks: how important, and whether done
+    let priority = adw::ComboRow::builder()
+        .title("Priority")
+        .model(&gtk::StringList::new(&["None", "High", "Medium", "Low"]))
+        .selected(match draft.priority {
+            None => 0,
+            Some(1..=4) => 1,
+            Some(5) => 2,
+            Some(_) => 3,
+        })
+        .build();
+    let done = adw::SwitchRow::builder()
+        .title("Done")
+        .active(draft.done == Some(true))
+        .visible(!options.is_new)
+        .build();
+    let task_group = adw::PreferencesGroup::builder().visible(task).build();
+    task_group.add(&priority);
+    task_group.add(&done);
+    {
+        let (g, hints) = (task_group.clone(), hints.clone());
+        kind.connect_selected_notify(move |k| {
+            g.set_visible(k.selected() == 1);
+            hints();
+        });
+    }
 
     let location = adw::EntryRow::builder()
         .title("Location")
@@ -193,6 +236,7 @@ pub fn open(
     let page = adw::PreferencesPage::new();
     page.add(&what);
     page.add(&when);
+    page.add(&task_group);
     page.add(&more);
     page.add(&guests.group);
     page.add(&notes_group);
@@ -285,36 +329,67 @@ pub fn open(
             notes.clone(),
         );
         let (guests, state, invitation) = (guests.clone(), state.clone(), options.invitation);
-        let zones = zones.clone();
+        let (zones, priority, done) = (zones.clone(), priority.clone(), done.clone());
         move || {
             let is_all_day = all_day.is_active();
             starts.remove_css_class("error");
             ends.remove_css_class("error");
+            let kind = if kind.selected() == 1 {
+                Kind::Todo
+            } else {
+                original.kind
+            };
+            // a task may leave either date empty
+            let task = kind == Kind::Todo;
+            let (start_text, end_text) = (starts.text(), ends.text());
+            let has_start = !(task && start_text.trim().is_empty());
+            let has_due = !(task && end_text.trim().is_empty());
             // times are read in their zones; all-day ones are plain dates
-            let start = if is_all_day {
-                format::parse_input(&starts.text(), true, &original.start, local)
+            let start = if !has_start {
+                None
             } else {
-                zones.parse_start(&starts.text(), &original.start)
+                let start = if is_all_day {
+                    format::parse_input(&start_text, true, &original.start, local)
+                } else {
+                    zones.parse_start(&start_text, &original.start)
+                };
+                if start.is_none() {
+                    starts.add_css_class("error");
+                    starts.grab_focus();
+                    return;
+                }
+                start
             };
-            let Some(start) = start else {
-                starts.add_css_class("error");
-                starts.grab_focus();
-                return;
-            };
-            let end = if is_all_day {
-                format::parse_input(&ends.text(), true, &start, local)
+            let end = if !has_due {
+                None
             } else {
-                zones.parse_end(&ends.text(), &start)
+                let base = start.unwrap_or(original.start);
+                let end = if is_all_day {
+                    format::parse_input(&end_text, true, &base, local)
+                } else {
+                    zones.parse_end(&end_text, &base)
+                };
+                let end = match end {
+                    // shown inclusive, stored exclusive
+                    Some(When::Date(d)) => d.checked_add_days(Days::new(1)).map(When::Date),
+                    other => other,
+                };
+                let ok = end.filter(|e| start.is_none_or(|s| e.to_utc(local) >= s.to_utc(local)));
+                if ok.is_none() {
+                    ends.add_css_class("error");
+                    ends.grab_focus();
+                    return;
+                }
+                ok
             };
-            let end = match end {
-                // shown inclusive, stored exclusive
-                Some(When::Date(d)) => d.checked_add_days(Days::new(1)).map(When::Date),
-                other => other,
-            };
-            let Some(end) = end.filter(|e| e.to_utc(local) >= start.to_utc(local)) else {
-                ends.add_css_class("error");
-                ends.grab_focus();
-                return;
+            // a task with one date (or none) still has a start and an
+            // exclusive end to show it by
+            let day = TimeDelta::days(1);
+            let (start, end) = match (start, end) {
+                (Some(s), Some(e)) => (s, e),
+                (Some(s), None) => (s, if s.is_date() { s.add(day) } else { s }),
+                (None, Some(e)) => (if e.is_date() { e.add(-day) } else { e }, e),
+                (None, None) => (original.start, original.end),
             };
             repeat.choice.remove_css_class("error");
             let rule = match repeat.value() {
@@ -330,11 +405,6 @@ pub fn open(
                 .get(calendar.selected() as usize)
                 .map(|(id, _)| id.clone())
                 .unwrap_or_default();
-            let kind = if kind.selected() == 1 {
-                Kind::Todo
-            } else {
-                original.kind
-            };
             // guests, unless they are someone else's to change
             let chosen = (kind == Kind::Event && !invitation).then(|| guests.value());
             let organizer = state.borrow().organizer_for(&calendar);
@@ -360,6 +430,15 @@ pub fn open(
                 repeat: rule,
                 // the zones chosen here are the ones to write
                 exact_zones: !is_all_day,
+                has_start,
+                has_due,
+                priority: match (task, priority.selected()) {
+                    (true, 1) => Some(1),
+                    (true, 2) => Some(5),
+                    (true, 3) => Some(9),
+                    _ => None,
+                },
+                done: (task && done.is_visible()).then(|| done.is_active()),
             };
             dialog.close();
             on_save(draft, calendar);
@@ -386,4 +465,16 @@ pub fn open(
 
     dialog.set_focus(Some(&title));
     dialog.present(Some(parent));
+}
+
+/// The start and end rows' titles: an event's, or a task's optional dates.
+fn labels(task: bool) -> (&'static str, &'static str) {
+    if task {
+        (
+            "Starts (optional)",
+            "Due (optional; time, date or +duration)",
+        )
+    } else {
+        ("Starts", "Ends  (time, date or +duration)")
+    }
 }

@@ -143,21 +143,17 @@ impl TasksView {
             .collect::<Vec<_>>();
 
         let (done, open): (Vec<_>, Vec<_>) = tasks.into_iter().partition(Task::is_done);
-        let mut groups: [(&str, Vec<Task>); 5] = [
+        let mut groups: [(&str, Vec<Task>); 7] = [
             ("Overdue", Vec::new()),
             ("Today", Vec::new()),
+            ("In progress", Vec::new()),
             ("Upcoming", Vec::new()),
+            ("Not started yet", Vec::new()),
             ("No date", Vec::new()),
             ("Done", Vec::new()),
         ];
         for t in open {
-            let i = match t.day(local) {
-                Some(d) if d < today => 0,
-                Some(d) if d == today => 1,
-                Some(_) => 2,
-                None => 3,
-            };
-            groups[i].1.push(t);
+            groups[group(&t, today, local)].1.push(t);
         }
         let sort_key = |t: &Task| {
             (
@@ -166,12 +162,12 @@ impl TasksView {
                 t.summary.to_lowercase(),
             )
         };
-        for (_, g) in &mut groups[..4] {
+        for (_, g) in &mut groups[..6] {
             g.sort_by_key(sort_key);
         }
         let mut done = done;
         done.sort_by_key(|t| std::cmp::Reverse(t.completed.map(|w| w.to_utc(local))));
-        groups[4].1 = done.into_iter().take(DONE_SHOWN).collect();
+        groups[6].1 = done.into_iter().take(DONE_SHOWN).collect();
 
         let mut rows = Vec::new();
         let mut selected = None;
@@ -261,18 +257,33 @@ impl TasksView {
         text.append(&title);
 
         let mut sub = Vec::new();
-        if let Some(day) = t.day(local) {
-            let when = if day == today {
+        // "today", "tomorrow" or the day, with the time for a timed date
+        let when = |w: rical_core::When| {
+            let day = w.date(local);
+            let mut s = if day == today {
                 "today".to_owned()
             } else if Some(day) == today.checked_add_days(Days::new(1)) {
                 "tomorrow".to_owned()
             } else {
                 format::day(day)
             };
-            sub.push(if day < today && !t.is_done() {
-                format!("overdue, was due {when}")
+            if !w.is_date() {
+                s += &format!(" {}", format::time(&w, local));
+            }
+            s
+        };
+        match t.start {
+            Some(s) if s.date(local) > today => sub.push(format!("starts {}", when(s))),
+            Some(s) if t.due.is_none() && !t.is_done() => {
+                sub.push(format!("started {}", when(s)));
+            }
+            _ => {}
+        }
+        if let Some(due) = t.due {
+            sub.push(if due.date(local) < today && !t.is_done() {
+                format!("overdue, was due {}", when(due))
             } else {
-                format!("due {when}")
+                format!("due {}", when(due))
             });
         }
         if t.recurring && !t.is_done() {
@@ -311,4 +322,20 @@ impl TasksView {
 
 fn glib_escape(s: &str) -> String {
     gtk::glib::markup_escape_text(s).to_string()
+}
+
+/// Which group an open task is in: overdue, today, in progress (started,
+/// due later), upcoming (due later), not started yet, or no date.
+fn group(t: &Task, today: NaiveDate, local: chrono_tz::Tz) -> usize {
+    let start = t.start.map(|w| w.date(local));
+    let due = t.due.map(|w| w.date(local));
+    match (start, due) {
+        (_, Some(d)) if d < today => 0,
+        (_, Some(d)) if d == today => 1,
+        (Some(s), _) if s > today => 4,
+        (Some(s), None) if s == today => 1,
+        (Some(_), _) => 2,
+        (None, Some(_)) => 3,
+        (None, None) => 5,
+    }
 }

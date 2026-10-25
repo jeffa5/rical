@@ -230,8 +230,24 @@ pub static SPECS: &[Spec] = &[
         ..spec("task", "Add a task, e.g. :task Buy milk --due fri")
     },
     Spec {
-        args: &[arg("date", DATE)],
-        ..spec("due", "Set the selected task's due date, or \"none\"")
+        args: &[Arg {
+            rest: true,
+            ..arg("when", DATE)
+        }],
+        ..spec(
+            "due",
+            "Set the selected task's due date, e.g. fri or fri 17:00, or \"none\"",
+        )
+    },
+    Spec {
+        args: &[Arg {
+            rest: true,
+            ..arg("when", DATE)
+        }],
+        ..spec(
+            "start",
+            "Set when the selected task starts, e.g. mon or mon 09:00, or \"none\"",
+        )
     },
     Spec {
         aliases: &["block"],
