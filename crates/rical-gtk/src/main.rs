@@ -9,6 +9,7 @@ use rical_core::{Vdir, when::local_timezone};
 mod agenda;
 mod binds;
 mod cmds;
+mod colors;
 mod command;
 mod details;
 mod draw;

@@ -54,6 +54,8 @@ pub struct State {
     /// Bumped whenever the data or the hidden set changes.
     generation: u64,
     cache: RefCell<Option<Cache>>,
+    /// Each calendar's colour, for a generation.
+    colors: RefCell<(Option<u64>, Vec<Rgb>)>,
 }
 
 struct Cache {
@@ -64,40 +66,6 @@ struct Cache {
 }
 
 pub type SharedState = Rc<RefCell<State>>;
-
-/// Fallback colours for calendars without one.
-const PALETTE: [Rgb; 6] = [
-    Rgb {
-        r: 0x35,
-        g: 0x84,
-        b: 0xe4,
-    },
-    Rgb {
-        r: 0x2e,
-        g: 0xc2,
-        b: 0x7e,
-    },
-    Rgb {
-        r: 0xe6,
-        g: 0x61,
-        b: 0x00,
-    },
-    Rgb {
-        r: 0x91,
-        g: 0x41,
-        b: 0xac,
-    },
-    Rgb {
-        r: 0xe0,
-        g: 0x1b,
-        b: 0x24,
-    },
-    Rgb {
-        r: 0x98,
-        g: 0x6a,
-        b: 0x44,
-    },
-];
 
 impl State {
     pub fn new(vdir: Vdir, local: Tz, date: NaiveDate) -> Self {
@@ -117,6 +85,7 @@ impl State {
             default_reminder: None,
             generation: 0,
             cache: RefCell::new(None),
+            colors: RefCell::new((None, Vec::new())),
         }
     }
 
@@ -129,18 +98,29 @@ impl State {
         self.vdir.calendar(id)
     }
 
+    /// The calendar's colour, nudged if another calendar looks the same.
     pub fn color(&self, calendar: &str) -> Rgb {
+        let mut colors = self.colors.borrow_mut();
+        if colors.0 != Some(self.generation) {
+            let own = self
+                .vdir
+                .calendars
+                .iter()
+                .map(|c| c.color)
+                .collect::<Vec<_>>();
+            *colors = (Some(self.generation), crate::colors::assign(&own));
+        }
         let index = self
             .vdir
             .calendars
             .iter()
             .position(|c| c.id == calendar)
             .unwrap_or(0);
-        self.vdir
-            .calendars
-            .get(index)
-            .and_then(|c| c.color)
-            .unwrap_or(PALETTE[index % PALETTE.len()])
+        colors.1.get(index).copied().unwrap_or(Rgb {
+            r: 0x35,
+            g: 0x84,
+            b: 0xe4,
+        })
     }
 
     pub fn visible_days(&self) -> Vec<NaiveDate> {
