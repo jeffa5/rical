@@ -556,6 +556,9 @@ fn from_rrule(dt: DateTime<rrule::Tz>, like: &When) -> When {
 }
 
 fn rrule_set(rule: &str, start: &When) -> anyhow::Result<rrule::RRuleSet> {
+    // rule text is ASCII (RFC 5545); the rrule crate slices it by bytes
+    // and panics on anything else
+    anyhow::ensure!(rule.is_ascii(), "rule is not ASCII: {rule:?}");
     let tz = expansion_tz(start);
     let dtstart = to_rrule(start, tz);
 

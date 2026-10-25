@@ -429,3 +429,21 @@ fn bad_rrule_falls_back_to_dtstart() {
     let occ = occurrences(body, range("2025-01-01 00:00", "2026-01-01 00:00"), Tz::UTC);
     assert_eq!(starts(&occ, Tz::UTC), ["2025-01-01 10:00"]);
 }
+
+#[test]
+fn a_rule_that_is_not_ascii_is_ignored_not_a_panic() {
+    // found by fuzzing: the rrule crate slices BYDAY values by bytes
+    let occ = occurrences(
+        "
+        BEGIN:VEVENT
+        UID:odd
+        DTSTART:20250303T090000Z
+        RRULE:FREQ=WEEKLY;BYDAY=M€
+        SUMMARY:Odd
+        END:VEVENT
+        ",
+        range("2025-03-01 00:00", "2025-04-01 00:00"),
+        LONDON,
+    );
+    assert!(occ.len() <= 1);
+}

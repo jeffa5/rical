@@ -209,14 +209,16 @@ pub fn parse_duration(s: &str) -> Option<TimeDelta> {
             unit => {
                 let n: i64 = num.parse().ok()?;
                 num.clear();
-                total += match (unit, in_time) {
-                    ('W', false) => TimeDelta::weeks(n),
-                    ('D', false) => TimeDelta::days(n),
-                    ('H', true) => TimeDelta::hours(n),
-                    ('M', true) => TimeDelta::minutes(n),
-                    ('S', true) => TimeDelta::seconds(n),
+                // checked: a file may say P9999999999999W
+                let part = match (unit, in_time) {
+                    ('W', false) => TimeDelta::try_weeks(n),
+                    ('D', false) => TimeDelta::try_days(n),
+                    ('H', true) => TimeDelta::try_hours(n),
+                    ('M', true) => TimeDelta::try_minutes(n),
+                    ('S', true) => TimeDelta::try_seconds(n),
                     _ => return None,
-                };
+                }?;
+                total = total.checked_add(&part)?;
             }
         }
     }
@@ -315,6 +317,9 @@ mod tests {
 
     #[test]
     fn durations() {
+        // found by fuzzing: too large for a TimeDelta is no duration, not a panic
+        assert_eq!(parse_duration("PT9999999999999999M"), None);
+        assert_eq!(parse_duration("P99999999999999W"), None);
         assert_eq!(parse_duration("PT15M"), Some(TimeDelta::minutes(15)));
         assert_eq!(
             parse_duration("P1DT2H30M"),

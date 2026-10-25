@@ -182,14 +182,15 @@ fn split_line(line: &str) -> Option<Prop> {
     }
     let colon = colon?;
     let (head, value) = (&line[..colon], &line[colon + 1..]);
-    let mut parts = head.split(';');
-    let n = parts.next()?.trim();
+    let first = head.split(';').next()?;
+    let n = first.trim();
     if n.is_empty() {
         return None;
     }
     // parameters: KEY=value or KEY="quoted; value"
     let mut params = Vec::new();
-    let rest = &head[n.len()..];
+    // after the name as written (it may have spaces round it)
+    let rest = &head[first.len()..];
     let mut s = rest.strip_prefix(';').unwrap_or(rest);
     while !s.is_empty() {
         let Some(eq) = s.find('=') else { break };
@@ -344,5 +345,16 @@ mod tests {
         // shared names, not a string each
         assert!(matches!(e.prop("DTSTART").unwrap().name, Cow::Borrowed(_)));
         assert!(parse("BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\n").is_err());
+    }
+
+    #[test]
+    fn odd_names_do_not_panic() {
+        // found by fuzzing: Unicode space (not a fold) round a name,
+        // then multi-byte text
+        let text = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\n\u{2003}X-€\u{2003};A=é:v\r\n€:w\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+        let (items, _) = parse(text).unwrap();
+        let p = items[0].prop("X-€").unwrap();
+        assert_eq!((p.value(), p.param("A")), ("v", Some("é")));
+        assert_eq!(items[0].value("€"), Some("w"));
     }
 }
