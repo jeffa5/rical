@@ -168,8 +168,11 @@ pub struct Segment {
     pub index: usize,
     pub start_min: f64,
     pub end_min: f64,
+    /// Column within its group of occurrences starting together.
     pub column: usize,
     pub columns: usize,
+    /// How many earlier occurrences, still running, it is drawn over.
+    pub indent: usize,
 }
 
 /// Lay out the timed occurrences on `day`: each gets a column within its
@@ -207,6 +210,7 @@ pub fn day_segments(
                     end_min,
                     column: 0,
                     columns: 1,
+                    indent: 0,
                 }
             })
         })
@@ -218,32 +222,61 @@ pub fn day_segments(
             .then(b.end_min.total_cmp(&a.end_min))
     });
 
-    // Assign columns cluster by cluster.
-    let mut i = 0;
-    while i < segs.len() {
-        let mut cluster_end = segs[i].end_min;
-        let mut j = i;
-        let mut column_ends: Vec<f64> = Vec::new();
-        while j < segs.len() && (j == i || segs[j].start_min < cluster_end) {
-            let col = column_ends
+    // Occurrences starting close together share a group, side by side;
+    // one starting later goes over those still running, indented.
+    struct Group {
+        start: f64,
+        indent: usize,
+        column_ends: Vec<f64>,
+        members: Vec<usize>,
+    }
+    let mut groups: Vec<Group> = Vec::new();
+    for (j, seg) in segs.iter_mut().enumerate() {
+        let start = seg.start_min;
+        let running = |g: &Group| g.column_ends.iter().any(|&e| e > start);
+        let joined = groups
+            .iter()
+            .rposition(|g| running(g) && start - g.start <= SIDE_BY_SIDE_MIN);
+        let gi = joined.unwrap_or_else(|| {
+            let indent = groups
                 .iter()
-                .position(|&e| e <= segs[j].start_min)
-                .unwrap_or_else(|| {
-                    column_ends.push(0.0);
-                    column_ends.len() - 1
-                });
-            column_ends[col] = segs[j].end_min;
-            segs[j].column = col;
-            cluster_end = cluster_end.max(segs[j].end_min);
-            j += 1;
+                .filter(|g| running(g))
+                .map(|g| g.indent + 1)
+                .max()
+                .unwrap_or(0);
+            groups.push(Group {
+                start,
+                indent,
+                column_ends: Vec::new(),
+                members: Vec::new(),
+            });
+            groups.len() - 1
+        });
+        let g = &mut groups[gi];
+        let col = g
+            .column_ends
+            .iter()
+            .position(|&e| e <= start)
+            .unwrap_or_else(|| {
+                g.column_ends.push(0.0);
+                g.column_ends.len() - 1
+            });
+        g.column_ends[col] = seg.end_min;
+        g.members.push(j);
+        seg.column = col;
+        seg.indent = g.indent;
+    }
+    for g in groups {
+        for m in g.members {
+            segs[m].columns = g.column_ends.len();
         }
-        for seg in &mut segs[i..j] {
-            seg.columns = column_ends.len();
-        }
-        i = j;
     }
     segs
 }
+
+/// Occurrences starting at most this far apart sit side by side; a later
+/// one is drawn over them instead, leaving their titles showing.
+const SIDE_BY_SIDE_MIN: f64 = 30.0;
 
 /// An all-day-row item spanning days `first..=last` on a lane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -445,13 +478,42 @@ mod tests {
         ];
         let segs = day_segments(&o, date("2025-10-23"), UTC, 15.0);
         let by_index = |i| *segs.iter().find(|s| s.index == i).unwrap();
-        // first three form one cluster of two columns
-        assert_eq!((by_index(0).column, by_index(0).columns), (0, 2));
-        assert_eq!((by_index(1).column, by_index(1).columns), (1, 2));
-        assert_eq!((by_index(2).column, by_index(2).columns), (0, 2));
+        let place = |i| {
+            let s = by_index(i);
+            (s.column, s.columns, s.indent)
+        };
+        // 9:00 and 9:30 start close enough to sit side by side
+        assert_eq!(place(0), (0, 2, 0));
+        assert_eq!(place(1), (1, 2, 0));
+        // 10:00 starts later than 9:30's group: drawn over it
+        assert_eq!(place(2), (0, 1, 1));
         // the afternoon one is alone
-        assert_eq!((by_index(3).column, by_index(3).columns), (0, 1));
+        assert_eq!(place(3), (0, 1, 0));
         assert_eq!(by_index(3).start_min, 14.0 * 60.0);
+    }
+
+    #[test]
+    fn later_events_go_over_long_ones() {
+        let o = [
+            occ("20251023T130000Z", "20251023T210000Z"),
+            occ("20251023T150000Z", "20251023T153000Z"),
+            occ("20251023T170000Z", "20251024T020000Z"),
+            occ("20251023T210000Z", "20251023T220000Z"),
+            occ("20251023T210000Z", "20251023T220000Z"),
+        ];
+        let segs = day_segments(&o, date("2025-10-23"), UTC, 15.0);
+        let place = |i| {
+            let s = segs.iter().find(|s| s.index == i).unwrap();
+            (s.column, s.columns, s.indent)
+        };
+        // the long one keeps the whole width
+        assert_eq!(place(0), (0, 1, 0));
+        // later ones go over it rather than squeezing it into a column
+        assert_eq!(place(1), (0, 1, 1));
+        assert_eq!(place(2), (0, 1, 1));
+        // two at the same time sit side by side over what's running
+        assert_eq!(place(3), (0, 2, 2));
+        assert_eq!(place(4), (1, 2, 2));
     }
 
     #[test]

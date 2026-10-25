@@ -30,6 +30,15 @@ impl Palette {
         set_rgba(cr, &self.accent, alpha);
     }
 
+    /// The view's background, to paint under blocks drawn over others.
+    pub fn base(&self, cr: &cairo::Context) {
+        if self.dark {
+            cr.set_source_rgb(0.118, 0.118, 0.118);
+        } else {
+            cr.set_source_rgb(0.98, 0.98, 0.98);
+        }
+    }
+
     /// Fill for an unselected event block of calendar colour `c`.
     pub fn event_fill(&self, cr: &cairo::Context, c: Rgb) {
         set_rgb(cr, c, if self.dark { 0.38 } else { 0.22 });

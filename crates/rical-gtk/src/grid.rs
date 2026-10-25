@@ -727,12 +727,22 @@ impl TimeGrid {
             let inner = col_w - 6.0;
             for seg in layout::day_segments(&occ, *day, state.local, MIN_EVENT_MINUTES) {
                 let o = &occ[seg.index];
-                let w = inner / seg.columns as f64;
-                let x = x0 + 2.0 + seg.column as f64 * w;
+                // drawn over earlier ones: set in so theirs still shows,
+                // but never narrower than half the column
+                let step = (inner * 0.15).min(16.0);
+                let indent = (seg.indent as f64 * step).min(inner / 2.0);
+                let w = (inner - indent) / seg.columns as f64;
+                let x = x0 + 2.0 + indent + seg.column as f64 * w;
                 let y = seg.start_min / 60.0 * HOUR_HEIGHT + 1.0;
                 let h = (seg.end_min - seg.start_min) / 60.0 * HOUR_HEIGHT - 2.0;
                 if self.is_dragging(o) {
                     continue;
+                }
+                if seg.indent > 0 {
+                    // opaque, with a gap round it, over what is below
+                    pal.base(cr);
+                    draw::rounded_rect(cr, x - 1.5, y - 1.5, w + 1.0, h + 3.0, 6.5);
+                    let _ = cr.fill();
                 }
                 let selected = state.selected.as_ref().is_some_and(|k| k.matches(o));
                 draw_block(area, cr, &pal, o, &state, x, y, w - 2.0, h, selected, false);
@@ -865,7 +875,10 @@ fn draw_block(
         circle(cr, y + h / 2.0);
     } else {
         // short or narrow blocks: one ellipsized line rather than wrapping
-        let one_line = h < 34.0 || w < 64.0;
+        let one_line = h < 34.0;
+        // narrow blocks give every line to the title; the time is where
+        // the block sits anyway
+        let narrow = w < 100.0;
         let time = format::time(&o.start, state.local);
         if one_line {
             let l = draw::layout(area, &format!("{title}  {time}"), &style, tw, 1);
@@ -874,7 +887,8 @@ fn draw_block(
             circle(cr, y + 2.0 + draw::layout_height(&l) / 2.0);
         } else {
             let line_h = 15.0;
-            let max_title_lines = (((h - 4.0) / line_h) as i32 - 1).max(1);
+            let lines = ((h - 4.0) / line_h) as i32;
+            let max_title_lines = if narrow { lines } else { lines - 1 }.max(1);
             let l = draw::layout(area, &title, &style, tw, max_title_lines);
             text_color(cr, 1.0);
             draw::show_layout(cr, &l, tx, y + 3.0);
@@ -885,7 +899,7 @@ fn draw_block(
                 sub = format!("{sub} · {loc}");
             }
             let s = draw::layout(area, &sub, &TextStyle::SMALL, tw, 1);
-            if used + draw::layout_height(&s) + 4.0 <= h {
+            if !narrow && used + draw::layout_height(&s) + 4.0 <= h {
                 text_color(cr, 0.8);
                 draw::show_layout(cr, &s, tx, y + 3.0 + used);
             }
