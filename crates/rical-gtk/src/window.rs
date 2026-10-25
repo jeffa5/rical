@@ -32,6 +32,7 @@ use crate::{
     binds::{Binds, Key},
     details, format,
     grid::{DragAction, TimeGrid},
+    invitations::{InvitationsView, OnReply},
     layout::ViewKind,
     minimonth::MiniMonth,
     month::MonthView,
@@ -54,6 +55,7 @@ pub struct Window {
     grid: Rc<TimeGrid>,
     month: Rc<MonthView>,
     agenda: Rc<AgendaView>,
+    invitations: Rc<InvitationsView>,
     tasks: Rc<TasksView>,
     side_tasks: Rc<SideTasks>,
     /// The collapsible sidebar sections.
@@ -104,7 +106,18 @@ impl Window {
                     }
                 })
             };
-            Self::build(app, state, on_change, on_drag, on_toggle, binds)
+            let on_reply: OnReply = {
+                let weak = weak.clone();
+                Rc::new(move |key, status| {
+                    if let Some(w) = weak.upgrade() {
+                        w.state.borrow_mut().selected = Some(key);
+                        if let Err(e) = w.reply(status) {
+                            w.toast(&e);
+                        }
+                    }
+                })
+            };
+            Self::build(app, state, on_change, on_drag, on_toggle, on_reply, binds)
         });
         this.setup_signals();
         this.setup_actions();
@@ -150,11 +163,13 @@ impl Window {
         on_change: Rc<dyn Fn()>,
         on_drag: Rc<dyn Fn(DragAction)>,
         on_toggle: Rc<dyn Fn((PathBuf, String), bool)>,
+        on_reply: OnReply,
         binds: Binds,
     ) -> Self {
         let grid = TimeGrid::new(state.clone(), on_change.clone(), on_drag);
         let month = MonthView::new(state.clone(), on_change.clone());
         let agenda = AgendaView::new(state.clone(), on_change.clone(), on_toggle.clone());
+        let invitations = InvitationsView::new(state.clone(), on_change.clone(), on_reply);
         let side_tasks = SideTasks::new(state.clone(), on_toggle.clone());
         let tasks = TasksView::new(state.clone(), on_change.clone(), on_toggle);
 
@@ -166,6 +181,7 @@ impl Window {
         views.add_named(&month.area, Some("month"));
         views.add_named(&agenda.widget, Some("agenda"));
         views.add_named(&tasks.widget, Some("tasks"));
+        views.add_named(&invitations.widget, Some("invitations"));
 
         let title = adw::WindowTitle::new("", "");
 
@@ -374,6 +390,7 @@ impl Window {
             grid,
             month,
             agenda,
+            invitations,
             tasks,
             side_tasks,
             sections,
@@ -518,6 +535,7 @@ impl Window {
             }
             ViewKind::Month => self.month.show_selected_details(),
             ViewKind::Agenda => self.agenda.show_selected_details(),
+            ViewKind::Invitations => self.invitations.show_selected_details(),
             ViewKind::Tasks => {}
         }
     }
@@ -526,17 +544,19 @@ impl Window {
     /// that was just switched to cannot take focus yet.
     fn focus_view(&self) {
         let view = self.state.borrow().view;
-        let (grid, month, agenda, tasks) = (
+        let (grid, month, agenda, tasks, invitations) = (
             self.grid.clone(),
             self.month.clone(),
             self.agenda.clone(),
             self.tasks.clone(),
+            self.invitations.clone(),
         );
         glib::idle_add_local_once(move || match view {
             ViewKind::Day | ViewKind::Week | ViewKind::WorkWeek | ViewKind::Days(_) => grid.focus(),
             ViewKind::Month => month.focus(),
             ViewKind::Agenda => agenda.focus(),
             ViewKind::Tasks => tasks.focus(),
+            ViewKind::Invitations => invitations.focus(),
         });
     }
 
@@ -667,6 +687,10 @@ impl Window {
             ViewKind::Tasks => {
                 self.views.set_visible_child_name("tasks");
                 self.tasks.refresh();
+            }
+            ViewKind::Invitations => {
+                self.views.set_visible_child_name("invitations");
+                self.invitations.refresh();
             }
         }
 
@@ -905,6 +929,7 @@ fn view_toggles() -> adw::ToggleGroup {
         (ViewKind::Month, "Month", "m"),
         (ViewKind::Agenda, "Agenda", "a"),
         (ViewKind::Tasks, "Tasks", "T"),
+        (ViewKind::Invitations, "Invites", "I"),
     ] {
         toggle.add(
             adw::Toggle::builder()

@@ -1081,3 +1081,56 @@ fn changing_a_tasks_parent() {
     assert!(!fs::read_to_string(&taxi).unwrap().contains("RELATED-TO"));
     let _ = dir;
 }
+
+#[test]
+fn replying_sets_my_answer_on_every_instance() {
+    let invite = "
+        BEGIN:VEVENT
+        UID:sync
+        DTSTAMP:20250101T000000Z
+        SEQUENCE:2
+        DTSTART:20250303T090000Z
+        DURATION:PT30M
+        RRULE:FREQ=DAILY;COUNT=3
+        SUMMARY:Sync
+        ORGANIZER;CN=Priya:mailto:priya@example.com
+        ATTENDEE;CN=Me;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:Me@Example.com
+        ATTENDEE;CN=Sam;PARTSTAT=ACCEPTED:mailto:sam@example.com
+        END:VEVENT
+        BEGIN:VEVENT
+        UID:sync
+        DTSTAMP:20250101T000000Z
+        RECURRENCE-ID:20250304T090000Z
+        DTSTART:20250304T100000Z
+        DURATION:PT30M
+        SUMMARY:Sync (moved)
+        ORGANIZER;CN=Priya:mailto:priya@example.com
+        ATTENDEE;CN=Me:mailto:me@example.com
+        END:VEVENT
+    ";
+    let (dir, mut vdir) = setup(&[("work/sync.ics", invite)]);
+    let path = dir.path().join("work/sync.ics");
+    let before = fs::read_to_string(&path).unwrap();
+    let all = query(&vdir, range("2025-03-01 00:00", "2025-03-10 00:00"));
+    let me = ["me@example.com".to_owned()];
+    let change = vdir.reply(&all[0], &me, "ACCEPTED").unwrap();
+    let after = fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        changed_lines(&before, &after),
+        [
+            "ATTENDEE;CN=Me;PARTSTAT=ACCEPTED;RSVP=TRUE:mailto:Me@Example.com",
+            "ATTENDEE;CN=Me;PARTSTAT=ACCEPTED:mailto:me@example.com",
+        ]
+    );
+    // the organiser's SEQUENCE is theirs to change
+    assert!(after.contains("SEQUENCE:2\r\n"));
+    vdir.undo(&change).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), before);
+
+    // not invited under that address
+    assert!(
+        vdir.reply(&all[0], &["other@example.com".to_owned()], "DECLINED")
+            .is_err()
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), before);
+}

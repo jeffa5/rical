@@ -439,6 +439,12 @@ impl Document {
             .filter(|c| matches!(c.name.as_str(), "VEVENT" | "VTODO" | "VJOURNAL"))
     }
 
+    pub fn items_mut(&mut self) -> impl Iterator<Item = &mut Component> {
+        self.root
+            .components_mut()
+            .filter(|c| matches!(c.name.as_str(), "VEVENT" | "VTODO" | "VJOURNAL"))
+    }
+
     /// The component for `uid` with the given RECURRENCE-ID (None for the
     /// master).
     pub fn find_mut(&mut self, uid: &str, recurrence_id: Option<&When>) -> Option<&mut Component> {

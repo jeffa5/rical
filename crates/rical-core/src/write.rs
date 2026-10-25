@@ -437,6 +437,58 @@ impl Vdir {
         Ok(change)
     }
 
+    /// Answer an invitation: set my PARTSTAT (ACCEPTED, TENTATIVE or
+    /// DECLINED) on every instance of it, where I am an attendee under any
+    /// of `me`. SEQUENCE is the organiser's, so only the stamps change;
+    /// a server doing scheduling (RFC 6638) tells the organiser.
+    pub fn reply(
+        &mut self,
+        occ: &Occurrence,
+        me: &[String],
+        status: &str,
+    ) -> anyhow::Result<Change> {
+        let before = read(&occ.path)?;
+        let mut doc = Document::parse(&before)?;
+        let is_me = |l: &Line| {
+            let v = l.value().trim();
+            let email = v
+                .get(..7)
+                .filter(|p| p.eq_ignore_ascii_case("mailto:"))
+                .map_or(v, |_| &v[7..]);
+            me.iter().any(|m| m.eq_ignore_ascii_case(email))
+        };
+        let mut found = false;
+        for c in doc
+            .items_mut()
+            .filter(|c| c.uid() == Some(occ.uid.as_str()))
+        {
+            let mut mine = false;
+            for i in c.items.iter_mut() {
+                if let Item::Line(l) = i
+                    && l.name() == "ATTENDEE"
+                    && is_me(l)
+                {
+                    *l = l.with_param("PARTSTAT", status);
+                    mine = true;
+                }
+            }
+            if mine {
+                let now = stamp();
+                c.set(Line::property("DTSTAMP", &[], &now));
+                c.set(Line::property("LAST-MODIFIED", &[], &now));
+                found = true;
+            }
+        }
+        anyhow::ensure!(found, "not invited as {}", me.join(" or "));
+        let change = Change {
+            path: occ.path.clone(),
+            before: Some(before),
+            after: Some(doc.write()),
+        };
+        self.apply_checked(&change)?;
+        Ok(change)
+    }
+
     /// Apply a change made by an edit, first checking the new text parses
     /// so rical never writes a file it (or others) cannot read back.
     pub(crate) fn apply_checked(&mut self, change: &Change) -> anyhow::Result<()> {

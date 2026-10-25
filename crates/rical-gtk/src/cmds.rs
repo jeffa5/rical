@@ -13,7 +13,8 @@ pub const GRID: Context = Context(1);
 pub const MONTH: Context = Context(2);
 pub const AGENDA: Context = Context(4);
 pub const TASKS: Context = Context(8);
-pub const ALL: Context = GRID.or(MONTH).or(AGENDA).or(TASKS);
+pub const INVITATIONS: Context = Context(16);
+pub const ALL: Context = GRID.or(MONTH).or(AGENDA).or(TASKS).or(INVITATIONS);
 
 pub fn context(view: ViewKind) -> Context {
     match view {
@@ -21,6 +22,7 @@ pub fn context(view: ViewKind) -> Context {
         ViewKind::Month => MONTH,
         ViewKind::Agenda => AGENDA,
         ViewKind::Tasks => TASKS,
+        ViewKind::Invitations => INVITATIONS,
     }
 }
 
@@ -31,6 +33,7 @@ pub fn section(view: ViewKind) -> &'static str {
         ViewKind::Month => "month",
         ViewKind::Agenda => "agenda",
         ViewKind::Tasks => "tasks",
+        ViewKind::Invitations => "invitations",
     }
 }
 
@@ -82,7 +85,7 @@ pub static SPECS: &[Spec] = &[
         args: &[arg("view", VIEWS)],
         ..spec(
             "view",
-            "Switch view: day, week, workweek, fullweek, Ndays (2-14), month, agenda, tasks",
+            "Switch view: day, week, workweek, fullweek, Ndays (2-14), month, agenda, tasks, invitations",
         )
     },
     Spec {
@@ -183,6 +186,15 @@ pub static SPECS: &[Spec] = &[
         }],
         ..spec("uninvite", "Take people off the selected event's guests")
     },
+    spec(
+        "accept",
+        "Accept the selected invitation (every time it repeats)",
+    ),
+    Spec {
+        aliases: &["tentative"],
+        ..spec("maybe", "Answer maybe to the selected invitation")
+    },
+    spec("decline", "Decline the selected invitation"),
     spec(
         "raw",
         "Show the selected event's .ics file as it is on disk",
@@ -524,7 +536,16 @@ impl Values for StateValues<'_> {
             "at" => &["09:00", "today", "tomorrow", "tomorrow 09:00"],
             "for" => &["15m", "30m", "1h", "2h", "1d"],
             "view" => &[
-                "day", "week", "workweek", "fullweek", "3days", "4days", "month", "agenda", "tasks",
+                "day",
+                "week",
+                "workweek",
+                "fullweek",
+                "3days",
+                "4days",
+                "month",
+                "agenda",
+                "tasks",
+                "invitations",
             ],
             "week" => &["fullweek", "workweek", "3days", "4days", "5days"],
             "remind" => &["none", "5m", "10m", "15m", "30m", "1h"],

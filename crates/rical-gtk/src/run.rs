@@ -161,6 +161,9 @@ impl Window {
                 details::close();
                 crate::raw::dialog(&occ).present(Some(&self.window));
             }
+            "accept" => self.reply("ACCEPTED")?,
+            "maybe" => self.reply("TENTATIVE")?,
+            "decline" => self.reply("DECLINED")?,
             "done" => self.toggle_done()?,
             "task" => {
                 let calendar = match p.flag("calendar") {

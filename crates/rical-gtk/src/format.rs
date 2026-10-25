@@ -92,6 +92,10 @@ pub fn view_title(view: ViewKind, date: NaiveDate, days: &[NaiveDate]) -> (Strin
             format!("Next {} days", layout::AGENDA_DAYS),
         ),
         ViewKind::Tasks => ("Tasks".to_owned(), String::new()),
+        ViewKind::Invitations => (
+            "Invitations".to_owned(),
+            "Waiting for your reply".to_owned(),
+        ),
     }
 }
 

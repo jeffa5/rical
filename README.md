@@ -47,7 +47,9 @@ Each setting can also come from the environment (`RICAL_VDIR=...`).
 
 Every action is a `:command` with completion, and keys are bound to
 commands (aerc style). Press `?` for help, `:` for the command line, `c` for a
-new event, `e` to edit, `D` to mark a task done. Change the bindings in
+new event, `e` to edit, `D` to mark a task done. `I` lists invitations
+waiting for your reply; `y`, `Y` and `N` accept, answer maybe, or decline
+(your server, e.g. Nextcloud, tells the organiser). Change the bindings in
 `~/.config/rical/binds.conf`.
 
 ## License

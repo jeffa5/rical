@@ -79,4 +79,14 @@ item work BEGIN:VEVENT UID:offsite DTSTAMP:20250101T000000Z \
   "ORGANIZER;CN=Priya Shah:mailto:priya@example.com" \
   "ATTENDEE;CN=Demo User;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:me@example.com" \
   "ATTENDEE;CN=Sam Lee;PARTSTAT=ACCEPTED:mailto:sam@example.com" END:VEVENT
+item work BEGIN:VEVENT UID:guild DTSTAMP:20250101T000000Z \
+  "DTSTART;TZID=$tz:$(day 8)T160000" "DTEND;TZID=$tz:$(day 8)T170000" "SUMMARY:Platform guild" \
+  "RRULE:FREQ=WEEKLY;INTERVAL=2" \
+  "ORGANIZER;CN=Sam Lee:mailto:sam@example.com" \
+  "ATTENDEE;CN=Demo User;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:me@example.com" END:VEVENT
+item personal BEGIN:VEVENT UID:housewarming DTSTAMP:20250101T000000Z \
+  "DTSTART;TZID=$tz:$(day 12)T190000" "DTEND;TZID=$tz:$(day 12)T230000" "SUMMARY:Housewarming" \
+  "LOCATION:12 Mill Lane" \
+  "ORGANIZER;CN=Jo Park:mailto:jo@example.com" \
+  "ATTENDEE;CN=Demo User;PARTSTAT=TENTATIVE:mailto:me@example.com" END:VEVENT
 echo "$out"

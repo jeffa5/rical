@@ -19,6 +19,8 @@ pub enum ViewKind {
     Month,
     Agenda,
     Tasks,
+    /// Upcoming invitations waiting for my answer.
+    Invitations,
 }
 
 impl ViewKind {
@@ -33,6 +35,7 @@ impl ViewKind {
             Self::Month => "month".into(),
             Self::Agenda => "agenda".into(),
             Self::Tasks => "tasks".into(),
+            Self::Invitations => "invitations".into(),
         }
     }
 
@@ -45,6 +48,7 @@ impl ViewKind {
             "month" => Self::Month,
             "agenda" => Self::Agenda,
             "tasks" => Self::Tasks,
+            "invitations" | "invites" => Self::Invitations,
             other => {
                 let n: u8 = other.strip_suffix("days")?.parse().ok()?;
                 if !(2..=14).contains(&n) {
@@ -63,6 +67,7 @@ impl ViewKind {
             Self::Month => "month",
             Self::Agenda => "agenda",
             Self::Tasks => "tasks",
+            Self::Invitations => "invitations",
         }
     }
 
@@ -77,6 +82,9 @@ impl ViewKind {
 
 /// Number of days the agenda view shows.
 pub const AGENDA_DAYS: u64 = 30;
+
+/// How far ahead the invitations view looks.
+pub const INVITATION_DAYS: u64 = 366;
 
 /// Monday of the work week to show for `date`: the coming one at weekends.
 pub fn work_week_start(date: NaiveDate) -> NaiveDate {
@@ -101,6 +109,7 @@ pub fn visible_days(view: ViewKind, date: NaiveDate) -> Vec<NaiveDate> {
         ViewKind::Agenda => (date, AGENDA_DAYS),
         // tasks are not by date; the focused day still matters for "today"
         ViewKind::Tasks => (date, 1),
+        ViewKind::Invitations => (date, INVITATION_DAYS),
     };
     (0..n).map(|i| first + Days::new(i)).collect()
 }
@@ -119,7 +128,7 @@ pub fn step(view: ViewKind, date: NaiveDate, forward: bool) -> NaiveDate {
         ViewKind::Week | ViewKind::WorkWeek => shift(date, 7),
         ViewKind::Days(n) => shift(date, n as u64),
         ViewKind::Agenda => shift(date, AGENDA_DAYS),
-        ViewKind::Tasks => date,
+        ViewKind::Tasks | ViewKind::Invitations => date,
         ViewKind::Month => {
             let months = chrono::Months::new(1);
             if forward {

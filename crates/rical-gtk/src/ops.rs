@@ -201,6 +201,60 @@ impl Window {
     }
 
     /// Add and remove guests of the selected event (all of a series).
+    /// Answer the selected invitation: ACCEPTED, TENTATIVE or DECLINED.
+    pub(super) fn reply(self: &Rc<Self>, status: &str) -> Result<(), String> {
+        let occ = self.current_item().ok_or("select an invitation first")?;
+        let me = {
+            let state = self.state.borrow();
+            match state.invitation(&occ) {
+                Some(i) if i.reply.is_some() => state.my_addresses(),
+                Some(_) => return Err("you are not on its guest list".into()),
+                None => return Err("that is not an invitation".into()),
+            }
+        };
+        let start = occ.start;
+        // in the invitations view, answered ones leave the list: go on to
+        // whatever takes their place, so y, y, N works through it
+        let place = {
+            let state = self.state.borrow();
+            (state.view == ViewKind::Invitations).then(|| {
+                state
+                    .navigation_order()
+                    .iter()
+                    .position(|o| o.uid == occ.uid && o.calendar == occ.calendar)
+            })
+        };
+        if self.perform("reply", |v| Ok(vec![v.reply(&occ, &me, status)?])) {
+            let what = match status {
+                "ACCEPTED" => "Accepted",
+                "TENTATIVE" => "Maybe to",
+                _ => "Declined",
+            };
+            // at once, not queued behind the last answer's
+            self.toasts.add_toast(
+                adw::Toast::builder()
+                    .title(format!("{what} “{}”", occ.summary))
+                    .priority(adw::ToastPriority::High)
+                    .build(),
+            );
+            match place {
+                Some(index) => {
+                    {
+                        let mut s = self.state.borrow_mut();
+                        let order = s.navigation_order();
+                        let next = index
+                            .and_then(|i| order.get(i).or(order.last()))
+                            .map(OccurrenceKey::of);
+                        s.selected = next;
+                    }
+                    self.refresh();
+                }
+                None => self.reselect(&occ.uid, &start),
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn change_guests(
         self: &Rc<Self>,
         add: Vec<Guest>,

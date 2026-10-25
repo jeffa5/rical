@@ -262,6 +262,8 @@ impl State {
         let n = match self.view {
             ViewKind::Days(n) => n as u64,
             ViewKind::Agenda => layout::AGENDA_DAYS,
+            // always from today: nothing earlier needs an answer
+            ViewKind::Invitations => return layout::visible_days(self.view, self.today()),
             _ => return layout::visible_days(self.view, self.date),
         };
         let from = self.days_from.get();
@@ -335,6 +337,10 @@ impl State {
     /// Visible occurrences in keyboard order: by day, all-day row first,
     /// then by start.
     pub fn navigation_order(&self) -> Vec<Occurrence> {
+        if self.view == ViewKind::Invitations {
+            let (open, maybe) = crate::invitations::waiting(self);
+            return [open, maybe].concat();
+        }
         let mut occ = self.visible_occurrences().as_ref().clone();
         let local = self.local;
         occ.sort_by_key(|o| {
