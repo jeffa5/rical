@@ -19,12 +19,17 @@ pub struct AgendaView {
     /// Occurrence key of each row, None for day headers.
     rows: Rc<RefCell<Vec<Option<OccurrenceKey>>>>,
     syncing: Rc<std::cell::Cell<bool>>,
+    on_toggle: Rc<dyn Fn((std::path::PathBuf, String), bool)>,
     /// What the rows were built from: (generation, first day, today).
     built: std::cell::Cell<Option<(u64, NaiveDate, NaiveDate)>>,
 }
 
 impl AgendaView {
-    pub fn new(state: SharedState, on_change: Rc<dyn Fn()>) -> Rc<Self> {
+    pub fn new(
+        state: SharedState,
+        on_change: Rc<dyn Fn()>,
+        on_toggle: Rc<dyn Fn((std::path::PathBuf, String), bool)>,
+    ) -> Rc<Self> {
         let list = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::Single)
             .css_classes(["navigation-sidebar"])
@@ -63,6 +68,7 @@ impl AgendaView {
             state,
             rows: Default::default(),
             syncing: Default::default(),
+            on_toggle,
             built: Default::default(),
         });
 
@@ -232,11 +238,24 @@ impl AgendaView {
                 .css_classes(["numeric", "dim-label"])
                 .build(),
         );
-        b.append(&format::color_dot(state.display_color(o), 10));
+        if o.kind == Kind::Todo {
+            let check = gtk::CheckButton::builder()
+                .css_classes(["selection-mode"])
+                .active(format::is_done(o))
+                .valign(gtk::Align::Center)
+                .tooltip_text("Done")
+                .build();
+            let id = (o.path.clone(), o.uid.clone());
+            let toggle = self.on_toggle.clone();
+            check.connect_toggled(move |c| toggle(id.clone(), c.is_active()));
+            b.append(&check);
+        } else {
+            b.append(&format::color_dot(state.display_color(o), 10));
+        }
 
         let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
         let title = match o.kind {
-            Kind::Todo => format::title(o, state.local),
+            Kind::Todo => format::label(o, state.local),
             _ => o.summary.clone(),
         };
         let title = gtk::Label::builder()

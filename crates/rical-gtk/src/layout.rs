@@ -78,6 +78,14 @@ impl ViewKind {
 /// Number of days the agenda view shows.
 pub const AGENDA_DAYS: u64 = 30;
 
+/// Monday of the work week to show for `date`: the coming one at weekends.
+pub fn work_week_start(date: NaiveDate) -> NaiveDate {
+    match date.weekday() {
+        Weekday::Sat | Weekday::Sun => week_start(date) + Days::new(7),
+        _ => week_start(date),
+    }
+}
+
 pub fn week_start(date: NaiveDate) -> NaiveDate {
     date.week(Weekday::Mon).first_day()
 }
@@ -87,7 +95,7 @@ pub fn visible_days(view: ViewKind, date: NaiveDate) -> Vec<NaiveDate> {
     let (first, n) = match view {
         ViewKind::Day => (date, 1),
         ViewKind::Week => (week_start(date), 7),
-        ViewKind::WorkWeek => (week_start(date), 5),
+        ViewKind::WorkWeek => (work_week_start(date), 5),
         ViewKind::Days(n) => (date, n as u64),
         ViewKind::Month => (week_start(date.with_day(1).unwrap()), 42),
         ViewKind::Agenda => (date, AGENDA_DAYS),
@@ -382,6 +390,16 @@ mod tests {
         assert_eq!(three, [d, date("2025-10-24"), date("2025-10-25")]);
         assert_eq!(step(ViewKind::Days(3), d, true), date("2025-10-26"));
         assert_eq!(step(ViewKind::WorkWeek, d, false), date("2025-10-16"));
+        // at the weekend, the coming work week
+        let sunday = date("2025-10-26");
+        assert_eq!(
+            visible_days(ViewKind::WorkWeek, sunday)[0],
+            date("2025-10-27")
+        );
+        assert_eq!(
+            visible_days(ViewKind::WorkWeek, date("2025-10-25"))[0],
+            date("2025-10-27")
+        );
 
         for v in [
             ViewKind::Day,

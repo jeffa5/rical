@@ -242,27 +242,36 @@ impl MonthView {
                     let _ = cr.fill();
                 }
                 let mut tx = x + 6.0;
-                if !spans {
-                    draw::set_rgb(
-                        cr,
+                let mark = if selected {
+                    draw::contrasting(color)
+                } else {
+                    color
+                };
+                if o.kind == rical_core::Kind::Todo {
+                    // tasks: a tick circle instead of a dot
+                    if spans || selected {
+                        pal.fg(cr, 0.85);
                         if selected {
-                            draw::contrasting(color)
-                        } else {
-                            color
-                        },
-                        1.0,
-                    );
+                            draw::set_rgb(cr, mark, 1.0);
+                        }
+                    } else {
+                        draw::set_rgb(cr, mark, 1.0);
+                    }
+                    draw::task_circle(cr, x + 9.0, y + h / 2.0, 4.5, format::is_done(o));
+                    tx = x + 17.0;
+                } else if !spans {
+                    draw::set_rgb(cr, mark, 1.0);
                     cr.arc(x + 6.0, y + h / 2.0, 3.5, 0.0, std::f64::consts::TAU);
                     let _ = cr.fill();
                     tx = x + 13.0;
                 }
                 let text = if spans {
-                    format::title(o, state.local)
+                    format::label(o, state.local)
                 } else {
                     format!(
                         "{} {}",
                         format::time(&o.start, state.local),
-                        format::title(o, state.local)
+                        format::label(o, state.local)
                     )
                 };
                 let l = draw::layout(

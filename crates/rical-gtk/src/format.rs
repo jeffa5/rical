@@ -122,17 +122,25 @@ pub fn is_inactive(o: &Occurrence) -> bool {
 /// tasks say when they were due.
 pub fn title(o: &Occurrence, local: Tz) -> String {
     match o.kind {
-        rical_core::Kind::Todo => {
-            let mut t = format!("{} {}", todo_mark(o), o.summary);
-            if is_overdue(o, local)
-                && let Some(due) = o.due
-            {
-                t += &format!(" (due {})", due.date(local).format("%-d %b"));
-            }
-            t
-        }
+        rical_core::Kind::Todo => format!("{} {}", todo_mark(o), label(o, local)),
         _ => o.summary.clone(),
     }
+}
+
+/// The text without a tick mark, for views that draw their own (tasks
+/// still say when they were due if overdue).
+pub fn label(o: &Occurrence, local: Tz) -> String {
+    let mut t = o.summary.clone();
+    if is_overdue(o, local)
+        && let Some(due) = o.due
+    {
+        t += &format!(" (due {})", due.date(local).format("%-d %b"));
+    }
+    t
+}
+
+pub fn is_done(o: &Occurrence) -> bool {
+    matches!(o.status.as_deref(), Some("COMPLETED"))
 }
 
 /// A small filled circle in a calendar colour.

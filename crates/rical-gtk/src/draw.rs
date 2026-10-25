@@ -155,3 +155,19 @@ impl<T> Hit<T> {
 pub fn hit_at<T: Clone>(hits: &[Hit<T>], x: f64, y: f64) -> Option<Hit<T>> {
     hits.iter().rev().find(|h| h.contains(x, y)).cloned()
 }
+
+/// A task's tick circle centred at (cx, cy): a ring, with a tick when done.
+/// The source colour must already be set.
+pub fn task_circle(cr: &cairo::Context, cx: f64, cy: f64, r: f64, done: bool) {
+    cr.set_line_width(1.4);
+    cr.new_sub_path();
+    cr.arc(cx, cy, r, 0.0, std::f64::consts::TAU);
+    let _ = cr.stroke();
+    if done {
+        cr.set_line_width(1.6);
+        cr.move_to(cx - r * 0.5, cy + r * 0.05);
+        cr.line_to(cx - r * 0.12, cy + r * 0.45);
+        cr.line_to(cx + r * 0.55, cy - r * 0.4);
+        let _ = cr.stroke();
+    }
+}

@@ -152,7 +152,7 @@ impl Window {
     ) -> Self {
         let grid = TimeGrid::new(state.clone(), on_change.clone(), on_drag);
         let month = MonthView::new(state.clone(), on_change.clone());
-        let agenda = AgendaView::new(state.clone(), on_change.clone());
+        let agenda = AgendaView::new(state.clone(), on_change.clone(), on_toggle.clone());
         let side_tasks = SideTasks::new(state.clone(), on_toggle.clone());
         let tasks = TasksView::new(state.clone(), on_change.clone(), on_toggle);
 

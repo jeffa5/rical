@@ -103,6 +103,7 @@ impl SideTasks {
         for t in tasks.iter().take(SHOWN) {
             let b = gtk::Box::new(gtk::Orientation::Horizontal, 8);
             let check = gtk::CheckButton::builder()
+                .css_classes(["selection-mode"])
                 .valign(gtk::Align::Center)
                 .tooltip_text("Done")
                 .build();

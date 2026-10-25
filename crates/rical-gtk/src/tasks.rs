@@ -234,6 +234,7 @@ impl TasksView {
             .margin_end(6)
             .build();
         let check = gtk::CheckButton::builder()
+            .css_classes(["selection-mode"])
             .active(t.is_done())
             .valign(gtk::Align::Center)
             .tooltip_text("Done (space)")

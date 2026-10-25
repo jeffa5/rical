@@ -837,11 +837,17 @@ fn draw_block(
         }
     };
 
-    let title = match o.kind {
-        Kind::Todo => format::title(o, state.local),
-        _ => o.summary.clone(),
+    let task = o.kind == Kind::Todo;
+    let title = format::label(o, state.local);
+    // tasks get a tick circle before their text
+    let tx = if task { x + 22.0 } else { x + 7.0 };
+    let circle = |cr: &cairo::Context, cy: f64| {
+        if task {
+            text_color(cr, 0.9);
+            draw::task_circle(cr, x + 13.0, cy, 5.0, format::is_done(o));
+        }
     };
-    let tw = w - 10.0;
+    let tw = w - 3.0 - (tx - x);
     let style = TextStyle {
         scale: 0.9,
         bold: true,
@@ -855,7 +861,8 @@ fn draw_block(
         };
         let l = draw::layout(area, &text, &style, tw, 1);
         text_color(cr, 1.0);
-        draw::show_layout(cr, &l, x + 7.0, y + (h - draw::layout_height(&l)) / 2.0);
+        draw::show_layout(cr, &l, tx, y + (h - draw::layout_height(&l)) / 2.0);
+        circle(cr, y + h / 2.0);
     } else {
         // short or narrow blocks: one ellipsized line rather than wrapping
         let one_line = h < 34.0 || w < 64.0;
@@ -863,13 +870,15 @@ fn draw_block(
         if one_line {
             let l = draw::layout(area, &format!("{title}  {time}"), &style, tw, 1);
             text_color(cr, 1.0);
-            draw::show_layout(cr, &l, x + 7.0, y + 2.0);
+            draw::show_layout(cr, &l, tx, y + 2.0);
+            circle(cr, y + 2.0 + draw::layout_height(&l) / 2.0);
         } else {
             let line_h = 15.0;
             let max_title_lines = (((h - 4.0) / line_h) as i32 - 1).max(1);
             let l = draw::layout(area, &title, &style, tw, max_title_lines);
             text_color(cr, 1.0);
-            draw::show_layout(cr, &l, x + 7.0, y + 3.0);
+            draw::show_layout(cr, &l, tx, y + 3.0);
+            circle(cr, y + 11.0);
             let used = draw::layout_height(&l);
             let mut sub = format!("{time} – {}", format::time(&o.end, state.local));
             if let Some(loc) = o.location.as_deref().filter(|l| !l.is_empty()) {
@@ -878,7 +887,7 @@ fn draw_block(
             let s = draw::layout(area, &sub, &TextStyle::SMALL, tw, 1);
             if used + draw::layout_height(&s) + 4.0 <= h {
                 text_color(cr, 0.8);
-                draw::show_layout(cr, &s, x + 7.0, y + 3.0 + used);
+                draw::show_layout(cr, &s, tx, y + 3.0 + used);
             }
         }
     }
