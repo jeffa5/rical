@@ -104,6 +104,27 @@ pub fn is_overdue(o: &Occurrence, local: Tz) -> bool {
             .is_some_and(|due| due.date(local) < o.start.date(local))
 }
 
+/// An attendee's PARTSTAT in words.
+pub fn reply(partstat: &str) -> &'static str {
+    match partstat {
+        "ACCEPTED" => "going",
+        "DECLINED" => "not going",
+        "TENTATIVE" => "maybe",
+        "DELEGATED" => "delegated",
+        _ => "not answered",
+    }
+}
+
+pub fn reply_icon(partstat: &str) -> &'static str {
+    match partstat {
+        "ACCEPTED" => "object-select-symbolic",
+        "DECLINED" => "window-close-symbolic",
+        "TENTATIVE" => "dialog-question-symbolic",
+        "DELEGATED" => "mail-forward-symbolic",
+        _ => "mail-unread-symbolic",
+    }
+}
+
 /// Cancelled, or a completed task: drawn faded and struck through.
 pub fn is_inactive(o: &Occurrence) -> bool {
     matches!(o.status.as_deref(), Some("CANCELLED" | "COMPLETED"))

@@ -67,6 +67,27 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
     if let Some(location) = occ.location.as_deref().filter(|l| !l.is_empty()) {
         content.append(&row("mark-location-symbolic", location));
     }
+    if let Some(invite) = state.invitation(occ) {
+        let mut text = format!("Invitation from {}", invite.from.display());
+        if let Some(reply) = invite.reply {
+            text += &format!(" · you: {}", format::reply(reply));
+        }
+        let r = row("mail-unread-symbolic", &text);
+        if invite.needs_reply() {
+            r.add_css_class("warning");
+        }
+        content.append(&r);
+    } else if let Some(organizer) = &occ.organizer
+        && !occ.attendees.is_empty()
+    {
+        content.append(&row(
+            "avatar-default-symbolic",
+            &format!("Organised by {}", organizer.display()),
+        ));
+    }
+    if !occ.attendees.is_empty() {
+        content.append(&people(occ, &state.my_addresses()));
+    }
     let join = format::join_url(occ);
     let place = format::place(occ).map(str::to_owned);
     if join.is_some() || place.is_some() {
@@ -147,6 +168,14 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
     }
     let spacer = gtk::Box::builder().hexpand(true).build();
     actions.append(&spacer);
+    let raw = action(
+        "Raw",
+        Some("text-x-generic-symbolic"),
+        "Show the .ics file (R)",
+        "raw",
+    );
+    raw.add_css_class("flat");
+    actions.append(&raw);
     let delete = action(
         "Delete",
         Some("user-trash-symbolic"),
@@ -215,6 +244,116 @@ pub fn close() -> bool {
         }
         None => false,
     })
+}
+
+/// Who is invited and how they replied: a count by reply, then a line per
+/// person (the first few, unless expanded).
+fn people(occ: &Occurrence, me: &[String]) -> gtk::Box {
+    const SHOWN: usize = 6;
+    let attendees = &occ.attendees;
+    let count = |s: &str| {
+        attendees
+            .iter()
+            .filter(|a| a.status.as_deref().unwrap_or("NEEDS-ACTION") == s)
+            .count()
+    };
+    let mut tally = vec![format!(
+        "{} {}",
+        attendees.len(),
+        if attendees.len() == 1 {
+            "guest"
+        } else {
+            "guests"
+        }
+    )];
+    for (status, word) in [
+        ("ACCEPTED", "going"),
+        ("TENTATIVE", "maybe"),
+        ("DECLINED", "not going"),
+        ("NEEDS-ACTION", "not answered"),
+    ] {
+        let n = count(status);
+        if n > 0 {
+            tally.push(format!("{n} {word}"));
+        }
+    }
+    let b = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    b.append(&row("system-users-symbolic", &tally.join(" · ")));
+    let list = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(2)
+        .margin_start(24)
+        .build();
+    let line = |a: &rical_core::Person| {
+        let l = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let status = a.status.as_deref().unwrap_or("NEEDS-ACTION");
+        let icon = gtk::Image::from_icon_name(format::reply_icon(status));
+        icon.set_tooltip_text(Some(format::reply(status)));
+        l.append(&icon);
+        let mut name = a.display().to_owned();
+        if a.is_any_of(me) {
+            name += " (you)";
+        }
+        if occ.organizer.as_ref().is_some_and(|o| o.email == a.email) {
+            name += " · organiser";
+        }
+        if a.role.as_deref() == Some("OPT-PARTICIPANT") {
+            name += " · optional";
+        }
+        if matches!(a.kind.as_deref(), Some("ROOM" | "RESOURCE")) {
+            name += " · room";
+        }
+        let label = gtk::Label::builder()
+            .label(&name)
+            .xalign(0.0)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .max_width_chars(40)
+            .css_classes(["caption"])
+            .build();
+        if let Some(email) = a
+            .email
+            .as_deref()
+            .filter(|e| a.name.is_some() && *e != a.display())
+        {
+            label.set_tooltip_text(Some(email));
+        }
+        l.append(&label);
+        l
+    };
+    // me first, then by reply: going, maybe, unanswered, not going
+    let rank = |a: &rical_core::Person| {
+        let s = a.status.as_deref().unwrap_or("NEEDS-ACTION");
+        (
+            !a.is_any_of(me),
+            ["ACCEPTED", "TENTATIVE", "NEEDS-ACTION", "DECLINED"]
+                .iter()
+                .position(|x| *x == s)
+                .unwrap_or(4),
+        )
+    };
+    let mut sorted = attendees.iter().collect::<Vec<_>>();
+    sorted.sort_by_key(|a| rank(a));
+    for a in sorted.iter().take(SHOWN) {
+        list.append(&line(a));
+    }
+    b.append(&list);
+    if sorted.len() > SHOWN {
+        let rest = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(2)
+            .build();
+        for a in &sorted[SHOWN..] {
+            rest.append(&line(a));
+        }
+        let more = gtk::Expander::builder()
+            .label(format!("{} more", sorted.len() - SHOWN))
+            .child(&rest)
+            .margin_start(24)
+            .css_classes(["caption"])
+            .build();
+        b.append(&more);
+    }
+    b
 }
 
 fn row(icon: &str, text: &str) -> gtk::Box {

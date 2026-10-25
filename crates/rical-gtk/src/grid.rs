@@ -445,6 +445,8 @@ impl TimeGrid {
                 recurring: false,
                 due: None,
                 alarms: Vec::new(),
+                organizer: None,
+                attendees: Vec::new(),
             },
         };
         ghost.start = start;
@@ -817,7 +819,11 @@ fn draw_block(
     compact: bool,
 ) {
     let color = state.display_color(o);
-    let cancelled = format::is_inactive(o);
+    // invitations: unanswered ones are outlined, "maybe" is dashed like
+    // tentative, declined is faded like cancelled
+    let reply = state.invitation(o).and_then(|i| i.reply);
+    let unanswered = reply == Some("NEEDS-ACTION");
+    let cancelled = format::is_inactive(o) || reply == Some("DECLINED");
     let alpha = if cancelled { 0.5 } else { 1.0 };
 
     cr.save().ok();
@@ -825,6 +831,8 @@ fn draw_block(
     cr.clip_preserve();
     if selected {
         draw::set_rgb(cr, color, 1.0);
+    } else if unanswered {
+        pal.base(cr);
     } else {
         pal.event_fill(cr, color);
     }
@@ -832,7 +840,9 @@ fn draw_block(
     draw::set_rgb(cr, color, alpha);
     cr.rectangle(x, y, 3.0, h);
     let _ = cr.fill();
-    if o.status.as_deref() == Some("TENTATIVE") && !selected {
+    if (o.status.as_deref() == Some("TENTATIVE") || unanswered || reply == Some("TENTATIVE"))
+        && !selected
+    {
         draw::set_rgb(cr, color, 0.9);
         cr.set_line_width(1.0);
         cr.set_dash(&[3.0, 3.0], 0.0);

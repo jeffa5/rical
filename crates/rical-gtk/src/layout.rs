@@ -407,6 +407,8 @@ mod tests {
             recurring: false,
             due: None,
             alarms: Vec::new(),
+            organizer: None,
+            attendees: Vec::new(),
         }
     }
 

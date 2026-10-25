@@ -144,6 +144,8 @@ pub fn delete(vdir: &Path, id: &str) -> anyhow::Result<()> {
         recurring: false,
         due: None,
         alarms: Vec::new(),
+        organizer: None,
+        attendees: Vec::new(),
     };
     vdir.delete(&occ, Scope::All)?;
     println!("deleted {uid} from {}", path.display());

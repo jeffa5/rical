@@ -28,7 +28,7 @@ pub fn open(window: &Rc<Window>, text: &str) {
     crate::details::close();
     let entry = gtk::SearchEntry::builder()
         .hexpand(true)
-        .placeholder_text("Search titles, places and notes")
+        .placeholder_text("Search titles, places, notes and people")
         .build();
     let list = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::Single)
@@ -160,6 +160,13 @@ fn matches(o: &Occurrence, q: &str) -> bool {
     .into_iter()
     .flatten()
     .any(|t| t.to_lowercase().contains(q))
+        // the people on it, by name or address
+        || o.organizer.iter().chain(&o.attendees).any(|p| {
+            [p.name.as_ref(), p.email.as_ref()]
+                .into_iter()
+                .flatten()
+                .any(|t| t.to_lowercase().contains(q))
+        })
 }
 
 /// Matches for `query`: upcoming first (soonest first), then past (most

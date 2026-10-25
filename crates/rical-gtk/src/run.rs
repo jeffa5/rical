@@ -126,6 +126,11 @@ impl Window {
             }
             "new" => self.run_new(p)?,
             "edit" => self.edit_selected(),
+            "raw" => {
+                let occ = self.current_item().ok_or("select an event first")?;
+                details::close();
+                crate::raw::dialog(&occ).present(Some(&self.window));
+            }
             "done" => self.toggle_done()?,
             "task" => {
                 let calendar = match p.flag("calendar") {

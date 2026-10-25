@@ -63,6 +63,22 @@ pub struct State {
     colors: RefCell<(Option<u64>, Vec<Rgb>)>,
     /// First day of the N-day view; see `visible_days`.
     days_from: Cell<NaiveDate>,
+    /// My addresses, from `--me`; guessed from the vdir when empty.
+    pub me: Vec<String>,
+    guessed_me: RefCell<(Option<u64>, Vec<String>)>,
+}
+
+/// An event someone else organised, with me (perhaps) invited.
+pub struct Invite<'a> {
+    pub from: &'a rical_core::Person,
+    /// My PARTSTAT, if I am among the attendees.
+    pub reply: Option<&'a str>,
+}
+
+impl Invite<'_> {
+    pub fn needs_reply(&self) -> bool {
+        self.reply == Some("NEEDS-ACTION")
+    }
 }
 
 struct Cache {
@@ -94,6 +110,8 @@ impl State {
             cache: RefCell::new(None),
             colors: RefCell::new((None, Vec::new())),
             days_from: Cell::new(date),
+            me: Vec::new(),
+            guessed_me: RefCell::new((None, Vec::new())),
         }
     }
 
@@ -129,6 +147,38 @@ impl State {
             g: 0x84,
             b: 0xe4,
         })
+    }
+
+    /// My addresses: as given, or guessed from who is on most invitations.
+    pub fn my_addresses(&self) -> Vec<String> {
+        if !self.me.is_empty() {
+            return self.me.clone();
+        }
+        let mut guess = self.guessed_me.borrow_mut();
+        if guess.0 != Some(self.generation) {
+            *guess = (Some(self.generation), self.vdir.owner_addresses());
+        }
+        guess.1.clone()
+    }
+
+    /// Whether `o` is an invitation: organised by someone else, with
+    /// attendees. My reply is known when I am one of them.
+    pub fn invitation<'a>(&self, o: &'a Occurrence) -> Option<Invite<'a>> {
+        let from = o.organizer.as_ref()?;
+        if o.attendees.is_empty() {
+            return None;
+        }
+        let me = self.my_addresses();
+        if from.is_any_of(&me) {
+            return None;
+        }
+        let reply = o
+            .attendees
+            .iter()
+            .find(|a| a.is_any_of(&me))
+            // RFC 5545: no PARTSTAT means not yet answered
+            .map(|a| a.status.as_deref().unwrap_or("NEEDS-ACTION"));
+        Some(Invite { from, reply })
     }
 
     /// The days on screen. The N-day view keeps its first day while the

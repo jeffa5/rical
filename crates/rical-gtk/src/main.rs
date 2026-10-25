@@ -21,6 +21,7 @@ mod layout;
 mod listhead;
 mod minimonth;
 mod month;
+mod raw;
 mod repeat;
 
 mod section;
@@ -69,6 +70,11 @@ struct Args {
     /// Do not show reminders (e.g. when `rical remind` runs as a service).
     #[clap(long, env = "RICAL_NO_NOTIFICATIONS")]
     no_notifications: bool,
+
+    /// My email addresses, to tell invitations to me (and my replies)
+    /// apart; default is a guess from who is on most invitations.
+    #[clap(long, env = "RICAL_ME", value_delimiter = ',')]
+    me: Vec<String>,
 }
 
 fn main() -> glib::ExitCode {
@@ -116,6 +122,7 @@ fn main() -> glib::ExitCode {
     state.week_view = week_view;
     state.last_calendar = args.calendar;
     state.notifications = !args.no_notifications;
+    state.me = args.me;
     if let Some(text) = &args.remind {
         match rical_core::input::parse_shift(text) {
             Some(d) if d > chrono::TimeDelta::zero() => state.default_reminder = Some(d),

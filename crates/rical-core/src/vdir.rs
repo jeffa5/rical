@@ -233,6 +233,44 @@ impl Vdir {
         })
     }
 
+    /// Addresses that are probably the owner's: per calendar, the one on
+    /// (as organiser or attendee) at least half of the items with
+    /// attendees. Invitations land in the invitee's calendar, so this finds
+    /// each account's address without being told.
+    pub fn owner_addresses(&self) -> Vec<String> {
+        let mut by_calendar: BTreeMap<&str, (usize, BTreeMap<String, usize>)> = BTreeMap::new();
+        for (calendar, component) in self.components() {
+            let attendees = occurrence::people(component, "ATTENDEE");
+            if attendees.is_empty() {
+                continue;
+            }
+            let mut emails = attendees
+                .iter()
+                .chain(&occurrence::people(component, "ORGANIZER"))
+                .filter_map(|p| p.email.as_deref().map(str::to_lowercase))
+                .collect::<Vec<_>>();
+            emails.sort();
+            emails.dedup();
+            let (items, counts) = by_calendar.entry(&calendar.id).or_default();
+            *items += 1;
+            for e in emails {
+                *counts.entry(e).or_default() += 1;
+            }
+        }
+        let mut out: Vec<String> = Vec::new();
+        for (items, counts) in by_calendar.into_values() {
+            let top = counts.into_iter().max_by_key(|(_, n)| *n);
+            if let Some((email, n)) = top
+                && items >= 2
+                && n * 2 >= items
+                && !out.contains(&email)
+            {
+                out.push(email);
+            }
+        }
+        out
+    }
+
     /// Re-read one item after it changed on disk. A missing or unparseable
     /// file is dropped. Returns whether anything changed.
     pub fn reload(&mut self, path: &Path) -> bool {

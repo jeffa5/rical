@@ -67,6 +67,70 @@ pub struct Occurrence {
     pub due: Option<When>,
     /// When to remind (from VALARMs that display or make a sound).
     pub alarms: Vec<Trigger>,
+    /// Who sent it, for invitations and meetings.
+    pub organizer: Option<Person>,
+    pub attendees: Vec<Person>,
+}
+
+/// An ORGANIZER or ATTENDEE.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Person {
+    /// The address, without "mailto:".
+    pub email: Option<String>,
+    /// CN.
+    pub name: Option<String>,
+    /// PARTSTAT: NEEDS-ACTION, ACCEPTED, DECLINED, TENTATIVE, DELEGATED.
+    pub status: Option<String>,
+    /// ROLE: REQ-PARTICIPANT, OPT-PARTICIPANT, CHAIR, NON-PARTICIPANT.
+    pub role: Option<String>,
+    /// CUTYPE: INDIVIDUAL, GROUP, RESOURCE, ROOM.
+    pub kind: Option<String>,
+}
+
+impl Person {
+    fn from_property(prop: &icalendar::Property) -> Self {
+        let param = |k: &str| {
+            prop.params()
+                .get(k)
+                .map(|p| p.value().trim_matches('"').to_owned())
+                .filter(|v| !v.is_empty())
+        };
+        let upper = |k: &str| param(k).map(|v| v.to_ascii_uppercase());
+        let value = prop.value().trim();
+        let email = value
+            .get(..7)
+            .filter(|p| p.eq_ignore_ascii_case("mailto:"))
+            .map_or(value, |_| &value[7..]);
+        Self {
+            email: (!email.is_empty()).then(|| email.to_owned()),
+            name: param("CN"),
+            status: upper("PARTSTAT"),
+            role: upper("ROLE"),
+            kind: upper("CUTYPE"),
+        }
+    }
+
+    /// A name to show: the CN, else the address.
+    pub fn display(&self) -> &str {
+        self.name
+            .as_deref()
+            .or(self.email.as_deref())
+            .unwrap_or("someone")
+    }
+
+    /// Whether this is one of `addresses` (compared ignoring case).
+    pub fn is_any_of(&self, addresses: &[String]) -> bool {
+        self.email
+            .as_deref()
+            .is_some_and(|e| addresses.iter().any(|a| a.eq_ignore_ascii_case(e)))
+    }
+}
+
+/// The people of `name` (ATTENDEE, ORGANIZER) on a component.
+pub fn people(component: &AnyComponent, name: &str) -> Vec<Person> {
+    let single = component.properties().get(name).into_iter();
+    let multi = component.multi_properties().get(name).into_iter().flatten();
+    single.chain(multi).map(Person::from_property).collect()
 }
 
 /// When an alarm goes off.
@@ -240,6 +304,8 @@ impl<'a> Fields<'a> {
             all_day: start.is_date(),
             recurring,
             alarms: alarms(self.component),
+            organizer: people(self.component, "ORGANIZER").into_iter().next(),
+            attendees: people(self.component, "ATTENDEE"),
             due: self
                 .component
                 .properties()

@@ -68,6 +68,8 @@ impl Task {
             recurring: false,
             due: self.due,
             alarms: Vec::new(),
+            organizer: None,
+            attendees: Vec::new(),
         }
     }
 }

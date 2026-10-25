@@ -162,6 +162,10 @@ pub static SPECS: &[Spec] = &[
         )
     },
     spec("edit", "Edit the selected event"),
+    spec(
+        "raw",
+        "Show the selected event's .ics file as it is on disk",
+    ),
     Spec {
         aliases: &["rm"],
         args: &[optional("scope", SCOPE)],
