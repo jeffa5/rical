@@ -1483,7 +1483,6 @@ dependencies = [
  "anyhow",
  "chrono",
  "chrono-tz",
- "clap",
  "env_logger",
  "gtk4",
  "libadwaita",

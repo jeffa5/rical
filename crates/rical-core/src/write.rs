@@ -598,7 +598,7 @@ pub(crate) fn touch(c: &mut Component) {
 }
 
 /// A copy of `master` standing in for the instance at `rid`.
-fn make_override(master: &Component, rid: &When) -> Component {
+pub(crate) fn make_override(master: &Component, rid: &When) -> Component {
     let mut o = master.clone();
     for name in ["RRULE", "RDATE", "EXDATE", "EXRULE"] {
         o.remove(name);
@@ -632,7 +632,7 @@ pub fn format_duration(d: TimeDelta) -> String {
     out
 }
 
-fn read(path: &Path) -> anyhow::Result<String> {
+pub(crate) fn read(path: &Path) -> anyhow::Result<String> {
     fs::read_to_string(path).with_context(|| format!("reading {path:?}"))
 }
 

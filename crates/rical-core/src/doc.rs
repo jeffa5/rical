@@ -90,6 +90,20 @@ impl Line {
         split_value(&self.content).1
     }
 
+    /// This line with parameter `key` set to `value` (added if missing).
+    pub fn with_param(&self, key: &str, value: &str) -> Self {
+        let mut params = self.params();
+        match params.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(key)) {
+            Some(p) => p.1 = value.to_owned(),
+            None => params.push((key.to_ascii_uppercase(), value.to_owned())),
+        }
+        let refs = params
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect::<Vec<_>>();
+        Self::property(&self.name(), &refs, self.value())
+    }
+
     pub fn when(&self) -> Option<When> {
         When::parse(self.value(), self.param("TZID").as_deref())
     }

@@ -1,5 +1,4 @@
-//! The config file: every command-line flag can be set there instead, as
-//! `name = value` lines using the flag's long name.
+//! Settings: from the config file, then the environment.
 //!
 //! ```text
 //! # ~/.config/rical/config
@@ -13,8 +12,9 @@
 //! ```
 //!
 //! Lines apply in order, so a later line (including one after an
-//! `include`) overrides an earlier one. Flags given on the command line
-//! win over environment variables, which win over the file.
+//! `include`) overrides an earlier one. Each setting can also be given in
+//! the environment (`RICAL_WEEK`), which wins over the file. The command
+//! line is only for files to open.
 
 use std::{
     collections::BTreeSet,
@@ -121,64 +121,151 @@ fn unquote(v: &str) -> &str {
         .unwrap_or(v)
 }
 
-/// Arguments from the file, and the positional value with its origin.
-pub type FileArgs = (Vec<String>, Option<(String, String)>);
+/// Every setting, with what it is for, shown by `--help`.
+pub const SETTINGS: &[(&str, &str)] = &[
+    (
+        "vdir",
+        "Root of the vdir (a folder of calendar folders). Required.",
+    ),
+    ("date", "Day to open on, YYYY-MM-DD. Default today."),
+    (
+        "view",
+        "View to open: day, week, workweek, fullweek, Ndays (e.g. 3days), month, agenda \
+         or tasks. Default week.",
+    ),
+    (
+        "week",
+        "What the week view shows: fullweek, workweek or Ndays. Default fullweek.",
+    ),
+    (
+        "calendar",
+        "Calendar (folder name) for new events. Default the one with the most items.",
+    ),
+    (
+        "binds",
+        "Key bindings file. Default ~/.config/rical/binds.conf if it exists.",
+    ),
+    (
+        "remind",
+        "Remind this long before timed events without alarms of their own, e.g. 10m.",
+    ),
+    (
+        "no-notifications",
+        "true to leave reminders to `rical remind` (e.g. run as a service).",
+    ),
+    (
+        "me",
+        "My email addresses, comma-separated, to tell invitations to me apart. Default \
+         guessed.",
+    ),
+    (
+        "contacts",
+        "A folder of vCards (e.g. a vdirsyncer address book) to suggest guests from.",
+    ),
+];
 
-/// The settings as command-line arguments for `cmd`, to go before the real
-/// ones. Unknown names are an error; settings whose flag has an
-/// environment variable that is set are skipped, as the environment wins;
-/// `positional` names (the vdir) are returned apart.
-pub fn to_args(
-    settings: &[Setting],
-    cmd: &clap::Command,
-    positional: &str,
-) -> Result<FileArgs, String> {
-    let mut args = Vec::new();
-    let mut pos = None;
-    for s in settings {
-        if s.name == positional {
-            pos = Some((s.value.clone(), s.origin.clone()));
-            continue;
-        }
-        let Some(arg) = cmd
-            .get_arguments()
-            .find(|a| a.get_long() == Some(s.name.as_str()))
-        else {
-            let known = cmd
-                .get_arguments()
-                .filter_map(|a| a.get_long())
-                .filter(|l| !matches!(*l, "help" | "config"))
-                .chain([positional, "include", "include-if-exists"])
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(format!(
-                "{}: unknown setting “{}” (known: {known})",
-                s.origin, s.name
-            ));
+/// The environment variable for a setting: `RICAL_NO_NOTIFICATIONS`.
+pub fn env_name(name: &str) -> String {
+    format!("RICAL_{}", name.to_ascii_uppercase().replace('-', "_"))
+}
+
+/// The settings, from the config file and then the environment.
+#[derive(Debug, Default)]
+pub struct Options {
+    pub vdir: Option<PathBuf>,
+    pub date: Option<chrono::NaiveDate>,
+    pub view: Option<String>,
+    pub week: Option<String>,
+    pub calendar: Option<String>,
+    pub binds: Option<PathBuf>,
+    pub remind: Option<String>,
+    pub no_notifications: bool,
+    pub me: Vec<String>,
+    pub contacts: Option<PathBuf>,
+}
+
+impl Options {
+    /// Read the config file (RICAL_CONFIG, else the default if it exists),
+    /// then let the environment override it.
+    pub fn load() -> Result<Self, String> {
+        let mut o = Self::default();
+        let path = match std::env::var_os("RICAL_CONFIG").filter(|v| !v.is_empty()) {
+            Some(p) => Some(PathBuf::from(p)),
+            None => default_path().filter(|p| p.exists()),
         };
-        if arg
-            .get_env()
-            .is_some_and(|e| std::env::var_os(e).is_some_and(|v| !v.is_empty()))
-        {
-            continue;
-        }
-        let takes_value = arg.get_action().takes_values();
-        if takes_value {
-            args.push(format!("--{}={}", s.name, s.value));
-        } else {
-            match s.value.to_ascii_lowercase().as_str() {
-                "true" | "yes" | "on" | "1" => args.push(format!("--{}", s.name)),
-                "false" | "no" | "off" | "0" => {}
-                _ => {
-                    return Err(format!(
-                        "{}: {} is true or false, not “{}”",
-                        s.origin, s.name, s.value
-                    ));
-                }
+        if let Some(path) = path {
+            for s in load(&path)? {
+                o.set(&s.name, &s.value, &s.base, &s.origin)?;
             }
         }
+        let here = std::env::current_dir().unwrap_or_default();
+        for (name, _) in SETTINGS {
+            let var = env_name(name);
+            if let Some(value) = std::env::var_os(&var).filter(|v| !v.is_empty()) {
+                o.set(name, &value.to_string_lossy(), &here, &var)?;
+            }
+        }
+        Ok(o)
     }
-    Ok((args, pos))
+
+    fn set(&mut self, name: &str, value: &str, base: &Path, origin: &str) -> Result<(), String> {
+        let path = || Some(expand(value, base));
+        let text = || Some(value.to_owned());
+        match name {
+            "vdir" => self.vdir = path(),
+            "binds" => self.binds = path(),
+            "contacts" => self.contacts = path(),
+            "view" => self.view = text(),
+            "week" => self.week = text(),
+            "calendar" => self.calendar = text(),
+            "remind" => self.remind = text(),
+            "me" => {
+                self.me = value
+                    .split(',')
+                    .map(|s| s.trim().to_owned())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+            }
+            "date" => {
+                self.date = Some(
+                    chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
+                        .map_err(|_| format!("{origin}: date is YYYY-MM-DD, not “{value}”"))?,
+                );
+            }
+            "no-notifications" => {
+                self.no_notifications = match value.to_ascii_lowercase().as_str() {
+                    "true" | "yes" | "on" | "1" => true,
+                    "false" | "no" | "off" | "0" => false,
+                    _ => return Err(format!("{origin}: {name} is true or false, not “{value}”")),
+                };
+            }
+            _ => {
+                let known = SETTINGS
+                    .iter()
+                    .map(|(n, _)| *n)
+                    .chain(["include", "include-if-exists"])
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(format!(
+                    "{origin}: unknown setting “{name}” (known: {known})"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// What `--help` says after the options: the settings and where they go.
+pub fn help() -> String {
+    let mut s = String::from(
+        "Settings go in ~/.config/rical/config (or the file RICAL_CONFIG names) as\n\
+         `name = value` lines, `include = FILE` reads another file, and each can be\n\
+         set in the environment instead, which wins:\n\n",
+    );
+    for (name, what) in SETTINGS {
+        s += &format!("  {name}  ({})\n      {what}\n", env_name(name));
+    }
+    s
 }
 
 /// The default config file: $XDG_CONFIG_HOME/rical/config.

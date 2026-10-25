@@ -1,7 +1,7 @@
 use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
 use adw::prelude::*;
-use chrono::{NaiveDate, Utc};
+use chrono::Utc;
 use gtk::glib;
 use rical_core::{Vdir, when::local_timezone};
 
@@ -33,207 +33,131 @@ mod window;
 
 const APP_ID: &str = "net.jeffas.Rical";
 
-#[derive(Debug, clap::Parser)]
-#[clap(
-    about = "Calendar for a vdir of .ics files",
-    after_help = "Every flag can also be set in the config file as `name = value` (e.g. \
-                  `week = workweek`, `vdir = ~/.calendars`), with `include = FILE` to read \
-                  another. The command line wins over the environment, which wins over the file.",
-    args_override_self = true
-)]
-struct Args {
-    /// Root of the vdir (a folder of calendar folders).
-    #[clap(env = "RICAL_VDIR")]
-    vdir: Option<PathBuf>,
-
-    /// Config file; default ~/.config/rical/config if it exists.
-    #[clap(long, env = "RICAL_CONFIG")]
-    config: Option<PathBuf>,
-
-    /// Day to open on (YYYY-MM-DD), default today.
-    #[clap(long)]
-    date: Option<NaiveDate>,
-
-    /// View to open: day, week, workweek, fullweek, Ndays (e.g. 3days),
-    /// month, agenda or tasks.
-    #[clap(long, default_value = "week")]
-    view: String,
-
-    /// What the week view (w, the Week button) shows: fullweek, workweek or
-    /// Ndays, e.g. 3days.
-    #[clap(long, env = "RICAL_WEEK", default_value = "fullweek")]
-    week: String,
-
-    /// Calendar (folder name) for new events; default is the one with the
-    /// most items.
-    #[clap(long, env = "RICAL_CALENDAR")]
-    calendar: Option<String>,
-
-    /// Key bindings file; default ~/.config/rical/binds.conf if it exists.
-    #[clap(long)]
-    binds: Option<PathBuf>,
-
-    /// Remind this long before timed events that have no alarm of their own,
-    /// e.g. 10m. Alarms in the events themselves always remind.
-    #[clap(long, env = "RICAL_REMIND")]
-    remind: Option<String>,
-
-    /// Do not show reminders (e.g. when `rical remind` runs as a service).
-    #[clap(long, env = "RICAL_NO_NOTIFICATIONS")]
-    no_notifications: bool,
-
-    /// My email addresses, to tell invitations to me (and my replies)
-    /// apart; default is a guess from who is on most invitations.
-    #[clap(long, env = "RICAL_ME", value_delimiter = ',')]
-    me: Vec<String>,
-
-    /// A folder of vCards (e.g. a vdirsyncer address book) to suggest
-    /// guests from, as well as people on past events.
-    #[clap(long, env = "RICAL_CONTACTS")]
-    contacts: Option<PathBuf>,
-}
-
 fn main() -> glib::ExitCode {
     env_logger::Builder::from_default_env()
         .filter_level(log::LevelFilter::Warn)
         .parse_default_env()
         .init();
-    let args = match parse_args() {
-        Ok(a) => a,
+    let options = match config::Options::load() {
+        Ok(o) => o,
         Err(e) => {
             eprintln!("rical-gtk: {e}");
             return glib::ExitCode::FAILURE;
         }
     };
-    let Some(vdir_path) = &args.vdir else {
-        eprintln!(
-            "rical-gtk: which vdir? Give it as an argument, RICAL_VDIR, or `vdir = PATH` in the config"
-        );
-        return glib::ExitCode::FAILURE;
-    };
 
-    let local = local_timezone();
-    let vdir = match Vdir::load(vdir_path) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("rical-gtk: {e:#}");
-            return glib::ExitCode::FAILURE;
-        }
-    };
-    let date = args
-        .date
-        .unwrap_or_else(|| Utc::now().with_timezone(&local).date_naive());
-    let Some(week_view) = layout::ViewKind::from_name(&args.week).filter(|v| {
-        matches!(
-            v,
-            layout::ViewKind::Week | layout::ViewKind::WorkWeek | layout::ViewKind::Days(_)
-        )
-    }) else {
-        eprintln!(
-            "rical-gtk: --week: {:?} is not fullweek, workweek or Ndays",
-            args.week
-        );
-        return glib::ExitCode::FAILURE;
-    };
-    let view = if args.view == "week" {
-        Some(week_view)
-    } else {
-        layout::ViewKind::from_name(&args.view)
-    };
-    let Some(view) = view else {
-        eprintln!("rical-gtk: unknown view {:?}", args.view);
-        return glib::ExitCode::FAILURE;
-    };
-
-    let mut state = state::State::new(vdir, local, date);
-    state.view = view;
-    state.week_view = week_view;
-    state.last_calendar = args.calendar;
-    state.notifications = !args.no_notifications;
-    state.me = args.me;
-    state.contacts = args.contacts;
-    if let Some(text) = &args.remind {
-        match rical_core::input::parse_shift(text) {
-            Some(d) if d > chrono::TimeDelta::zero() => state.default_reminder = Some(d),
-            _ => {
-                eprintln!("rical-gtk: --remind: not a duration: {text:?}");
-                return glib::ExitCode::FAILURE;
-            }
-        }
-    }
-    let state = Rc::new(RefCell::new(state));
-
+    // one instance: launching again (say, to open an invitation from a
+    // mail client) hands the files to the running one over D-Bus
     let app = adw::Application::builder()
         .application_id(APP_ID)
-        .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
+        .flags(gtk::gio::ApplicationFlags::HANDLES_OPEN)
         .build();
+    app.set_option_context_parameter_string(Some("[FILE.ics…]"));
+    app.set_option_context_summary(Some(
+        "Calendar for a vdir of .ics files. Files given are imported (invitations, \
+         replies, cancellations, exports).",
+    ));
+    app.set_option_context_description(Some(&config::help()));
 
     let quit = gtk::gio::SimpleAction::new("quit", None);
     let a = app.clone();
     quit.connect_activate(move |_, _| a.quit());
     app.add_action(&quit);
 
-    let binds = match load_binds(args.binds.as_deref()) {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("rical-gtk: {e}");
-            return glib::ExitCode::FAILURE;
+    // the vdir is loaded once, in the instance that stays running
+    let ui: Rc<RefCell<Option<(state::SharedState, binds::Binds)>>> = Default::default();
+    let failed = Rc::new(std::cell::Cell::new(false));
+    let options = RefCell::new(Some(options));
+    {
+        let (ui, failed) = (ui.clone(), failed.clone());
+        app.connect_startup(move |_| {
+            let Some(options) = options.borrow_mut().take() else {
+                return;
+            };
+            match setup(options) {
+                Ok(v) => *ui.borrow_mut() = Some(v),
+                Err(e) => {
+                    eprintln!("rical-gtk: {e}");
+                    failed.set(true);
+                }
+            }
+        });
+    }
+    let window: Rc<RefCell<Option<Rc<window::Window>>>> = Default::default();
+    let show = {
+        let (ui, window) = (ui.clone(), window.clone());
+        move |app: &adw::Application| -> Option<Rc<window::Window>> {
+            if let Some(w) = window.borrow().as_ref() {
+                w.present();
+                return Some(w.clone());
+            }
+            let (state, binds) = ui.borrow().clone()?;
+            let w = window::Window::new(app, state, binds);
+            w.present();
+            *window.borrow_mut() = Some(w.clone());
+            Some(w)
         }
     };
-
-    let windows = Rc::new(RefCell::new(Vec::new()));
-    app.connect_activate(move |app| {
-        let window = window::Window::new(app, state.clone(), binds.clone());
-        window.present();
-        windows.borrow_mut().push(window);
+    let show = Rc::new(show);
+    {
+        let show = show.clone();
+        app.connect_activate(move |app| {
+            show(app);
+        });
+    }
+    app.connect_open(move |app, files, _| {
+        if let Some(w) = show(app) {
+            w.import_files(files);
+        }
     });
 
-    // arguments are ours, not GTK's
-    app.run_with_args(&[std::env::args().next().unwrap_or_default()])
+    let code = app.run();
+    if failed.get() {
+        glib::ExitCode::FAILURE
+    } else {
+        code
+    }
 }
 
-/// The command line, with the config file's settings under it.
-fn parse_args() -> Result<Args, String> {
-    use clap::{CommandFactory as _, FromArgMatches as _};
-    let argv = std::env::args().collect::<Vec<_>>();
-    // the config file to read: --config, RICAL_CONFIG or the default
-    let named = argv
-        .iter()
-        .enumerate()
-        .find_map(|(i, a)| match a.strip_prefix("--config") {
-            Some(rest) if rest.starts_with('=') => Some(PathBuf::from(&rest[1..])),
-            Some("") => argv.get(i + 1).map(PathBuf::from),
-            _ => None,
+/// The state and bindings, from the settings.
+fn setup(o: config::Options) -> Result<(state::SharedState, binds::Binds), String> {
+    let vdir_path = o.vdir.ok_or(
+        "which vdir? Set `vdir = PATH` in ~/.config/rical/config, or RICAL_VDIR (see --help)",
+    )?;
+    let local = local_timezone();
+    let vdir = Vdir::load(&vdir_path).map_err(|e| format!("{e:#}"))?;
+    let date = o
+        .date
+        .unwrap_or_else(|| Utc::now().with_timezone(&local).date_naive());
+    let week = o.week.as_deref().unwrap_or("fullweek");
+    let week_view = layout::ViewKind::from_name(week)
+        .filter(|v| {
+            matches!(
+                v,
+                layout::ViewKind::Week | layout::ViewKind::WorkWeek | layout::ViewKind::Days(_)
+            )
         })
-        .or_else(|| std::env::var_os("RICAL_CONFIG").map(PathBuf::from));
-    let path = match named {
-        Some(p) => Some(p),
-        None => config::default_path().filter(|p| p.exists()),
+        .ok_or(format!("week: “{week}” is not fullweek, workweek or Ndays"))?;
+    let view = match o.view.as_deref().unwrap_or("week") {
+        "week" => week_view,
+        name => layout::ViewKind::from_name(name).ok_or(format!("view: unknown view “{name}”"))?,
     };
-    let mut settings = match &path {
-        Some(p) => config::load(p)?,
-        None => Vec::new(),
-    };
-    // paths in the file are relative to it, and may start with ~
-    for s in &mut settings {
-        if matches!(s.name.as_str(), "vdir" | "binds" | "contacts") {
-            s.value = config::expand(&s.value, &s.base).display().to_string();
+
+    let mut state = state::State::new(vdir, local, date);
+    state.view = view;
+    state.week_view = week_view;
+    state.last_calendar = o.calendar;
+    state.notifications = !o.no_notifications;
+    state.me = o.me;
+    state.contacts = o.contacts;
+    if let Some(text) = &o.remind {
+        match rical_core::input::parse_shift(text) {
+            Some(d) if d > chrono::TimeDelta::zero() => state.default_reminder = Some(d),
+            _ => return Err(format!("remind: not a duration: “{text}”")),
         }
     }
-    let cmd = Args::command();
-    let (from_file, vdir) = config::to_args(&settings, &cmd, "vdir")?;
-    let full = argv
-        .first()
-        .cloned()
-        .into_iter()
-        .chain(from_file)
-        .chain(argv.into_iter().skip(1));
-    let matches = cmd.try_get_matches_from(full).unwrap_or_else(|e| e.exit());
-    let mut args = Args::from_arg_matches(&matches).map_err(|e| e.to_string())?;
-    if args.vdir.is_none() {
-        args.vdir = vdir.map(|(v, _)| PathBuf::from(v));
-    }
-    Ok(args)
+    let binds = load_binds(o.binds.as_deref())?;
+    Ok((Rc::new(RefCell::new(state)), binds))
 }
 
 /// The default bindings with the user's on top.

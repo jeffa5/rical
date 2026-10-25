@@ -3,7 +3,11 @@
 # pointer, and save screenshots. Nothing appears on the real desktop.
 #
 # Usage:
-#   scripts/screenshot.sh [--size WxH] [--bin PATH] OUTDIR STEP... -- RICAL_GTK_ARGS...
+#   RICAL_VDIR=DIR scripts/screenshot.sh [--size WxH] [--bin PATH] OUTDIR STEP... [-- FILE.ics...]
+#
+# rical-gtk takes its settings from the environment (RICAL_VIEW,
+# RICAL_DATE, RICAL_NO_NOTIFICATIONS=true...) or RICAL_CONFIG; arguments
+# after -- are files for it to open (import).
 #
 # Each STEP is "name:action"; the action runs, then a screenshot is saved to
 # OUTDIR/NN-name.png. Actions:

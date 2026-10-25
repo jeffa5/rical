@@ -4,6 +4,7 @@ pub mod doc;
 pub mod event;
 pub mod files;
 pub mod ics;
+pub mod import;
 pub mod input;
 pub mod occurrence;
 pub mod people;

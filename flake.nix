@@ -124,6 +124,11 @@
           };
           description = "Settings for ~/.config/rical/config: any rical-gtk flag by its long name.";
         };
+        openCalendarFiles = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = "Make rical-gtk the default for .ics files (text/calendar), so mail clients open invitations in it.";
+        };
         extraConfig = lib.mkOption {
           type = lib.types.lines;
           default = "";
@@ -168,6 +173,10 @@
             Restart = "on-failure";
           };
           Install.WantedBy = ["graphical-session.target"];
+        };
+        xdg.mimeApps.defaultApplications = lib.mkIf cfg.openCalendarFiles {
+          "text/calendar" = ["net.jeffas.Rical.desktop"];
+          "application/ics" = ["net.jeffas.Rical.desktop"];
         };
         xdg.configFile."rical/binds.conf" = lib.mkIf (cfg.binds != "") {
           text = cfg.binds;

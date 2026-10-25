@@ -80,7 +80,7 @@ impl Window {
 
     /// Run an edit, record it for undo and report failure. Returns whether
     /// it worked.
-    fn perform(
+    pub(super) fn perform(
         self: &Rc<Self>,
         what: &str,
         f: impl FnOnce(&mut Vdir) -> anyhow::Result<Vec<Change>>,
@@ -106,7 +106,7 @@ impl Window {
     }
 
     /// Select the occurrence of `uid` starting at `start`, if visible.
-    fn reselect(&self, uid: &str, start: &When) {
+    pub(super) fn reselect(&self, uid: &str, start: &When) {
         {
             let mut s = self.state.borrow_mut();
             s.selected = s.find(uid, start).map(|o| OccurrenceKey::of(&o));

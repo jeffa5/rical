@@ -14,6 +14,8 @@ use chrono::{Days, Utc};
 use gtk::{gio, glib};
 use log::{info, warn};
 
+#[path = "importer.rs"]
+mod importer;
 #[path = "notify.rs"]
 mod notify;
 #[path = "ops.rs"]
