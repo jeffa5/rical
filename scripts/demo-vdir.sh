@@ -65,4 +65,18 @@ task personal books "Return library books" STATUS:NEEDS-ACTION
 task personal gift "Buy a present for Jo" STATUS:NEEDS-ACTION
 task work laptop "Set up new laptop" "DUE;VALUE=DATE:$(ago 2)" STATUS:COMPLETED \
   "COMPLETED:$(ago 2)T160000Z" PERCENT-COMPLETE:100
+task work okrs-input "Collect team input" RELATED-TO\;RELTYPE=PARENT:okrs STATUS:COMPLETED \
+  "COMPLETED:$(ago 1)T120000Z"
+task work okrs-draft "Draft goals" RELATED-TO\;RELTYPE=PARENT:okrs "DUE;VALUE=DATE:$(ahead 5)" \
+  STATUS:NEEDS-ACTION
+
+# in another time zone, and an invitation waiting for a reply
+item work BEGIN:VEVENT UID:sg-call DTSTAMP:20250101T000000Z \
+  "DTSTART;TZID=Asia/Singapore:$(day 3)T170000" "DTEND;TZID=Asia/Singapore:$(day 3)T180000" \
+  "SUMMARY:Call with Singapore office" END:VEVENT
+item work BEGIN:VEVENT UID:offsite DTSTAMP:20250101T000000Z \
+  "DTSTART;TZID=$tz:$(day 4)T090000" "DTEND;TZID=$tz:$(day 4)T113000" "SUMMARY:Roadmap offsite" \
+  "ORGANIZER;CN=Priya Shah:mailto:priya@example.com" \
+  "ATTENDEE;CN=Demo User;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:me@example.com" \
+  "ATTENDEE;CN=Sam Lee;PARTSTAT=ACCEPTED:mailto:sam@example.com" END:VEVENT
 echo "$out"

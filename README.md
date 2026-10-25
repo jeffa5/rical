@@ -10,6 +10,16 @@ changes made on disk while it runs.
 - `rical`: a CLI for listing, adding, completing and editing items, plus
   `rical remind` for desktop notifications.
 
+![Week view, with Singapore time beside the hours](docs/week.png)
+
+| Month | Tasks |
+|---|---|
+| ![Month view](docs/month.png) | ![Tasks with subtasks](docs/tasks.png) |
+
+To try it without your own calendars, `scripts/demo-vdir.sh /tmp/demo`
+writes the made-up calendars shown here; then run
+`RICAL_VDIR=/tmp/demo rical-gtk`.
+
 ## Install
 
 ```sh
