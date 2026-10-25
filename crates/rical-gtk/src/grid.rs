@@ -591,6 +591,11 @@ impl TimeGrid {
         self.grid.grab_focus();
     }
 
+    /// How tall the visible part of the hours is; 0 before it has a size.
+    pub fn page_height(&self) -> f64 {
+        self.scroller.vadjustment().page_size()
+    }
+
     /// Scroll so `minutes` past midnight is a third of the way down.
     pub fn scroll_to_minutes(&self, minutes: f64) {
         let adj = self.scroller.vadjustment();
@@ -802,7 +807,7 @@ impl TimeGrid {
                 continue;
             }
             let selected = state.selected.as_ref().is_some_and(|k| k.matches(o));
-            draw_block(area, cr, &pal, o, &state, x, y, w, h, selected, true);
+            draw_block(area, cr, &pal, o, &state, x, y, w, h, h, selected, true);
             hits.push(Hit {
                 x,
                 y,
@@ -918,7 +923,8 @@ impl TimeGrid {
         for (i, day) in days.iter().enumerate() {
             let x0 = g + i as f64 * col_w;
             let inner = col_w - 6.0;
-            for seg in layout::day_segments(&occ, *day, state.local, MIN_EVENT_MINUTES) {
+            let segs = layout::day_segments(&occ, *day, state.local, MIN_EVENT_MINUTES);
+            for seg in &segs {
                 let o = &occ[seg.index];
                 // drawn over earlier ones: set in so theirs still shows,
                 // but never narrower than half the column
@@ -928,6 +934,14 @@ impl TimeGrid {
                 let x = x0 + 2.0 + indent + seg.column as f64 * w;
                 let y = seg.start_min / 60.0 * HOUR_HEIGHT + 1.0;
                 let h = (seg.end_min - seg.start_min) / 60.0 * HOUR_HEIGHT - 2.0;
+                // its text keeps above any event drawn over it
+                let covered = segs
+                    .iter()
+                    .filter(|s| s.indent > seg.indent && s.start_min > seg.start_min)
+                    .filter(|s| s.start_min < seg.end_min)
+                    .map(|s| s.start_min)
+                    .fold(seg.end_min, f64::min);
+                let text_h = (covered - seg.start_min) / 60.0 * HOUR_HEIGHT - 2.0;
                 if self.is_dragging(o) {
                     continue;
                 }
@@ -938,7 +952,20 @@ impl TimeGrid {
                     let _ = cr.fill();
                 }
                 let selected = state.selected.as_ref().is_some_and(|k| k.matches(o));
-                draw_block(area, cr, &pal, o, &state, x, y, w - 2.0, h, selected, false);
+                draw_block(
+                    area,
+                    cr,
+                    &pal,
+                    o,
+                    &state,
+                    x,
+                    y,
+                    w - 2.0,
+                    h,
+                    text_h,
+                    selected,
+                    false,
+                );
                 hits.push(Hit {
                     x,
                     y,
@@ -1023,6 +1050,8 @@ fn draw_block(
     y: f64,
     w: f64,
     h: f64,
+    // how much of it shows, from the top, where others are drawn over it
+    text_h: f64,
     selected: bool,
     compact: bool,
 ) {
@@ -1095,7 +1124,7 @@ fn draw_block(
         circle(cr, y + h / 2.0);
     } else {
         // short or narrow blocks: one ellipsized line rather than wrapping
-        let one_line = h < 34.0;
+        let one_line = text_h < 34.0;
         // narrow blocks give every line to the title; the time is where
         // the block sits anyway
         let narrow = w < 100.0;
@@ -1103,12 +1132,12 @@ fn draw_block(
         if one_line {
             let l = draw::layout(area, &format!("{title}  {time}"), &style, tw, 1);
             text_color(cr, 1.0);
-            let ty = y + ((h - draw::layout_height(&l)) / 2.0).max(0.0);
+            let ty = y + ((text_h.min(h) - draw::layout_height(&l)) / 2.0).max(0.0);
             draw::show_layout(cr, &l, tx, ty);
             circle(cr, ty + draw::layout_height(&l) / 2.0);
         } else {
             let line_h = draw::layout_height(&draw::layout(area, "X", &style, tw, 1));
-            let lines = ((h - 4.0) / line_h) as i32;
+            let lines = ((text_h - 4.0) / line_h) as i32;
             let max_title_lines = if narrow { lines } else { lines - 1 }.max(1);
             let l = draw::layout(area, &title, &style, tw, max_title_lines);
             text_color(cr, 1.0);
@@ -1120,7 +1149,7 @@ fn draw_block(
                 sub = format!("{sub} · {loc}");
             }
             let s = draw::layout(area, &sub, &TextStyle::SMALL, tw, 1);
-            if !narrow && used + draw::layout_height(&s) + 4.0 <= h {
+            if !narrow && used + draw::layout_height(&s) + 4.0 <= text_h {
                 text_color(cr, 0.8);
                 draw::show_layout(cr, &s, tx, y + 3.0 + used);
             }
@@ -1150,7 +1179,7 @@ fn draw_ghost(
     compact: bool,
 ) {
     cr.push_group();
-    draw_block(area, cr, pal, o, state, x, y, w, h, true, compact);
+    draw_block(area, cr, pal, o, state, x, y, w, h, h, true, compact);
     let _ = cr.pop_group_to_source();
     let _ = cr.paint_with_alpha(0.85);
     pal.fg(cr, 0.9);

@@ -603,7 +603,11 @@ impl Window {
             self.calendar_list.remove(&row);
         }
         let state = self.state.borrow();
-        let mut css = String::new();
+        // the menu of each calendar shows on hover or focus, not as a column
+        // of icons
+        let mut css = String::from(
+            "row:not(:hover):not(:focus-within) .calendar-more > button:not(:checked) { opacity: 0; }\n",
+        );
         for (i, cal) in state.vdir.calendars.iter().enumerate() {
             let check = gtk::CheckButton::builder()
                 .active(!state.hidden.contains(&cal.id))
@@ -654,10 +658,10 @@ impl Window {
                     .build(),
             );
             let info = gtk::MenuButton::builder()
-                .icon_name("dialog-information-symbolic")
+                .icon_name("view-more-symbolic")
                 .tooltip_text("About this calendar")
                 .valign(gtk::Align::Center)
-                .css_classes(["flat", "circular", "dim-label"])
+                .css_classes(["flat", "circular", "dim-label", "calendar-more"])
                 .popover(&calendar_info(cal, &state))
                 .build();
             line.append(&info);
@@ -766,11 +770,18 @@ impl Window {
                 // after allocation, so the scroller knows its size
                 let grid = self.grid.clone();
                 let has_selection = self.state.borrow().selected.is_some();
-                glib::timeout_add_local_once(Duration::from_millis(50), move || {
+                // (at startup that can take a while: wait for a size)
+                let mut tries = 0;
+                glib::timeout_add_local(Duration::from_millis(50), move || {
+                    tries += 1;
+                    if grid.page_height() <= 0.0 && tries < 40 {
+                        return glib::ControlFlow::Continue;
+                    }
                     grid.scroll_to_now_or_morning();
                     if has_selection {
                         grid.reveal_selected();
                     }
+                    glib::ControlFlow::Break
                 });
             }
         }

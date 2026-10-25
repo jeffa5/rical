@@ -380,7 +380,11 @@ impl Registry {
         let candidates = if before.is_empty() {
             let mut c = self
                 .active(ctx)
-                .flat_map(|s| s.names().map(move |n| (n, s)))
+                // aliases only once something is typed that they may match
+                .flat_map(|s| {
+                    let names = if current.is_empty() { 1 } else { usize::MAX };
+                    s.names().take(names).map(move |n| (n, s))
+                })
                 .map(|(n, s)| Candidate {
                     value: n.to_owned(),
                     help: s.help.to_owned(),
@@ -388,8 +392,24 @@ impl Registry {
                 })
                 .collect::<Vec<_>>();
             c.sort_by(|a, b| a.value.cmp(&b.value));
-            // best match first, by name (alphabetical while nothing typed)
-            fuzzy(c, &current, |c| c.value.clone())
+            // best match first, by name (alphabetical while nothing typed),
+            // each command once, under its own name if that matched too
+            let matched = fuzzy(c, &current, |c| c.value.clone());
+            let mut seen = std::collections::HashSet::new();
+            let mut out = Vec::new();
+            for c in &matched {
+                let key = (c.help.clone(), c.usage.clone());
+                if !seen.insert(key) {
+                    continue;
+                }
+                let own = self
+                    .active(ctx)
+                    .find(|s| s.help == c.help)
+                    .map(|s| s.name)
+                    .and_then(|name| matched.iter().find(|m| m.value == name && m.help == c.help));
+                out.push(own.unwrap_or(c).clone());
+            }
+            out
         } else {
             match self.resolve(&before[0], ctx) {
                 Ok(spec) => complete_args(spec, &before[1..], &current, values),
@@ -727,8 +747,11 @@ mod tests {
         assert_eq!(names(&r.complete(":to", ALL, &V)), ["today", "toggle"]);
         assert_eq!(
             names(&r.complete("", MONTH, &V)),
-            ["new", "today", "toggle", "under", "v", "view"]
+            // each command once, by its own name ("v" is an alias of view)
+            ["new", "today", "toggle", "under", "view"]
         );
+        // typing an alias offers the command under its own name
+        assert_eq!(names(&r.complete(":v", MONTH, &V))[0], "view");
         let c = r.complete(":vi", ALL, &V);
         assert_eq!(c.apply(":vi", &c.candidates[0]), ":view ");
     }

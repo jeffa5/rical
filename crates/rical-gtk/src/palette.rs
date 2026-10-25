@@ -182,28 +182,28 @@ impl Palette {
                     .label(&c.value)
                     .css_classes(["monospace"])
                     .xalign(0.0)
+                    // help lines up after the names
+                    .width_chars(11)
                     .build(),
             );
-            let detail = if c.usage.is_empty() {
-                c.help.clone()
-            } else {
-                format!("{} — {}", c.help, c.usage)
-            };
             b.append(
                 &gtk::Label::builder()
-                    .label(&detail)
-                    .css_classes(["dim-label", "caption"])
-                    .xalign(1.0)
+                    .label(&c.help)
+                    .css_classes(["dim-label"])
+                    .xalign(0.0)
                     .hexpand(true)
-                    .ellipsize(gtk::pango::EllipsizeMode::Middle)
+                    .ellipsize(gtk::pango::EllipsizeMode::End)
                     .build(),
             );
-            self.list.append(
-                &gtk::ListBoxRow::builder()
-                    .child(&b)
-                    .focusable(false)
-                    .build(),
-            );
+            // how to call it, on hover: too long to read in a row
+            let row = gtk::ListBoxRow::builder()
+                .child(&b)
+                .focusable(false)
+                .build();
+            if !c.usage.is_empty() && c.usage != c.value {
+                row.set_tooltip_text(Some(&c.usage));
+            }
+            self.list.append(&row);
         }
         self.list
             .parent()

@@ -302,7 +302,7 @@ pub fn day_segments(
         let running = |g: &Group| g.column_ends.iter().any(|&e| e > start);
         let joined = groups
             .iter()
-            .rposition(|g| running(g) && start - g.start <= SIDE_BY_SIDE_MIN);
+            .rposition(|g| running(g) && start - g.start < SIDE_BY_SIDE_MIN);
         let gi = joined.unwrap_or_else(|| {
             let indent = groups
                 .iter()
@@ -340,7 +340,7 @@ pub fn day_segments(
     segs
 }
 
-/// Occurrences starting at most this far apart sit side by side; a later
+/// Occurrences starting less than this far apart sit side by side; a later
 /// one is drawn over them instead, leaving their titles showing.
 const SIDE_BY_SIDE_MIN: f64 = 30.0;
 
@@ -552,11 +552,11 @@ mod tests {
             let s = by_index(i);
             (s.column, s.columns, s.indent)
         };
-        // 9:00 and 9:30 start close enough to sit side by side
-        assert_eq!(place(0), (0, 2, 0));
-        assert_eq!(place(1), (1, 2, 0));
-        // 10:00 starts later than 9:30's group: drawn over it
-        assert_eq!(place(2), (0, 1, 1));
+        // 9:30 starts half an hour on: drawn over 9:00, whose title shows
+        assert_eq!(place(0), (0, 1, 0));
+        assert_eq!(place(1), (0, 1, 1));
+        // 10:00, as 9:00 ends: over 9:30 only
+        assert_eq!(place(2), (0, 1, 2));
         // the afternoon one is alone
         assert_eq!(place(3), (0, 1, 0));
         assert_eq!(by_index(3).start_min, 14.0 * 60.0);

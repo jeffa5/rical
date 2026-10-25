@@ -234,35 +234,61 @@ impl AgendaView {
             .margin_start(6)
             .margin_end(6)
             .build();
-        let when = if layout::is_all_day_row(o) {
-            "all day".to_owned()
-        } else {
-            format::time(&o.start, state.local)
-        };
-        b.append(
+        // the times on the left, start over end; the day is the heading's
+        let local = state.local;
+        let day = o.start.date(local);
+        let all_day = layout::is_all_day_row(o);
+        let times = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .valign(gtk::Align::Center)
+            .build();
+        times.append(
             &gtk::Label::builder()
-                .label(&when)
+                .label(if all_day {
+                    "all day".to_owned()
+                } else {
+                    format::time(&o.start, local)
+                })
                 .width_chars(7)
                 .xalign(0.0)
                 .css_classes(["numeric", "dim-label"])
                 .build(),
         );
+        if !all_day && o.end != o.start {
+            let end = if o.end.date(local) == day {
+                format::time(&o.end, local)
+            } else {
+                format!("→ {}", o.end.to_tz(local).format("%a"))
+            };
+            times.append(
+                &gtk::Label::builder()
+                    .label(&end)
+                    .xalign(0.0)
+                    .css_classes(["numeric", "dim-label", "caption"])
+                    .build(),
+            );
+        }
+        b.append(&times);
+        // tasks' checks in a column of their own, so titles line up
         if o.kind == Kind::Todo {
             let id = (o.path.clone(), o.uid.clone());
             let toggle = self.on_toggle.clone();
-            let check = format::task_check(
+            b.append(&format::task_check(
                 format::is_done(o),
                 Some(Box::new(move |done| toggle(id.clone(), done))),
-            );
-            b.append(&check);
-            b.append(&format::color_dot(state.display_color(o), 10));
+            ));
         } else {
-            b.append(&format::color_dot(state.display_color(o), 10));
+            b.append(&gtk::Box::builder().width_request(18).build());
         }
+        b.append(&format::color_dot(state.display_color(o), 10));
 
-        let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        let text = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(2)
+            .valign(gtk::Align::Center)
+            .build();
         let title = match o.kind {
-            Kind::Todo | Kind::Journal => format::label(o, state.local),
+            Kind::Todo | Kind::Journal => format::label(o, local),
             _ => o.summary.clone(),
         };
         let title = gtk::Label::builder()
@@ -274,16 +300,25 @@ impl AgendaView {
             title.add_css_class("dim-label");
         }
         text.append(&title);
-        let mut sub = format::time_range(o, state.local);
-        if let Some(loc) = o.location.as_deref().filter(|l| !l.is_empty()) {
-            sub = format!("{sub} · {loc}");
+        // what the heading and times do not say: how long it runs on for,
+        // where, or that it is overdue
+        let mut sub = Vec::new();
+        if all_day {
+            let last = o.end.date(local).pred_opt().unwrap_or(day);
+            if last > day {
+                sub.push(format!("until {}", format::day(last)));
+            }
         }
-        let overdue = format::is_overdue(o, state.local);
+        if let Some(loc) = o.location.as_deref().filter(|l| !l.is_empty()) {
+            sub.push(loc.to_owned());
+        }
+        let overdue = format::is_overdue(o, local);
         if overdue && let Some(due) = o.due {
-            sub = format!("overdue, was due {}", format::day(due.date(state.local)));
+            sub = vec![format!("overdue, was due {}", format::day(due.date(local)))];
         }
         let sub = gtk::Label::builder()
-            .label(&sub)
+            .label(sub.join(" · "))
+            .visible(!sub.is_empty())
             .xalign(0.0)
             .ellipsize(gtk::pango::EllipsizeMode::End)
             .css_classes(["caption", if overdue { "error" } else { "dim-label" }])

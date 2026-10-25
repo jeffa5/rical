@@ -125,9 +125,19 @@ pub fn layout(
     layout.set_attributes(Some(&attrs));
     layout.set_width((width.max(1.0) * pango::SCALE as f64) as i32);
     layout.set_ellipsize(pango::EllipsizeMode::End);
-    layout.set_wrap(pango::WrapMode::WordChar);
+    // whole words per line; a word too long for the width is ellipsized
+    // rather than broken with hyphens ("Road-ma-p")
+    layout.set_wrap(pango::WrapMode::Word);
+    // a word wider than the block would be cut off: one ellipsized line
+    // reads better than broken words
+    let width_px = width.max(1.0) as i32;
+    let fits = text.split_whitespace().all(|word| {
+        layout.set_text(word);
+        layout.pixel_size().0 <= width_px
+    });
+    layout.set_text(text);
     // negative height limits the number of lines
-    layout.set_height(-max_lines.max(1));
+    layout.set_height(-if fits { max_lines.max(1) } else { 1 });
     layout
 }
 
