@@ -161,10 +161,13 @@ impl Vdir {
 
     /// Whether `uid` is `ancestor` or one of its subtasks (at any depth):
     /// such a task cannot become `ancestor`'s parent without a loop.
-    pub fn is_within(&self, uid: &str, ancestor: &str) -> bool {
+    /// Within `calendar`: subtasks and their parents share one, and a UID
+    /// may be in another calendar too.
+    pub fn is_within(&self, calendar: &str, uid: &str, ancestor: &str) -> bool {
         let parents = self
             .tasks()
             .into_iter()
+            .filter(|t| t.calendar == calendar)
             .map(|t| (t.uid, t.parent))
             .collect::<std::collections::HashMap<_, _>>();
         let mut at = Some(uid.to_owned());

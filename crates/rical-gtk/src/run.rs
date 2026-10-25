@@ -186,9 +186,13 @@ impl Window {
                 let parent = if text.eq_ignore_ascii_case("none") {
                     None
                 } else {
-                    // the open task with that title, or the only one it is part of
+                    // the open task with that title, or the only one it is
+                    // part of, in the same calendar (subtasks never cross)
+                    let calendar = self.selected_task().ok_or("select a task first")?.calendar;
                     let tasks = self.state.borrow().vdir.tasks();
-                    let open = tasks.iter().filter(|t| !t.is_done());
+                    let open = tasks
+                        .iter()
+                        .filter(|t| !t.is_done() && t.calendar == calendar);
                     let exact = open
                         .clone()
                         .filter(|t| t.summary.eq_ignore_ascii_case(text))
@@ -199,7 +203,9 @@ impl Window {
                         .collect::<Vec<_>>();
                     match (exact.as_slice(), partial.as_slice()) {
                         ([one], _) | ([], [one]) => Some(one.uid.clone()),
-                        ([], []) => return Err(format!("no open task called “{text}”")),
+                        ([], []) => {
+                            return Err(format!("no open task called “{text}” in this calendar"));
+                        }
                         _ => return Err(format!("more than one task matches “{text}”")),
                     }
                 };

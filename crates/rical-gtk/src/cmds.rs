@@ -452,22 +452,33 @@ impl Values for StateValues<'_> {
                 })
                 .collect(),
             // open tasks by title, for :subtask-of
-            "task" => std::iter::once(("none".to_owned(), "a task of its own".to_owned()))
-                .chain(
-                    self.0
-                        .vdir
-                        .tasks()
-                        .into_iter()
-                        .filter(|t| !t.is_done() && !t.summary.is_empty())
-                        .map(|t| {
-                            let cal = self
-                                .0
-                                .calendar(&t.calendar)
-                                .map_or(t.calendar, |c| c.name.clone());
-                            (t.summary, cal)
-                        }),
-                )
-                .collect(),
+            // open tasks in the selected task's calendar (subtasks never
+            // cross calendars), but not itself
+            "task" => {
+                let me = self.0.selected_task_id();
+                let calendar = me
+                    .as_ref()
+                    .and_then(|(path, uid)| self.0.vdir.task(path, uid))
+                    .map(|t| t.calendar);
+                std::iter::once(("none".to_owned(), "a task of its own".to_owned()))
+                    .chain(
+                        self.0
+                            .vdir
+                            .tasks()
+                            .into_iter()
+                            .filter(|t| !t.is_done() && !t.summary.is_empty())
+                            .filter(|t| calendar.as_ref().is_none_or(|c| *c == t.calendar))
+                            .filter(|t| me.as_ref().is_none_or(|(_, uid)| *uid != t.uid))
+                            .map(|t| {
+                                let cal = self
+                                    .0
+                                    .calendar(&t.calendar)
+                                    .map_or(t.calendar, |c| c.name.clone());
+                                (t.summary, cal)
+                            }),
+                    )
+                    .collect()
+            }
             // the guests of the selected event
             "invited" => self
                 .0

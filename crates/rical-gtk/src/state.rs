@@ -203,6 +203,17 @@ impl State {
         Some(Invite { from, reply })
     }
 
+    /// The task meant now, as (file, UID): selected in the tasks view, or
+    /// a selected task occurrence elsewhere.
+    pub fn selected_task_id(&self) -> Option<(std::path::PathBuf, String)> {
+        if self.view == ViewKind::Tasks {
+            return self.selected_task.clone();
+        }
+        self.selected_occurrence()
+            .filter(|o| o.kind == Kind::Todo)
+            .map(|o| (o.path, o.uid))
+    }
+
     /// Me as the organiser of events in `calendar`. Best is the address
     /// its server has sent invitations as before, as a scheduling server
     /// only sends for that one; then one of mine seen on its invitations;

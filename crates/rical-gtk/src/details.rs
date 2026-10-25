@@ -91,11 +91,11 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
     // where it sits among tasks: its parent, and how its subtasks are going
     if occ.kind == Kind::Todo {
         let tasks = state.vdir.tasks();
-        if let Some(parent) = occ
-            .parent
-            .as_ref()
-            .and_then(|p| tasks.iter().find(|t| t.uid == *p))
-        {
+        if let Some(parent) = occ.parent.as_ref().and_then(|p| {
+            tasks
+                .iter()
+                .find(|t| t.uid == *p && t.calendar == occ.calendar)
+        }) {
             // a link up to it
             let up = gtk::Button::builder()
                 .child(&row(
@@ -112,7 +112,7 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
         }
         let kids = tasks
             .iter()
-            .filter(|t| t.parent.as_deref() == Some(occ.uid.as_str()))
+            .filter(|t| t.calendar == occ.calendar && t.parent.as_deref() == Some(occ.uid.as_str()))
             .collect::<Vec<_>>();
         if !kids.is_empty() {
             let done = kids.iter().filter(|k| k.is_done()).count();

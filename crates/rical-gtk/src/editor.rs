@@ -161,9 +161,9 @@ pub fn open(
         .active(draft.done == Some(true))
         .visible(!options.is_new)
         .build();
-    // which task it is a subtask of: any open task but itself and its own
-    // subtasks, searchable by title
-    let parents = {
+    // which task it is a subtask of: an open task in the same calendar
+    // (subtasks never cross calendars), but not itself or its own subtasks
+    let candidates = {
         let s = state.borrow();
         let mut tasks = s
             .vdir
@@ -177,24 +177,15 @@ pub fn open(
                 options
                     .uid
                     .as_ref()
-                    .is_none_or(|me| !s.vdir.is_within(&t.uid, me))
+                    .is_none_or(|me| !s.vdir.is_within(&t.calendar, &t.uid, me))
             })
-            .map(|t| {
-                let cal = s
-                    .calendar(&t.calendar)
-                    .map_or(t.calendar, |c| c.name.clone());
-                (t.uid, format!("{} · {cal}", t.summary))
-            })
+            .map(|t| (t.uid, t.calendar, t.summary))
             .collect::<Vec<_>>();
-        tasks.sort_by_key(|t| t.1.to_lowercase());
+        tasks.sort_by_key(|t| t.2.to_lowercase());
         tasks
     };
-    let parent_labels = std::iter::once("None (a task of its own)")
-        .chain(parents.iter().map(|(_, l)| l.as_str()))
-        .collect::<Vec<_>>();
     let parent_row = adw::ComboRow::builder()
         .title("Subtask of")
-        .model(&gtk::StringList::new(&parent_labels))
         .enable_search(true)
         .search_match_mode(gtk::StringFilterMatchMode::Substring)
         .expression(gtk::PropertyExpression::new(
@@ -202,14 +193,45 @@ pub fn open(
             None::<gtk::Expression>,
             "string",
         ))
-        .selected(
-            draft
-                .parent
-                .as_ref()
-                .and_then(|p| parents.iter().position(|(uid, _)| uid == p))
-                .map_or(0, |i| i as u32 + 1),
-        )
         .build();
+    // the choices for a calendar, keeping `keep` chosen if it is there
+    let parents: Rc<std::cell::RefCell<Vec<String>>> = Default::default();
+    let fill = {
+        let (parent_row, parents) = (parent_row.clone(), parents.clone());
+        move |calendar: &str, keep: Option<&str>| {
+            let here = candidates
+                .iter()
+                .filter(|(_, cal, _)| cal == calendar)
+                .collect::<Vec<_>>();
+            let labels = std::iter::once("None (a task of its own)")
+                .chain(here.iter().map(|(_, _, s)| s.as_str()))
+                .collect::<Vec<_>>();
+            parent_row.set_model(Some(&gtk::StringList::new(&labels)));
+            *parents.borrow_mut() = here.iter().map(|(uid, _, _)| uid.clone()).collect();
+            let at = keep.and_then(|k| here.iter().position(|(uid, _, _)| uid == k));
+            parent_row.set_selected(at.map_or(0, |i| i as u32 + 1));
+        }
+    };
+    let fill = Rc::new(fill);
+    fill(&options.calendar, draft.parent.as_deref());
+    {
+        // another calendar: only its tasks can be the parent
+        let (fill, parents, parent_row, calendars) = (
+            fill.clone(),
+            parents.clone(),
+            parent_row.clone(),
+            calendars.clone(),
+        );
+        calendar.connect_selected_notify(move |c| {
+            let keep = match parent_row.selected() {
+                0 => None,
+                i => parents.borrow().get(i as usize - 1).cloned(),
+            };
+            if let Some((id, _)) = calendars.get(c.selected() as usize) {
+                fill(id, keep.as_deref());
+            }
+        });
+    }
     let task_group = adw::PreferencesGroup::builder().visible(task).build();
     task_group.add(&priority);
     task_group.add(&done);
@@ -495,7 +517,7 @@ pub fn open(
                 done: (task && done.is_visible()).then(|| done.is_active()),
                 parent: match parent_row.selected() {
                     0 => None,
-                    i => parents.get(i as usize - 1).map(|(uid, _)| uid.clone()),
+                    i => parents.borrow().get(i as usize - 1).cloned(),
                 },
             };
             dialog.close();

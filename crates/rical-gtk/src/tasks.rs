@@ -145,20 +145,23 @@ impl TasksView {
 
         // subtasks are listed under their parent, unless the parent is done
         // and they are not (they would be lost in Done)
-        let open_uids = tasks
+        // tasks are known by (calendar, UID): the same UID can be in two
+        // calendars (two accounts syncing the same items), and a subtask's
+        // parent is in its own calendar
+        let key = |t: &Task| (t.calendar.clone(), t.uid.clone());
+        let open = tasks
             .iter()
             .filter(|t| !t.is_done())
-            .map(|t| t.uid.clone())
+            .map(key)
             .collect::<HashSet<_>>();
-        let all_uids = tasks.iter().map(|t| t.uid.clone()).collect::<HashSet<_>>();
-        let mut children: HashMap<String, Vec<Task>> = HashMap::new();
+        let all = tasks.iter().map(key).collect::<HashSet<_>>();
+        let mut children: HashMap<(String, String), Vec<Task>> = HashMap::new();
         let mut top = Vec::new();
         for t in tasks {
-            match t.parent.clone() {
+            let parent = t.parent.clone().map(|p| (t.calendar.clone(), p));
+            match parent {
                 Some(p)
-                    if p != t.uid
-                        && all_uids.contains(&p)
-                        && (open_uids.contains(&p) || t.is_done()) =>
+                    if p.1 != t.uid && all.contains(&p) && (open.contains(&p) || t.is_done()) =>
                 {
                     children.entry(p).or_default().push(t);
                 }
@@ -210,10 +213,10 @@ impl TasksView {
             let mut stack = tasks.iter().rev().map(|t| (t, 0)).collect::<Vec<_>>();
             let mut seen = HashSet::new();
             while let Some((t, depth)) = stack.pop() {
-                if !seen.insert(t.uid.clone()) {
+                if !seen.insert(key(t)) {
                     continue; // a loop of parents
                 }
-                let kids = children.get(&t.uid).map(Vec::as_slice).unwrap_or_default();
+                let kids = children.get(&key(t)).map(Vec::as_slice).unwrap_or_default();
                 let progress = (!kids.is_empty())
                     .then(|| (kids.iter().filter(|k| k.is_done()).count(), kids.len()));
                 let row = self.row(t, today, &state, depth, progress);

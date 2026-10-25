@@ -1050,8 +1050,8 @@ fn changing_a_tasks_parent() {
         .uid;
     let taxi_task = vdir.tasks().into_iter().find(|t| t.path == taxi).unwrap();
     // a loop is refused before it is written: pack is not within taxi
-    assert!(vdir.is_within(&taxi_task.uid, "pack"));
-    assert!(!vdir.is_within("pack", &taxi_task.uid));
+    assert!(vdir.is_within("home", &taxi_task.uid, "pack"));
+    assert!(!vdir.is_within("home", "pack", &taxi_task.uid));
 
     // move the taxi under "Trip admin" through an edit draft
     let occ = rical_core::Occurrence {

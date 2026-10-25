@@ -108,20 +108,22 @@ impl SideTasks {
         let state = self.state.borrow();
         // subtasks under their parent when it is listed too; otherwise
         // marked as a subtask, with the parent named on hover
+        // tasks are known by (calendar, UID): a UID can be in two calendars,
+        // and a subtask's parent is in its own
         let titles = state
             .vdir
             .tasks()
             .into_iter()
-            .map(|t| (t.uid, t.summary))
+            .map(|t| ((t.calendar, t.uid), t.summary))
             .collect::<std::collections::HashMap<_, _>>();
         let listed = tasks
             .iter()
-            .map(|t| t.uid.as_str())
+            .map(|t| (t.calendar.as_str(), t.uid.as_str()))
             .collect::<std::collections::HashSet<_>>();
         let nested = |t: &Task| {
             t.parent
                 .as_deref()
-                .is_some_and(|p| listed.contains(p) && p != t.uid)
+                .is_some_and(|p| p != t.uid && listed.contains(&(t.calendar.as_str(), p)))
         };
         let mut order = Vec::new();
         let mut stack = tasks
@@ -132,13 +134,13 @@ impl SideTasks {
             .collect::<Vec<_>>();
         let mut seen = std::collections::HashSet::new();
         while let Some((t, depth)) = stack.pop() {
-            if !seen.insert(t.uid.as_str()) {
+            if !seen.insert((t.calendar.as_str(), t.uid.as_str())) {
                 continue;
             }
             order.push((t, depth));
-            let kids = tasks
-                .iter()
-                .filter(|k| k.parent.as_deref() == Some(t.uid.as_str()) && nested(k));
+            let kids = tasks.iter().filter(|k| {
+                k.calendar == t.calendar && k.parent.as_deref() == Some(t.uid.as_str()) && nested(k)
+            });
             stack.extend(kids.rev().map(|k| (k, depth + 1)));
         }
         for (t, depth) in order.into_iter().take(SHOWN) {
@@ -171,7 +173,10 @@ impl SideTasks {
             let row = gtk::ListBoxRow::builder().child(&b).build();
             let mut tip = "Drag onto the calendar to schedule".to_owned();
             if depth == 0
-                && let Some(parent) = t.parent.as_ref().and_then(|p| titles.get(p))
+                && let Some(parent) = t
+                    .parent
+                    .as_ref()
+                    .and_then(|p| titles.get(&(t.calendar.clone(), p.clone())))
             {
                 // a subtask without its parent here
                 b.insert_child_after(

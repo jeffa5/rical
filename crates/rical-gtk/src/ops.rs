@@ -265,9 +265,24 @@ impl Window {
                 let save = {
                     let occ = occ.clone();
                     let was_done = original.done;
+                    let today = w.state.borrow().today();
                     move |w: &Rc<Self>, scope| {
                         if w.perform("save the event", |v| {
                             let mut changes = v.update(&occ, scope, &draft, Some(&calendar))?;
+                            // a task moved to another calendar takes its
+                            // subtasks along: they never cross calendars
+                            if occ.kind == Kind::Todo && calendar != occ.calendar {
+                                for t in descendants(v, &occ.calendar, &occ.uid) {
+                                    let o = task_occurrence(&t, today);
+                                    let d = v.draft(&o);
+                                    changes.extend(v.update(
+                                        &o,
+                                        Scope::All,
+                                        &d,
+                                        Some(&calendar),
+                                    )?);
+                                }
+                            }
                             // done or not through set_done, so a repeating
                             // task moves on to its next date instead
                             if let Some(done) = draft.done
@@ -522,14 +537,14 @@ impl Window {
 
     /// Show and select the task `uid`: on the calendar at its date if it
     /// has one and can be seen there, otherwise in the tasks view.
-    pub(super) fn go_to_task(self: &Rc<Self>, uid: &str) -> Result<(), String> {
+    pub(super) fn go_to_task(self: &Rc<Self>, calendar: &str, uid: &str) -> Result<(), String> {
         let task = self
             .state
             .borrow()
             .vdir
             .tasks()
             .into_iter()
-            .find(|t| t.uid == uid)
+            .find(|t| t.uid == uid && t.calendar == calendar)
             .ok_or("that task is not in your calendars")?;
         let view = self.state.borrow().view;
         if view != ViewKind::Tasks
@@ -538,8 +553,17 @@ impl Window {
             let local = self.state.borrow().local;
             self.state.borrow_mut().date = when.date(local);
             self.refresh();
-            self.reselect(&task.uid, &when);
-            if self.state.borrow().selected.is_some() {
+            // this file's occurrence, not a copy of it in another calendar
+            let occ = {
+                let s = self.state.borrow();
+                s.visible_occurrences()
+                    .iter()
+                    .find(|o| o.path == task.path && o.uid == task.uid)
+                    .map(OccurrenceKey::of)
+            };
+            if let Some(key) = occ {
+                self.state.borrow_mut().selected = Some(key);
+                self.refresh();
                 return Ok(());
             }
         }
@@ -554,16 +578,27 @@ impl Window {
         let task = self.selected_task().ok_or("select a subtask first")?;
         let parent = task.parent.ok_or("it is not a subtask")?;
         crate::details::close();
-        self.go_to_task(&parent)
+        // its parent is in the same calendar
+        self.go_to_task(&task.calendar, &parent)
     }
 
     /// Make the selected task a subtask of `parent`, or a task of its own.
     pub(super) fn set_parent(self: &Rc<Self>, parent: Option<String>) -> Result<(), String> {
         let task = self.selected_task().ok_or("select a task first")?;
-        if let Some(p) = &parent
-            && self.state.borrow().vdir.is_within(p, &task.uid)
-        {
-            return Err("that is this task or one of its own subtasks".into());
+        if let Some(p) = &parent {
+            let state = self.state.borrow();
+            if state.vdir.is_within(&task.calendar, p, &task.uid) {
+                return Err("that is this task or one of its own subtasks".into());
+            }
+            // subtasks stay in their parent's calendar
+            if !state
+                .vdir
+                .tasks()
+                .iter()
+                .any(|t| t.uid == *p && t.calendar == task.calendar)
+            {
+                return Err("that task is not in this calendar".into());
+            }
         }
         let occ = task_occurrence(&task, self.state.borrow().today());
         let mut draft = self.state.borrow().vdir.draft(&occ);
@@ -661,6 +696,30 @@ impl Window {
             self.schedule(task_occurrence(&task, today), at, TimeDelta::hours(1));
         }
     }
+}
+
+/// The subtasks of `uid`, and theirs, at any depth (each once).
+fn descendants(v: &Vdir, calendar: &str, uid: &str) -> Vec<Task> {
+    // subtasks share their parent's calendar
+    let tasks = v
+        .tasks()
+        .into_iter()
+        .filter(|t| t.calendar == calendar)
+        .collect::<Vec<_>>();
+    let mut out: Vec<Task> = Vec::new();
+    let mut todo = vec![uid.to_owned()];
+    while let Some(parent) = todo.pop() {
+        for t in tasks
+            .iter()
+            .filter(|t| t.parent.as_deref() == Some(parent.as_str()))
+        {
+            if t.uid != uid && !out.iter().any(|o| o.uid == t.uid) {
+                todo.push(t.uid.clone());
+                out.push(t.clone());
+            }
+        }
+    }
+    out
 }
 
 /// A task as an occurrence for editing: on its dates, or today if undated.
