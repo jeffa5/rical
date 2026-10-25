@@ -534,24 +534,36 @@ impl Vdir {
     }
 
     /// Copy any VTIMEZONE definitions `doc` refers to but lacks from other
-    /// items in the vdir. TZIDs without one elsewhere are left as they are;
-    /// servers resolve IANA names themselves.
+    /// items in the vdir, or make one from the IANA database for a zone no
+    /// file has (strict servers want every TZID defined). Names that are
+    /// not IANA zones are left as they are.
     pub(crate) fn add_timezones(&self, doc: &mut Document) {
-        let mut tzids = Vec::new();
+        // each TZID with the earliest year it is used in
+        let mut tzids: Vec<(String, i32)> = Vec::new();
         for item in doc.items() {
             for line in item.lines() {
-                if let Some(tzid) = line.param("TZID")
-                    && !tzids.contains(&tzid)
-                {
-                    tzids.push(tzid);
+                let Some(tzid) = line.param("TZID") else {
+                    continue;
+                };
+                let year = line
+                    .value()
+                    .get(..4)
+                    .and_then(|y| y.parse::<i32>().ok())
+                    .unwrap_or(1970);
+                match tzids.iter_mut().find(|(t, _)| *t == tzid) {
+                    Some((_, y)) => *y = (*y).min(year),
+                    None => tzids.push((tzid, year)),
                 }
             }
         }
-        for tzid in tzids {
+        for (tzid, year) in tzids {
             if doc.has_timezone(&tzid) {
                 continue;
             }
-            if let Some(tz) = self.find_timezone(&tzid) {
+            if let Some(tz) = self
+                .find_timezone(&tzid)
+                .or_else(|| generated_timezone(&tzid, year))
+            {
                 doc.add_timezone(tz);
             }
         }
@@ -563,6 +575,15 @@ impl Vdir {
         let doc = Document::parse(&fs::read_to_string(path).ok()?).ok()?;
         doc.timezone(tzid).cloned()
     }
+}
+
+fn generated_timezone(tzid: &str, year: i32) -> Option<Component> {
+    let text = crate::vtimezone::generate(tzid, year.clamp(1900, 2200))?;
+    let doc = Document::parse(&format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n{text}END:VCALENDAR\r\n"
+    ))
+    .ok()?;
+    doc.timezone(tzid).cloned()
 }
 
 fn master_start_kind(master_start: &When, new: &When) -> When {

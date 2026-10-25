@@ -19,6 +19,7 @@ pub mod task;
 pub mod time;
 pub mod todo;
 pub mod vdir;
+pub mod vtimezone;
 pub mod when;
 pub mod write;
 

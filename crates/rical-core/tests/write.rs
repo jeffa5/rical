@@ -1293,3 +1293,41 @@ fn quick_add_writes_what_it_says() {
     assert!(all.iter().any(|o| o.summary == "Meet Priya"));
     assert!(all.iter().any(|o| o.summary == "Offsite" && o.all_day));
 }
+
+#[test]
+fn a_zone_no_file_defines_gets_a_generated_vtimezone() {
+    use chrono::NaiveDate;
+    use rical_core::quick;
+    let (dir, mut vdir) = setup(&[("home/meeting.ics", MEETING)]);
+    let today = NaiveDate::from_ymd_opt(2026, 10, 21).unwrap();
+    let q = quick::parse(
+        "Call Kenji 4 nov 9am Tokyo time",
+        today,
+        today,
+        SINGAPORE,
+        false,
+    );
+    let change = vdir
+        .create("work", &q.draft(false, When::Date(today)))
+        .unwrap();
+    let text = fs::read_to_string(&change.path).unwrap();
+    assert!(
+        text.contains("DTSTART;TZID=Asia/Tokyo:20261104T090000\r\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("BEGIN:VTIMEZONE\r\nTZID:Asia/Tokyo\r\nBEGIN:STANDARD\r\n"),
+        "{text}"
+    );
+    assert!(text.contains("TZOFFSETTO:+0900\r\n"), "{text}");
+    // the definition comes before the event, and the file still reads
+    assert!(text.find("BEGIN:VTIMEZONE") < text.find("BEGIN:VEVENT"));
+    let vdir = Vdir::load(dir.path()).unwrap();
+    let all = query(&vdir, range("2026-11-04 00:00", "2026-11-05 00:00"));
+    let call = all.iter().find(|o| o.summary == "Call Kenji").unwrap();
+    assert_eq!(
+        call.start.to_utc(SINGAPORE),
+        utc("2026-11-04 00:00"),
+        "{call:?}"
+    );
+}
