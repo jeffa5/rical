@@ -1,6 +1,11 @@
 //! Application state shared by the views.
 
-use std::{cell::RefCell, collections::BTreeSet, ops::Range, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::BTreeSet,
+    ops::Range,
+    rc::Rc,
+};
 
 use chrono::{DateTime, NaiveDate, Utc};
 use chrono_tz::Tz;
@@ -56,6 +61,8 @@ pub struct State {
     cache: RefCell<Option<Cache>>,
     /// Each calendar's colour, for a generation.
     colors: RefCell<(Option<u64>, Vec<Rgb>)>,
+    /// First day of the N-day view; see `visible_days`.
+    days_from: Cell<NaiveDate>,
 }
 
 struct Cache {
@@ -86,6 +93,7 @@ impl State {
             generation: 0,
             cache: RefCell::new(None),
             colors: RefCell::new((None, Vec::new())),
+            days_from: Cell::new(date),
         }
     }
 
@@ -123,8 +131,27 @@ impl State {
         })
     }
 
+    /// The days on screen. The N-day view keeps its first day while the
+    /// focused day stays among them, so selecting something on another
+    /// shown day does not scroll it; it starts afresh from a day outside.
     pub fn visible_days(&self) -> Vec<NaiveDate> {
-        layout::visible_days(self.view, self.date)
+        let ViewKind::Days(n) = self.view else {
+            return layout::visible_days(self.view, self.date);
+        };
+        let from = self.days_from.get();
+        let shown = self.date >= from && self.date < from + chrono::Days::new(n as u64);
+        let from = if shown { from } else { self.date };
+        self.days_from.set(from);
+        layout::visible_days(self.view, from)
+    }
+
+    /// Move a view-length forward or back.
+    pub fn step(&mut self, forward: bool) {
+        if let ViewKind::Days(_) = self.view {
+            let from = self.visible_days()[0];
+            self.days_from.set(layout::step(self.view, from, forward));
+        }
+        self.date = layout::step(self.view, self.date, forward);
     }
 
     /// Visible occurrences (events and tasks of shown calendars) in `days`.

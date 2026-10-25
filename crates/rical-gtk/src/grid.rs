@@ -218,6 +218,8 @@ impl TimeGrid {
         all_day: bool,
         on_change: Rc<dyn Fn()>,
     ) {
+        let h = hits.clone();
+        crate::details::edit_on_double_click(area, move |x, y| hit_at(&h.borrow(), x, y).is_some());
         let gesture = gtk::GestureDrag::new();
 
         let this = Rc::downgrade(self);

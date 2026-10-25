@@ -61,7 +61,7 @@ pub fn day(d: NaiveDate) -> String {
 }
 
 /// Header title and subtitle for the current view.
-pub fn view_title(view: ViewKind, date: NaiveDate) -> (String, String) {
+pub fn view_title(view: ViewKind, date: NaiveDate, days: &[NaiveDate]) -> (String, String) {
     let this_year = chrono::Utc::now().year();
     match view {
         ViewKind::Day => (
@@ -69,7 +69,6 @@ pub fn view_title(view: ViewKind, date: NaiveDate) -> (String, String) {
             date.format("%Y · week %V").to_string(),
         ),
         ViewKind::Week | ViewKind::WorkWeek | ViewKind::Days(_) => {
-            let days = layout::visible_days(view, date);
             let (start, end) = (days[0], *days.last().unwrap());
             // short enough for narrow windows: "19 – 25 Oct"
             let mut title = if start.month() == end.month() {

@@ -104,6 +104,12 @@ impl AgendaView {
                 details::show(row, rect, &occ, &state);
             }
         });
+        let list = this.list.downgrade();
+        details::edit_on_double_click(&this.list, move |_, y| {
+            list.upgrade()
+                .and_then(|l| l.row_at_y(y as i32))
+                .is_some_and(|r| r.is_activatable())
+        });
         this
     }
 

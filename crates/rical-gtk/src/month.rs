@@ -86,6 +86,13 @@ impl MonthView {
             }
         });
         this.area.add_controller(click);
+        let weak = Rc::downgrade(&this);
+        details::edit_on_double_click(&this.area, move |x, y| {
+            weak.upgrade().is_some_and(|t| {
+                hit_at(&t.hits.borrow(), x, y)
+                    .is_some_and(|h| matches!(h.target, Target::Occurrence(_)))
+            })
+        });
         this
     }
 

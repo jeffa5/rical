@@ -30,7 +30,7 @@ use crate::{
     binds::{Binds, Key},
     details, format,
     grid::{DragAction, TimeGrid},
-    layout::{self, ViewKind},
+    layout::ViewKind,
     minimonth::MiniMonth,
     month::MonthView,
     section::{self, Section},
@@ -437,7 +437,7 @@ impl Window {
     fn step(&self, forward: bool) {
         {
             let mut s = self.state.borrow_mut();
-            s.date = layout::step(s.view, s.date, forward);
+            s.step(forward);
             s.selected = None;
         }
         self.refresh();
@@ -591,7 +591,7 @@ impl Window {
         let view = state.view;
         let date = state.date;
 
-        let (title, subtitle) = format::view_title(view, date);
+        let (title, subtitle) = format::view_title(view, date, &state.visible_days());
         self.title.set_title(&title);
         self.title.set_subtitle(&subtitle);
         for toggle in &self.toggles {

@@ -117,6 +117,47 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
         content.append(&scroller);
     }
 
+    // what you can do with it, as the commands its keys run
+    let actions = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(6)
+        .margin_top(6)
+        .build();
+    let action = |label: &str, icon: Option<&str>, tip: &str, cmd: &str| {
+        let b = gtk::Button::builder()
+            .tooltip_text(tip)
+            .action_name("win.run")
+            .action_target(&cmd.to_variant())
+            .build();
+        match icon {
+            Some(icon) => b.set_icon_name(icon),
+            None => b.set_label(label),
+        }
+        b
+    };
+    actions.append(&action("Edit", None, "Edit (e, or double-click)", "edit"));
+    if occ.kind == Kind::Todo {
+        let done = format::is_done(occ);
+        actions.append(&action(
+            if done { "Not done" } else { "Done" },
+            None,
+            "Mark done or not (D)",
+            "done",
+        ));
+    }
+    let spacer = gtk::Box::builder().hexpand(true).build();
+    actions.append(&spacer);
+    let delete = action(
+        "Delete",
+        Some("user-trash-symbolic"),
+        "Delete (x)",
+        "delete",
+    );
+    delete.add_css_class("flat");
+    actions.append(&delete);
+    content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    content.append(&actions);
+
     close();
     // Not modal: keys keep going to the window, so j/k/e/x still work while
     // it is open. It closes on the next change or with Escape.
@@ -135,6 +176,30 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
     });
     popover.popup();
     OPEN.with(|open| *open.borrow_mut() = Some(popover));
+}
+
+/// Open the editor on a double-click where `on_item` says there is an
+/// occurrence (the first click has selected it by then).
+pub fn edit_on_double_click(
+    widget: &impl IsA<gtk::Widget>,
+    on_item: impl Fn(f64, f64) -> bool + 'static,
+) {
+    let click = gtk::GestureClick::new();
+    let w = widget.as_ref().downgrade();
+    click.connect_released(move |_, n_press, x, y| {
+        if n_press != 2 || !on_item(x, y) {
+            return;
+        }
+        let w = w.clone();
+        // after the release has finished opening the details
+        glib::idle_add_local_once(move || {
+            close();
+            if let Some(w) = w.upgrade() {
+                let _ = w.activate_action("win.run", Some(&"edit".to_variant()));
+            }
+        });
+    });
+    widget.as_ref().add_controller(click);
 }
 
 thread_local! {
