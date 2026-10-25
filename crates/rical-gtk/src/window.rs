@@ -751,11 +751,15 @@ impl Window {
                     .flatten()
                     .filter_map(|f| f.path());
                 for path in paths {
+                    let name = path.file_name().unwrap_or_default();
                     let is_item = path.extension().is_some_and(|e| e == "ics");
-                    if not_calendar || !is_item {
+                    if name.to_string_lossy().starts_with('.') {
+                        // temporary files of atomic writes (ours, vdirsyncer's):
+                        // the rename to the .ics name is what counts
+                    } else if not_calendar || name == "displayname" || name == "color" {
                         // a calendar was added or removed, or its metadata changed
                         w.reload_all_pending.set(true);
-                    } else {
+                    } else if is_item {
                         w.pending.borrow_mut().insert(path);
                     }
                 }

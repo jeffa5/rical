@@ -111,24 +111,34 @@ fn pick(candidates: impl IntoIterator<Item = Rgb>, used: &[Rgb]) -> Rgb {
 }
 
 /// A colour for each calendar, given their own colours, in order.
+/// Calendars with their own colour are placed first, so adding one without
+/// a colour never changes the others.
 pub fn assign(own: &[Option<Rgb>]) -> Vec<Rgb> {
     let mut used: Vec<Rgb> = Vec::with_capacity(own.len());
-    for c in own {
-        let chosen = match *c {
-            Some(c) if nearest(c, &used) >= ALIKE => c,
-            Some(c) => {
-                // turn the hue a little at a time, either way
-                let (h, s, l) = to_hsl(c);
-                // greys have no hue to turn: give them some colour
-                let s = s.max(0.45);
-                let turns = (1..=6).flat_map(|k| [k as f64 * 30.0, -(k as f64) * 30.0]);
-                pick(turns.map(|t| from_hsl(h + t, s, l)), &used)
-            }
-            None => pick(PALETTE, &used),
+    let mut out = vec![PALETTE[0]; own.len()];
+    for (i, c) in own.iter().enumerate() {
+        let Some(c) = *c else { continue };
+        let chosen = if nearest(c, &used) >= ALIKE {
+            c
+        } else {
+            // turn the hue a little at a time, either way
+            let (h, s, l) = to_hsl(c);
+            // greys have no hue to turn: give them some colour
+            let s = s.max(0.45);
+            let turns = (1..=6).flat_map(|k| [k as f64 * 30.0, -(k as f64) * 30.0]);
+            pick(turns.map(|t| from_hsl(h + t, s, l)), &used)
         };
         used.push(chosen);
+        out[i] = chosen;
     }
-    used
+    for (i, c) in own.iter().enumerate() {
+        if c.is_none() {
+            let chosen = pick(PALETTE, &used);
+            used.push(chosen);
+            out[i] = chosen;
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -183,5 +193,20 @@ mod tests {
         // and avoid colours calendars already have
         let got = assign(&[Some(rgb(0x3584e4)), None]);
         assert_ne!(got[1], PALETTE[0]);
+    }
+
+    #[test]
+    fn new_uncoloured_calendar_leaves_others_alone() {
+        let one = [
+            Some(rgb(0xb6469d)),
+            Some(rgb(0xa5b872)),
+            Some(rgb(0x0082c9)),
+        ];
+        let before = assign(&[one, one].concat());
+        let mut own = [one, one].concat();
+        own.insert(2, None);
+        let mut after = assign(&own);
+        after.remove(2);
+        assert_eq!(before, after);
     }
 }
