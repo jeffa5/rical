@@ -180,6 +180,77 @@ impl TimeGrid {
                 this.draw_grid(area, cr, w as f64);
             }
         });
+
+        // hovering an extra zone's column says it in full: its labels and
+        // abbreviations may be cut short
+        for (area, rows) in [(self.header.clone(), false), (self.grid.clone(), true)] {
+            area.set_has_tooltip(true);
+            let this = Rc::downgrade(self);
+            area.connect_query_tooltip(move |area, x, y, _, tip| {
+                let Some(this) = this.upgrade() else {
+                    return false;
+                };
+                let row = rows.then(|| (y as f64 / HOUR_HEIGHT).round() as i64);
+                match this.zone_tooltip(area.width() as f64, x as f64, row) {
+                    Some(text) => {
+                        tip.set_text(Some(&text));
+                        true
+                    }
+                    None => false,
+                }
+            });
+        }
+    }
+
+    /// What hovering at `x` over the extra zones says, if over one: its
+    /// name in full, the time there now (or at hour `row` of the grid) and
+    /// how far it is from here.
+    fn zone_tooltip(&self, width: f64, x: f64, row: Option<i64>) -> Option<String> {
+        let zones = self.zones(width);
+        let z = zones.get((x / ZONE_WIDTH).floor().max(0.0) as usize)?;
+        if x >= zones.len() as f64 * ZONE_WIDTH {
+            return None;
+        }
+        let local = self.state.borrow().local;
+        let now = Utc::now();
+        let there = now.with_timezone(&z.tz);
+        let offset = |t: chrono::DateTime<Utc>| {
+            use chrono::Offset as _;
+            let theirs = t.with_timezone(&z.tz).offset().fix().local_minus_utc();
+            let ours = t.with_timezone(&local).offset().fix().local_minus_utc();
+            theirs - ours
+        };
+        let diff = offset(now);
+        let (h, m) = (diff / 3600, (diff.abs() % 3600) / 60);
+        let rel = match (h, m) {
+            (0, 0) => "same time as here".to_owned(),
+            (h, 0) => format!("{}{}h from here", if h > 0 { "+" } else { "−" }, h.abs()),
+            (h, m) => format!(
+                "{}{}h{m:02} from here",
+                if diff > 0 { "+" } else { "−" },
+                h.abs()
+            ),
+        };
+        let mut text = format!(
+            "{} ({})\nNow {} {}, {}\n{rel}",
+            z.label,
+            z.tz.name(),
+            there.format("%H:%M"),
+            z.abbreviation(now),
+            there.format("%a %-d %b"),
+        );
+        if let Some(hour) = row.filter(|h| (0..=24).contains(h)) {
+            let day = self.label_day();
+            let at = layout::at_wall(day, hour as f64 * 60.0, local);
+            let then = at.with_timezone(&z.tz);
+            text += &format!(
+                "\n{} here is {} there ({})",
+                at.format("%H:%M %a"),
+                then.format("%H:%M %a %-d %b"),
+                z.abbreviation(at.to_utc()),
+            );
+        }
+        Some(text)
     }
 
     fn setup_clicks(self: &Rc<Self>, on_change: Rc<dyn Fn()>) {
