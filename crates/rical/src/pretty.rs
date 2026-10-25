@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-use icalendar::Component as _;
 use rical_core::{AnyComponent, time::date_perhaps_time_to_datetime_utc};
 use serde::Serialize;
 

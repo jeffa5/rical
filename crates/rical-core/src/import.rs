@@ -4,7 +4,6 @@
 //! as one undoable set of changes.
 
 use anyhow::Context as _;
-use icalendar::Component as _;
 
 use crate::{
     Vdir,

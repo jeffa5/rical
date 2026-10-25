@@ -13,7 +13,6 @@ use std::{
 use anyhow::Context as _;
 use chrono::{TimeDelta, Utc};
 use chrono_tz::Tz;
-use icalendar::Component as _;
 
 use crate::{
     doc::{self, Component, Document, Item, Line},

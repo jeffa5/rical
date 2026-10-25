@@ -3,13 +3,31 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use icalendar::{CalendarComponent, Component, Other};
+use icalendar::{CalendarComponent, Component, Property};
 use serde::{Serialize, ser::SerializeStruct};
 
+/// A component of an item (an event, todo, ...) and the file it is in.
+///
+/// It offers the read side of icalendar's `Component` trait as methods of
+/// its own rather than implementing the trait, whose signatures name the
+/// crate's catch-all `Other` type that it does not export.
 #[derive(Debug, Clone)]
 pub struct AnyComponent {
     path: PathBuf,
     component: CalendarComponent,
+}
+
+/// Run `$f` on the component inside whichever variant it is.
+macro_rules! inner {
+    ($self:expr, $c:ident => $f:expr) => {
+        match &$self.component {
+            CalendarComponent::Todo($c) => $f,
+            CalendarComponent::Event($c) => $f,
+            CalendarComponent::Venue($c) => $f,
+            CalendarComponent::Other($c) => $f,
+            _ => unreachable!("icalendar added a component kind"),
+        }
+    };
 }
 
 impl AnyComponent {
@@ -23,6 +41,59 @@ impl AnyComponent {
 
     pub fn component(&self) -> &CalendarComponent {
         &self.component
+    }
+
+    /// "VEVENT", "VTODO", ...
+    pub fn component_kind(&self) -> String {
+        inner!(self, c => c.component_kind())
+    }
+
+    /// Properties that occur once, by name.
+    pub fn properties(&self) -> &BTreeMap<String, Property> {
+        inner!(self, c => c.properties())
+    }
+
+    /// Properties that may repeat (ATTENDEE, EXDATE, ...), by name.
+    pub fn multi_properties(&self) -> &BTreeMap<String, Vec<Property>> {
+        inner!(self, c => c.multi_properties())
+    }
+
+    /// Nested components, such as VALARMs.
+    pub fn components(&self) -> &[impl Component] {
+        inner!(self, c => c.components())
+    }
+
+    /// The value of a property that occurs once.
+    pub fn property_value(&self, key: &str) -> Option<&str> {
+        self.properties().get(key).map(Property::value)
+    }
+
+    pub fn get_uid(&self) -> Option<&str> {
+        self.property_value("UID")
+    }
+
+    pub fn get_summary(&self) -> Option<&str> {
+        self.property_value("SUMMARY")
+    }
+
+    /// DTSTART.
+    pub fn get_start(&self) -> Option<icalendar::DatePerhapsTime> {
+        inner!(self, c => c.get_start())
+    }
+
+    /// DTEND.
+    pub fn get_end(&self) -> Option<icalendar::DatePerhapsTime> {
+        inner!(self, c => c.get_end())
+    }
+
+    /// CREATED.
+    pub fn get_created(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        inner!(self, c => c.get_created())
+    }
+
+    /// DTSTAMP.
+    pub fn get_timestamp(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        inner!(self, c => c.get_timestamp())
     }
 }
 
@@ -41,142 +112,5 @@ impl Serialize for AnyComponent {
             .collect::<BTreeMap<_, _>>();
         s.serialize_field("properties", &props)?;
         s.end()
-    }
-}
-
-impl Component for AnyComponent {
-    fn component_kind(&self) -> String {
-        match &self.component {
-            CalendarComponent::Todo(todo) => todo.component_kind(),
-            CalendarComponent::Event(event) => event.component_kind(),
-            CalendarComponent::Venue(venue) => venue.component_kind(),
-            CalendarComponent::Other(other) => other.component_kind(),
-            _ => todo!(),
-        }
-    }
-
-    fn properties(&self) -> &std::collections::BTreeMap<String, icalendar::Property> {
-        match &self.component {
-            CalendarComponent::Todo(todo) => todo.properties(),
-            CalendarComponent::Event(event) => event.properties(),
-            CalendarComponent::Venue(venue) => venue.properties(),
-            CalendarComponent::Other(other) => other.properties(),
-            _ => todo!(),
-        }
-    }
-
-    fn components(&self) -> &[Other] {
-        match &self.component {
-            CalendarComponent::Todo(todo) => todo.components(),
-            CalendarComponent::Event(event) => event.components(),
-            CalendarComponent::Venue(venue) => venue.components(),
-            CalendarComponent::Other(other) => other.components(),
-            _ => todo!(),
-        }
-    }
-
-    fn multi_properties(&self) -> &std::collections::BTreeMap<String, Vec<icalendar::Property>> {
-        match &self.component {
-            CalendarComponent::Todo(todo) => todo.multi_properties(),
-            CalendarComponent::Event(event) => event.multi_properties(),
-            CalendarComponent::Venue(venue) => venue.multi_properties(),
-            CalendarComponent::Other(other) => other.multi_properties(),
-            _ => todo!(),
-        }
-    }
-
-    fn append_property(&mut self, property: impl Into<icalendar::Property>) -> &mut Self {
-        match &mut self.component {
-            CalendarComponent::Todo(todo) => {
-                todo.append_property(property);
-            }
-            CalendarComponent::Event(event) => {
-                event.append_property(property);
-            }
-            CalendarComponent::Venue(venue) => {
-                venue.append_property(property);
-            }
-            CalendarComponent::Other(other) => {
-                other.append_property(property);
-            }
-            _ => todo!(),
-        }
-        self
-    }
-
-    fn append_component(&mut self, child: impl Into<Other>) -> &mut Self {
-        match &mut self.component {
-            CalendarComponent::Todo(todo) => {
-                todo.append_component(child);
-            }
-            CalendarComponent::Event(event) => {
-                event.append_component(child);
-            }
-            CalendarComponent::Venue(venue) => {
-                venue.append_component(child);
-            }
-            CalendarComponent::Other(other) => {
-                other.append_component(child);
-            }
-            _ => todo!(),
-        }
-        self
-    }
-
-    fn append_multi_property(&mut self, property: impl Into<icalendar::Property>) -> &mut Self {
-        match &mut self.component {
-            CalendarComponent::Todo(todo) => {
-                todo.append_multi_property(property);
-            }
-            CalendarComponent::Event(event) => {
-                event.append_multi_property(property);
-            }
-            CalendarComponent::Venue(venue) => {
-                venue.append_multi_property(property);
-            }
-            CalendarComponent::Other(other) => {
-                other.append_multi_property(property);
-            }
-            _ => todo!(),
-        }
-        self
-    }
-
-    fn remove_property(&mut self, key: &str) -> &mut Self {
-        match &mut self.component {
-            CalendarComponent::Todo(todo) => {
-                todo.remove_property(key);
-            }
-            CalendarComponent::Event(event) => {
-                event.remove_property(key);
-            }
-            CalendarComponent::Venue(venue) => {
-                venue.remove_property(key);
-            }
-            CalendarComponent::Other(other) => {
-                other.remove_property(key);
-            }
-            _ => todo!(),
-        }
-        self
-    }
-
-    fn remove_multi_property(&mut self, key: &str) -> &mut Self {
-        match &mut self.component {
-            CalendarComponent::Todo(todo) => {
-                todo.remove_multi_property(key);
-            }
-            CalendarComponent::Event(event) => {
-                event.remove_multi_property(key);
-            }
-            CalendarComponent::Venue(venue) => {
-                venue.remove_multi_property(key);
-            }
-            CalendarComponent::Other(other) => {
-                other.remove_multi_property(key);
-            }
-            _ => todo!(),
-        }
-        self
     }
 }

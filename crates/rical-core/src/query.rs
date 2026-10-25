@@ -1,7 +1,6 @@
 use std::{collections::BTreeMap, path::PathBuf, str::FromStr};
 
 use chrono::{DateTime, NaiveDateTime, Utc};
-use icalendar::Component as _;
 
 use crate::{
     component::AnyComponent, files::paths_to_files, ics::read_ics_to_calendar, short_id,

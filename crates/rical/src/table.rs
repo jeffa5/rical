@@ -1,7 +1,6 @@
 use std::io::Write;
 
 use comfy_table::{Table, presets::NOTHING};
-use icalendar::Component;
 
 use rical_core::{AnyComponent, time::date_perhaps_time_to_datetime_utc};
 

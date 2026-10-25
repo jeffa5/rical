@@ -7,7 +7,6 @@ use std::{
 
 use anyhow::{Context as _, bail};
 use chrono::{NaiveTime, TimeDelta, Timelike, Utc};
-use icalendar::Component as _;
 use rical_core::{
     Kind, Occurrence, Vdir, When,
     input::{parse_at, parse_date, parse_shift},

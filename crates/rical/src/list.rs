@@ -1,4 +1,3 @@
-use icalendar::Component as _;
 use rical_core::{
     AnyComponent,
     query::{self, ListQuery},

@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use icalendar::Component as _;
 use rical_core::{
     Rgb, Vdir,
     query::{self, ListKind, ListQuery},
