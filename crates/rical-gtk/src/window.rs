@@ -533,7 +533,7 @@ impl Window {
                 w.refresh();
             });
             let row = adw::ActionRow::builder()
-                .title(&cal.label)
+                .title(gtk::glib::markup_escape_text(&cal.label))
                 .title_lines(1)
                 .subtitle_lines(1)
                 .activatable_widget(&check)
@@ -541,7 +541,7 @@ impl Window {
                 .build();
             // the folder it is in (an account, say), when nested
             if let Some((parent, _)) = cal.id.rsplit_once('/') {
-                row.set_subtitle(parent);
+                row.set_subtitle(&gtk::glib::markup_escape_text(parent));
             }
             let info = gtk::MenuButton::builder()
                 .icon_name("dialog-information-symbolic")

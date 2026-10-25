@@ -177,64 +177,148 @@ fn entry(title: String, subtitle: String, keys: Vec<Vec<Key>>, extra: &str) -> E
     }
 }
 
-/// An action and every key sequence bound to it.
-type Bound = (Action, Vec<Vec<Key>>);
+/// The view sections and what to call them.
+const VIEWS: [(&str, &str); 4] = [
+    ("grid", "Day and week"),
+    ("month", "Month"),
+    ("agenda", "Agenda"),
+    ("tasks", "Tasks"),
+];
 
-/// The bindings of one section, grouped by what they do, in command order.
-fn binding_entries(binds: &Binds, section: &str) -> Vec<Entry> {
-    let Some(map) = binds.sections.get(section) else {
-        return Vec::new();
+/// The command an action runs with nothing else given, if it is just
+/// that: ":today", or ":goto " left for you to finish.
+fn bare_command(action: &Action) -> Option<&'static crate::command::Spec> {
+    let line = match (action.run.as_slice(), &action.prefill) {
+        ([line], None) | ([], Some(line)) => line,
+        _ => return None,
     };
-    let mut groups: BTreeMap<(usize, String), Bound> = BTreeMap::new();
-    for (keys, action) in map {
-        let Some(action) = action else { continue };
-        let order = spec_of(action)
-            .and_then(|s| cmds::SPECS.iter().position(|x| x.name == s.name))
-            .unwrap_or(usize::MAX);
-        groups
-            .entry((order, command_text(action)))
-            .or_insert_with(|| (action.clone(), Vec::new()))
-            .1
-            .push(keys.clone());
-    }
-    groups
-        .into_values()
-        .map(|(action, keys)| {
-            let title = match spec_of(&action) {
-                Some(s) if action.run.is_empty() => format!("{} (type the rest)", s.help),
-                Some(s) => s.help.to_owned(),
-                None if action.run.is_empty() => "Open the command line".to_owned(),
-                None => command_text(&action),
-            };
-            entry(title, command_text(&action), keys, "")
-        })
-        .collect()
+    (line.split_whitespace().count() == 1)
+        .then(|| spec_of(action))
+        .flatten()
 }
 
-/// Every command, with the keys bound to it anywhere.
-fn command_entries(binds: &Binds) -> Vec<Entry> {
-    cmds::SPECS
-        .iter()
-        .map(|spec| {
-            let mut keys = Vec::new();
-            for map in binds.sections.values() {
-                for (k, a) in map {
-                    if a.as_ref()
-                        .and_then(spec_of)
-                        .is_some_and(|s| s.name == spec.name)
-                        && !keys.contains(k)
-                    {
-                        keys.push(k.clone());
-                    }
+/// What an action's row says: its title and its command.
+fn describe(action: &Action) -> (String, String, &'static str) {
+    if let Some(s) = bare_command(action) {
+        return (s.help.to_owned(), usage(s), s.name);
+    }
+    let title = match spec_of(action) {
+        // "Switch view (2days)" rather than the whole help each time
+        Some(s) if action.run.len() == 1 && action.prefill.is_none() => {
+            let short = s
+                .help
+                .split([':', ';'])
+                .next()
+                .unwrap_or(s.help)
+                .split(", e.g.")
+                .next()
+                .unwrap_or(s.help);
+            match action.run[0].split_once(char::is_whitespace) {
+                Some((_, args)) => format!("{short} ({})", args.trim()),
+                None => short.to_owned(),
+            }
+        }
+        Some(s) => s.help.to_owned(),
+        None if action.run.is_empty() => "Open the command line".to_owned(),
+        None => command_text(action),
+    };
+    (title, command_text(action), "")
+}
+
+fn usage(spec: &crate::command::Spec) -> String {
+    let mut s = format!(":{}", spec.usage());
+    if !spec.aliases.is_empty() {
+        s += &format!("   (also {})", spec.aliases.join(", "));
+    }
+    s
+}
+
+/// Bindings grouped by what they do, in command order, with the views
+/// each is bound in.
+type Grouped = BTreeMap<(usize, String), (Action, Vec<Vec<Key>>, Vec<&'static str>)>;
+
+fn group(grouped: &mut Grouped, keys: &[Key], action: &Action, view: Option<&'static str>) {
+    let order = spec_of(action)
+        .and_then(|s| cmds::SPECS.iter().position(|x| x.name == s.name))
+        .unwrap_or(usize::MAX);
+    let (_, all, views) = grouped
+        .entry((order, command_text(action)))
+        .or_insert_with(|| (action.clone(), Vec::new(), Vec::new()));
+    if !all.iter().any(|k| k == keys) {
+        all.push(keys.to_vec());
+    }
+    if let Some(v) = view
+        && !views.contains(&v)
+    {
+        views.push(v);
+    }
+}
+
+/// The help's groups: the keys that work in `here`, keys only bound in
+/// other views, then the commands no key runs as they are.
+fn entries(binds: &Binds, here: &str) -> Vec<(String, Vec<Entry>)> {
+    let empty = BTreeMap::new();
+    let section = |s: &str| binds.sections.get(s).unwrap_or(&empty);
+    // the keys in effect here: this view's, then the global ones it
+    // doesn't take over
+    let mut active: BTreeMap<Vec<Key>, Option<Action>> = section(here).clone();
+    for (k, a) in section("global") {
+        active.entry(k.clone()).or_insert_with(|| a.clone());
+    }
+    let mut local = Grouped::new();
+    for (k, a) in &active {
+        if let Some(a) = a {
+            group(&mut local, k, a, None);
+        }
+    }
+    let mut elsewhere = Grouped::new();
+    for (s, label) in VIEWS.iter().filter(|(s, _)| *s != here) {
+        for (k, a) in section(s) {
+            let Some(a) = a else { continue };
+            if active.get(k).is_some_and(|b| b.as_ref() == Some(a)) {
+                continue;
+            }
+            group(&mut elsewhere, k, a, Some(label));
+        }
+    }
+    let mut covered = Vec::new();
+    let mut rows = |grouped: Grouped| {
+        grouped
+            .into_values()
+            .map(|(action, keys, views)| {
+                let (title, mut sub, name) = describe(&action);
+                if bare_command(&action).is_some() {
+                    covered.push(name);
                 }
-            }
-            let mut sub = format!(":{}", spec.usage());
-            if !spec.aliases.is_empty() {
-                sub += &format!("   (also {})", spec.aliases.join(", "));
-            }
-            entry(spec.help.to_owned(), sub, keys, spec.name)
-        })
-        .collect()
+                if !views.is_empty() {
+                    sub = format!("{sub}  ·  {} view", views.join(", "));
+                }
+                entry(title, sub, keys, name)
+            })
+            .collect::<Vec<_>>()
+    };
+    let local = rows(local);
+    let elsewhere = rows(elsewhere);
+    let commands = cmds::SPECS
+        .iter()
+        .filter(|s| !covered.contains(&s.name))
+        .map(|s| entry(s.help.to_owned(), usage(s), Vec::new(), s.name))
+        .collect();
+    let here_label = VIEWS
+        .iter()
+        .find(|(s, _)| *s == here)
+        .map_or("this", |(_, l)| l);
+    vec![
+        (
+            format!("Keys in the {} view", here_label.to_lowercase()),
+            local,
+        ),
+        ("Keys in other views".to_owned(), elsewhere),
+        (
+            "More commands (type : then the command)".to_owned(),
+            commands,
+        ),
+    ]
 }
 
 fn keys_widget(keys: &[Vec<Key>]) -> gtk::Box {
@@ -268,18 +352,6 @@ fn keys_widget(keys: &[Vec<Key>]) -> gtk::Box {
 type Group = (gtk::Label, gtk::ListBox, Vec<(adw::ActionRow, String)>);
 
 pub fn dialog(binds: &Binds, view: ViewKind) -> adw::Dialog {
-    let here = cmds::section(view);
-    let mut sections = vec![("global", "Everywhere")];
-    // the current view's section first, then the others
-    let views = [
-        ("grid", "Day and week views"),
-        ("month", "Month view"),
-        ("agenda", "Agenda view"),
-        ("tasks", "Tasks view"),
-    ];
-    sections.extend(views.iter().filter(|(s, _)| *s == here));
-    sections.extend(views.iter().filter(|(s, _)| *s != here));
-
     let search = gtk::SearchEntry::builder()
         .placeholder_text("Search what keys do, commands or keys (left, ctrl z, undo)")
         .hexpand(true)
@@ -294,14 +366,7 @@ pub fn dialog(binds: &Binds, view: ViewKind) -> adw::Dialog {
         .build();
 
     let mut groups: Vec<Group> = Vec::new();
-    let all = sections
-        .iter()
-        .map(|(s, t)| (t.to_string(), binding_entries(binds, s)))
-        .chain(std::iter::once((
-            "Commands (type : to run)".to_owned(),
-            command_entries(binds),
-        )));
-    for (title, entries) in all {
+    for (title, entries) in entries(binds, cmds::section(view)) {
         if entries.is_empty() {
             continue;
         }
@@ -317,10 +382,10 @@ pub fn dialog(binds: &Binds, view: ViewKind) -> adw::Dialog {
             .build();
         let mut rows = Vec::new();
         for e in entries {
+            // rows take markup: escape ":goto <date>"
             let row = adw::ActionRow::builder()
-                .title(&e.title)
-                .subtitle(&e.subtitle)
-                .use_markup(false)
+                .title(glib::markup_escape_text(&e.title))
+                .subtitle(glib::markup_escape_text(&e.subtitle))
                 .build();
             row.add_suffix(&keys_widget(&e.keys));
             list.append(&row);
@@ -377,6 +442,15 @@ pub fn dialog(binds: &Binds, view: ViewKind) -> adw::Dialog {
         .child(&view)
         .build();
     dialog.set_focus(Some(&search));
+    // the search takes Escape first: clear it, or close if already empty
+    let d = dialog.downgrade();
+    search.connect_stop_search(move |s| {
+        if !s.text().is_empty() {
+            s.set_text("");
+        } else if let Some(d) = d.upgrade() {
+            d.close();
+        }
+    });
     dialog
 }
 
@@ -413,9 +487,9 @@ mod tests {
     #[test]
     fn search_finds_by_any_part() {
         let binds = Binds::parse(crate::binds::DEFAULTS).unwrap();
-        let entries = binding_entries(&binds, "global")
+        let entries = entries(&binds, "grid")
             .into_iter()
-            .chain(command_entries(&binds))
+            .flat_map(|(_, e)| e)
             .collect::<Vec<_>>();
         let find = |q: &str| {
             entries
@@ -425,13 +499,34 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         // by key words
-        assert!(find("left").iter().any(|s| s == ":focus -1"));
-        assert!(find("ctrl z").iter().any(|s| s == ":undo"));
-        assert!(find("page down").iter().any(|s| s == ":next"));
+        assert!(
+            find("left").iter().any(|s| s == ":focus -1"),
+            "{:?}",
+            find("left")
+        );
+        assert!(find("ctrl z").iter().any(|s| s.starts_with(":undo")));
+        assert!(find("page down").iter().any(|s| s.starts_with(":next")));
         assert!(find("right bracket").iter().any(|s| s == ":resize +15m"));
         // by description and command
-        assert!(find("undo").iter().any(|s| s == ":undo"));
+        assert!(find("undo").iter().any(|s| s.starts_with(":undo")));
         assert!(find("schedule").iter().any(|s| s.starts_with(":schedule")));
         assert!(find("zzzz").is_empty());
+        // a command a key runs as it is isn't listed again
+        assert_eq!(
+            find("today")
+                .iter()
+                .filter(|s| s.starts_with(":today"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            find("goto")
+                .iter()
+                .filter(|s| s.starts_with(":goto <date>"))
+                .count(),
+            1
+        );
+        // keys bound only in other views say where
+        assert!(find("month view").iter().any(|s| s.contains("Month view")));
     }
 }

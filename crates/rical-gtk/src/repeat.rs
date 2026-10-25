@@ -204,7 +204,9 @@ impl RepeatEditor {
             Ok(Repeat::Custom(raw)) => raw,
             Err(e) => e,
         };
-        self.choice.set_subtitle(&summary);
+        // rows take markup, and an error may hold <angle brackets>
+        self.choice
+            .set_subtitle(&gtk::glib::markup_escape_text(&summary));
     }
 
     /// The rule as chosen, or what is wrong with it.
