@@ -114,6 +114,7 @@ impl Window {
                 }
             }
             "details" => self.show_details(),
+            "reveal" => self.reveal()?,
             "link" => {
                 let occ = self.current_item().ok_or("select an event first")?;
                 let url =

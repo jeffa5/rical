@@ -124,6 +124,10 @@ pub static SPECS: &[Spec] = &[
     },
     spec("open", "Show the selected event, or open the focused day"),
     spec("details", "Show the selected event's details"),
+    spec(
+        "reveal",
+        "Show the selected task, journal entry or agenda item in the calendar, on its day",
+    ),
     Spec {
         aliases: &["join"],
         ..spec(

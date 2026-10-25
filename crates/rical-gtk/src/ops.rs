@@ -804,3 +804,57 @@ fn task_occurrence(t: &Task, today: chrono::NaiveDate) -> Occurrence {
     occ.all_day = start.is_date();
     occ
 }
+
+impl Window {
+    /// Show the selected item in the calendar, on its day: a task on its
+    /// due (or start) day, a journal entry on its date, an agenda item in
+    /// the week. From the agenda, tasks and journal views.
+    pub(super) fn reveal(self: &Rc<Self>) -> Result<(), String> {
+        let occ = self.current_item().ok_or("select something first")?;
+        let (day, view) = {
+            let s = self.state.borrow();
+            let day = match s.view {
+                ViewKind::Tasks => s
+                    .vdir
+                    .task(&occ.path, &occ.uid)
+                    .and_then(|t| t.day(s.local))
+                    .ok_or("it has no date to show")?,
+                ViewKind::Journal => {
+                    let dated = s
+                        .vdir
+                        .journals()
+                        .into_iter()
+                        .any(|(o, dated)| dated && o.path == occ.path && o.uid == occ.uid);
+                    if !dated {
+                        return Err("it is an undated note".into());
+                    }
+                    occ.start.date(s.local)
+                }
+                _ => occ.start.date(s.local),
+            };
+            // a view of days around it: the last one used, or the week
+            let view = match s.calendar_view {
+                ViewKind::Agenda => s.week_view,
+                v if v.is_calendar() => v,
+                _ => s.week_view,
+            };
+            (day, view)
+        };
+        {
+            let mut s = self.state.borrow_mut();
+            s.view = view;
+            s.date = day;
+            let found = s
+                .visible_occurrences()
+                .iter()
+                .filter(|o| o.path == occ.path && o.uid == occ.uid)
+                .min_by_key(|o| (o.start.date(s.local) - day).num_days().abs())
+                .map(OccurrenceKey::of);
+            s.selected = found;
+        }
+        self.refresh();
+        self.focus_view();
+        self.grid.reveal_selected();
+        Ok(())
+    }
+}
