@@ -278,6 +278,9 @@ impl TasksView {
                 format!("due {when}")
             });
         }
+        if t.recurring && !t.is_done() {
+            sub.push("repeats".to_owned());
+        }
         if let Some(p) = t.priority {
             sub.push(match p {
                 1..=4 => "high priority".to_owned(),

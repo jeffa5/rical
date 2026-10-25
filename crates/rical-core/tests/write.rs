@@ -649,3 +649,65 @@ fn alarms() {
         ["04 14:45 No alarm"]
     );
 }
+
+#[test]
+fn completing_a_repeating_task_moves_it_on() {
+    let (dir, mut vdir) = setup(&[
+        (
+            "home/bins.ics",
+            "
+            BEGIN:VTODO
+            UID:bins
+            DTSTAMP:20250101T000000Z
+            DTSTART;TZID=Europe/London:20250303T190000
+            DUE;TZID=Europe/London:20250303T200000
+            RRULE:FREQ=WEEKLY;COUNT=3
+            SUMMARY:Put the bins out
+            STATUS:NEEDS-ACTION
+            END:VTODO
+            ",
+        ),
+        (
+            "home/plants.ics",
+            "
+            BEGIN:VTODO
+            UID:plants
+            DTSTAMP:20250101T000000Z
+            DUE;VALUE=DATE:20250310
+            RRULE:FREQ=DAILY
+            SUMMARY:Water plants
+            END:VTODO
+            ",
+        ),
+    ]);
+    let find = |vdir: &Vdir, uid: &str| vdir.tasks().into_iter().find(|t| t.uid == uid).unwrap();
+
+    let bins = find(&vdir, "bins");
+    assert!(bins.recurring);
+    vdir.set_done(&bins, true).unwrap();
+    let text = fs::read_to_string(dir.path().join("home/bins.ics")).unwrap();
+    assert!(
+        text.contains("DTSTART;TZID=Europe/London:20250310T190000\r\n"),
+        "{text}"
+    );
+    assert!(text.contains("DUE;TZID=Europe/London:20250310T200000\r\n"));
+    assert!(text.contains("RRULE:FREQ=WEEKLY;COUNT=2\r\n"));
+    assert!(!find(&vdir, "bins").is_done());
+
+    // and again, keeping its local time
+    vdir.set_done(&find(&vdir, "bins"), true).unwrap();
+    let text = fs::read_to_string(dir.path().join("home/bins.ics")).unwrap();
+    assert!(text.contains("DTSTART;TZID=Europe/London:20250317T190000\r\n"));
+    // the last one is really done
+    vdir.set_done(&find(&vdir, "bins"), true).unwrap();
+    let bins = find(&vdir, "bins");
+    assert!(bins.is_done());
+    assert_eq!(
+        bins.due,
+        When::parse("20250317T200000", Some("Europe/London"))
+    );
+
+    // a due-only daily task moves a day
+    vdir.set_done(&find(&vdir, "plants"), true).unwrap();
+    assert_eq!(find(&vdir, "plants").due, Some(when("20250311")));
+}

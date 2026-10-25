@@ -29,6 +29,8 @@ pub struct Task {
     pub completed: Option<When>,
     /// 1 (highest) to 9; 0 or absent means undefined.
     pub priority: Option<u8>,
+    /// Has an RRULE: completing it moves it to the next occurrence.
+    pub recurring: bool,
 }
 
 impl Task {
@@ -96,6 +98,7 @@ impl Vdir {
                         .property_value("PRIORITY")
                         .and_then(|p| p.trim().parse().ok())
                         .filter(|p| *p > 0),
+                    recurring: c.property_value("RRULE").is_some(),
                 }
             })
             .collect()
@@ -108,7 +111,24 @@ impl Vdir {
     }
 
     /// Mark a task done (STATUS, COMPLETED, PERCENT-COMPLETE) or not done.
+    /// For a repeating task, done moves it to its next occurrence instead
+    /// (counting down any COUNT), and only the last one is marked done.
     pub fn set_done(&mut self, task: &Task, done: bool) -> anyhow::Result<Change> {
+        if done
+            && task.recurring
+            && let Some(shift) = self.next_shift(task)
+        {
+            return self.edit_task(task, |c| {
+                for name in ["DTSTART", "DUE"] {
+                    if let Some(w) = c.property(name).and_then(Line::when) {
+                        c.set_when(name, &w.add(shift));
+                    }
+                }
+                if let Some(rule) = c.property("RRULE").map(|l| l.value().to_owned()) {
+                    c.set(Line::property("RRULE", &[], &count_down(&rule)));
+                }
+            });
+        }
         self.edit_task(task, |c| {
             if done {
                 c.set(Line::new("STATUS:COMPLETED"));
@@ -189,4 +209,37 @@ impl Vdir {
         self.apply_checked(&change)?;
         Ok(change)
     }
+}
+
+impl Vdir {
+    /// How far a repeating task moves to reach its next occurrence, if it
+    /// has one.
+    fn next_shift(&self, task: &Task) -> Option<chrono::TimeDelta> {
+        let anchor = task.start.or(task.due)?;
+        let from = anchor.to_utc(Tz::UTC);
+        let components = self
+            .get(&task.path)?
+            .iter()
+            .filter(|c| c.get_uid() == Some(task.uid.as_str()));
+        let range = from..from + chrono::TimeDelta::days(366 * 5);
+        let next = crate::occurrence::expand(&task.calendar, components, &range, Tz::UTC)
+            .into_iter()
+            .filter(|o| o.recurrence_id.is_some() && o.start.to_utc(Tz::UTC) > from)
+            .min_by_key(|o| o.start.to_utc(Tz::UTC))?;
+        Some(next.start.to_utc(Tz::UTC) - from)
+    }
+}
+
+/// One fewer remaining occurrence: COUNT counts from DTSTART, which moves.
+fn count_down(rule: &str) -> String {
+    rule.split(';')
+        .map(|part| match part.split_once('=') {
+            Some((k, v)) if k.eq_ignore_ascii_case("COUNT") => match v.parse::<u32>() {
+                Ok(n) if n > 1 => format!("COUNT={}", n - 1),
+                _ => part.to_owned(),
+            },
+            _ => part.to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join(";")
 }

@@ -389,8 +389,26 @@ impl Window {
             v.set_done(&task, done).map(|c| vec![c])
         }) && done
         {
+            // a repeating task moved on rather than finished
+            let moved = self
+                .state
+                .borrow()
+                .vdir
+                .task(&task.path, &task.uid)
+                .filter(|t| !t.is_done())
+                .and_then(|t| t.due.or(t.start));
+            let title = match moved {
+                Some(next) => {
+                    let local = self.state.borrow().local;
+                    format!(
+                        "“{summary}” next due {}",
+                        crate::format::day(next.date(local))
+                    )
+                }
+                None => format!("Done: “{summary}”"),
+            };
             let toast = adw::Toast::builder()
-                .title(format!("Done: “{summary}”"))
+                .title(title)
                 .button_label("Undo")
                 .action_name("win.run")
                 .action_target(&"undo".to_variant())
