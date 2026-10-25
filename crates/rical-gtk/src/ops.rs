@@ -346,7 +346,7 @@ impl Window {
 
     /// What edit and delete act on: the selected task in the tasks view,
     /// otherwise the selected occurrence.
-    fn current_item(&self) -> Option<Occurrence> {
+    pub(super) fn current_item(&self) -> Option<Occurrence> {
         let state = self.state.borrow();
         if state.view != ViewKind::Tasks {
             return state.selected_occurrence();

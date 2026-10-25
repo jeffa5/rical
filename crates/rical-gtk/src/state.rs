@@ -45,6 +45,10 @@ pub struct State {
     /// Each entry is the file changes one action made.
     pub undo: Vec<Vec<Change>>,
     pub redo: Vec<Vec<Change>>,
+    /// Whether to show reminders.
+    pub notifications: bool,
+    /// Reminder for timed events that have no alarms of their own.
+    pub default_reminder: Option<chrono::TimeDelta>,
     /// Bumped whenever the data or the hidden set changes.
     generation: u64,
     cache: RefCell<Option<Cache>>,
@@ -106,6 +110,8 @@ impl State {
             last_calendar: None,
             undo: Vec::new(),
             redo: Vec::new(),
+            notifications: true,
+            default_reminder: None,
             generation: 0,
             cache: RefCell::new(None),
         }

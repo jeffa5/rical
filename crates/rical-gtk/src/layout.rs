@@ -327,6 +327,7 @@ mod tests {
             all_day: start.is_date(),
             recurring: false,
             due: None,
+            alarms: Vec::new(),
         }
     }
 

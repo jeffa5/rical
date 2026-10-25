@@ -65,6 +65,36 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
     if let Some(location) = occ.location.as_deref().filter(|l| !l.is_empty()) {
         content.append(&row("mark-location-symbolic", location));
     }
+    let join = format::join_url(occ);
+    let place = format::place(occ).map(str::to_owned);
+    if join.is_some() || place.is_some() {
+        let buttons = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(6)
+            .build();
+        let window = parent.as_ref().root().and_downcast::<gtk::Window>();
+        if let Some(url) = join {
+            let b = gtk::Button::builder()
+                .label("Join")
+                .tooltip_text(format!("Open {url} (O)"))
+                .css_classes(["suggested-action", "pill"])
+                .build();
+            let w = window.clone();
+            b.connect_clicked(move |_| open_uri(w.as_ref(), &url));
+            buttons.append(&b);
+        }
+        if let Some(place) = place {
+            let b = gtk::Button::builder()
+                .label("Map")
+                .tooltip_text("Show on a map (M)")
+                .css_classes(["pill"])
+                .build();
+            let w = window.clone();
+            b.connect_clicked(move |_| open_uri(w.as_ref(), &format::map_url(&place)));
+            buttons.append(&b);
+        }
+        content.append(&buttons);
+    }
     if let Some(description) = occ.description.as_deref().filter(|d| !d.is_empty()) {
         let label = gtk::Label::builder()
             .label(description.trim())
@@ -133,4 +163,14 @@ fn row(icon: &str, text: &str) -> gtk::Box {
             .build(),
     );
     b
+}
+
+/// Open a link in the default browser.
+pub fn open_uri(parent: Option<&gtk::Window>, uri: &str) {
+    log::info!("opening {uri}");
+    gtk::UriLauncher::new(uri).launch(parent, None::<&gtk::gio::Cancellable>, |r| {
+        if let Err(e) = r {
+            log::warn!("could not open link: {e}");
+        }
+    });
 }

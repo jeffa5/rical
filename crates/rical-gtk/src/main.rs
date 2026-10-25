@@ -49,6 +49,15 @@ struct Args {
     /// Key bindings file; default ~/.config/rical/binds.conf if it exists.
     #[clap(long)]
     binds: Option<PathBuf>,
+
+    /// Remind this long before timed events that have no alarm of their own,
+    /// e.g. 10m. Alarms in the events themselves always remind.
+    #[clap(long, env = "RICAL_REMIND")]
+    remind: Option<String>,
+
+    /// Do not show reminders.
+    #[clap(long)]
+    no_notifications: bool,
 }
 
 fn main() -> glib::ExitCode {
@@ -77,6 +86,16 @@ fn main() -> glib::ExitCode {
     let mut state = state::State::new(vdir, local, date);
     state.view = view;
     state.last_calendar = args.calendar;
+    state.notifications = !args.no_notifications;
+    if let Some(text) = &args.remind {
+        match rical_core::input::parse_shift(text) {
+            Some(d) if d > chrono::TimeDelta::zero() => state.default_reminder = Some(d),
+            _ => {
+                eprintln!("rical-gtk: --remind: not a duration: {text:?}");
+                return glib::ExitCode::FAILURE;
+            }
+        }
+    }
     let state = Rc::new(RefCell::new(state));
 
     let app = adw::Application::builder()

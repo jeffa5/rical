@@ -130,6 +130,10 @@ enum Subcommand {
         #[clap(long = "for")]
         length: Option<String>,
 
+        /// Where it is: a place, or a link to join online.
+        #[clap(long)]
+        location: Option<String>,
+
         /// Add a task instead of an event.
         #[clap(long)]
         todo: bool,
@@ -246,6 +250,7 @@ fn main() -> anyhow::Result<()> {
             calendar,
             at,
             length,
+            location,
             todo,
             due,
             title,
@@ -255,6 +260,7 @@ fn main() -> anyhow::Result<()> {
                 calendar,
                 at,
                 length,
+                location,
                 todo,
                 due,
                 title: title.join(" "),

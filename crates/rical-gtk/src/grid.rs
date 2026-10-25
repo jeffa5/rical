@@ -390,6 +390,7 @@ impl TimeGrid {
                 all_day: false,
                 recurring: false,
                 due: None,
+                alarms: Vec::new(),
             },
         };
         ghost.start = start;

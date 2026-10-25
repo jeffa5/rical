@@ -104,6 +104,14 @@ pub static SPECS: &[Spec] = &[
     spec("open", "Show the selected event, or open the focused day"),
     spec("details", "Show the selected event's details"),
     Spec {
+        aliases: &["join"],
+        ..spec(
+            "link",
+            "Open the selected event's link (video call) from its location or notes",
+        )
+    },
+    spec("map", "Show the selected event's location on a map"),
+    Spec {
         aliases: &["add"],
         args: &[Arg {
             name: "title",
@@ -126,6 +134,11 @@ pub static SPECS: &[Spec] = &[
                 name: "for",
                 kind: Kind::Text("for"),
                 help: "duration, e.g. 30m, 1h30m, 2d",
+            },
+            Flag {
+                name: "location",
+                kind: Kind::Text("location"),
+                help: "where",
             },
             Flag {
                 name: "kind",
@@ -238,6 +251,17 @@ pub static SPECS: &[Spec] = &[
         }],
         ..spec("search", "Search events and tasks; Enter jumps to one")
     },
+    Spec {
+        args: &[optional("state", Kind::Choice(&["on", "off", "toggle"]))],
+        ..spec("notifications", "Turn reminders on or off")
+    },
+    Spec {
+        args: &[arg("before", Kind::Text("remind"))],
+        ..spec(
+            "remind",
+            "Remind this long before events without alarms of their own, or \"none\"",
+        )
+    },
     spec("reload", "Reload the vdir from disk"),
     Spec {
         aliases: &["shortcuts"],
@@ -289,6 +313,7 @@ impl Values for StateValues<'_> {
             "shift" => &["+15m", "-15m", "+1h", "-1h", "+1d", "-1d", "+1w", "-1w"],
             "at" => &["09:00", "today", "tomorrow", "tomorrow 09:00"],
             "for" => &["15m", "30m", "1h", "2h", "1d"],
+            "remind" => &["none", "5m", "10m", "15m", "30m", "1h"],
             _ => &[],
         };
         list.iter().map(|s| s.to_string()).collect()

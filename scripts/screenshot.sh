@@ -79,7 +79,8 @@ pids+=($!)
 exec 3> "$tmp/pointer"
 sleep 0.3
 
-"$bin" "$@" > "$tmp/app.log" 2>&1 &
+# a private session bus, so reminders do not reach the real desktop
+dbus-run-session -- "$bin" "$@" > "$tmp/app.log" 2>&1 &
 app_pid=$!
 pids+=("$app_pid")
 

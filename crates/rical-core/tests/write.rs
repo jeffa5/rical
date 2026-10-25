@@ -517,3 +517,135 @@ fn create_and_date_tasks() {
     let t = vdir.tasks().pop().unwrap();
     assert_eq!((t.summary.as_str(), t.start), ("Buy oat milk", None));
 }
+
+#[test]
+fn alarms() {
+    let (_dir, vdir) = setup(&[
+        (
+            "work/meeting.ics",
+            "
+            BEGIN:VEVENT
+            UID:meeting
+            DTSTAMP:20250101T000000Z
+            DTSTART:20250304T090000Z
+            DTEND:20250304T100000Z
+            SUMMARY:Meeting
+            BEGIN:VALARM
+            ACTION:DISPLAY
+            TRIGGER:-PT30M
+            END:VALARM
+            BEGIN:VALARM
+            ACTION:EMAIL
+            TRIGGER:-PT1H
+            END:VALARM
+            BEGIN:VALARM
+            ACTION:AUDIO
+            TRIGGER;RELATED=END:PT0S
+            END:VALARM
+            END:VEVENT
+            ",
+        ),
+        (
+            "work/weekly.ics",
+            "
+            BEGIN:VEVENT
+            UID:weekly
+            DTSTAMP:20250101T000000Z
+            DTSTART:20250303T120000Z
+            DURATION:PT1H
+            RRULE:FREQ=WEEKLY
+            SUMMARY:Weekly
+            BEGIN:VALARM
+            ACTION:DISPLAY
+            TRIGGER;VALUE=DATE-TIME:20250303T110000Z
+            END:VALARM
+            BEGIN:VALARM
+            ACTION:DISPLAY
+            TRIGGER:-PT10M
+            END:VALARM
+            END:VEVENT
+            ",
+        ),
+        (
+            "home/bday.ics",
+            "
+            BEGIN:VEVENT
+            UID:bday
+            DTSTAMP:20250101T000000Z
+            DTSTART;VALUE=DATE:20250305
+            SUMMARY:Birthday
+            BEGIN:VALARM
+            ACTION:DISPLAY
+            TRIGGER:PT9H
+            END:VALARM
+            END:VEVENT
+            ",
+        ),
+        (
+            "home/plain.ics",
+            "
+            BEGIN:VEVENT
+            UID:plain
+            DTSTAMP:20250101T000000Z
+            DTSTART:20250304T150000Z
+            DTEND:20250304T160000Z
+            SUMMARY:No alarm
+            END:VEVENT
+            BEGIN:VEVENT
+            UID:off
+            DTSTAMP:20250101T000000Z
+            DTSTART:20250304T170000Z
+            SUMMARY:Cancelled
+            STATUS:CANCELLED
+            BEGIN:VALARM
+            ACTION:DISPLAY
+            TRIGGER:-PT5M
+            END:VALARM
+            END:VEVENT
+            ",
+        ),
+    ]);
+    let show = |alarms: Vec<rical_core::alarm::Alarm>| {
+        alarms
+            .iter()
+            .map(|a| format!("{} {}", a.at.format("%d %H:%M"), a.occurrence.summary))
+            .collect::<Vec<_>>()
+    };
+    let london = Tz::Europe__London;
+
+    // the 4th: 30 minutes before the meeting, and at its end (not email);
+    // the absolute alarm only belongs to the first weekly occurrence
+    assert_eq!(
+        show(vdir.alarms(&range("2025-03-03 00:00", "2025-03-05 00:00"), london, None)),
+        [
+            "03 11:00 Weekly",
+            "03 11:50 Weekly",
+            "04 08:30 Meeting",
+            "04 10:00 Meeting",
+        ]
+    );
+    // later weeks repeat the relative alarm; the all-day birthday reminds at
+    // 09:00 local time on the day
+    assert_eq!(
+        show(vdir.alarms(&range("2025-03-05 00:00", "2025-03-11 00:00"), london, None)),
+        ["05 09:00 Birthday", "10 11:50 Weekly"]
+    );
+    assert_eq!(
+        show(vdir.alarms(
+            &range("2025-03-05 00:00", "2025-03-06 00:00"),
+            SINGAPORE,
+            None
+        )),
+        ["05 01:00 Birthday"],
+        "09:00 in Singapore is 01:00 UTC"
+    );
+    // a default reminder for timed events without alarms; cancelled skipped
+    assert_eq!(
+        show(vdir.alarms(
+            &range("2025-03-04 12:00", "2025-03-04 23:00"),
+            london,
+            Some(TimeDelta::minutes(15))
+        )),
+        ["04 14:45 No alarm"]
+    );
+}

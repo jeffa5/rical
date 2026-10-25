@@ -65,6 +65,7 @@ impl Task {
             all_day: true,
             recurring: false,
             due: self.due,
+            alarms: Vec::new(),
         }
     }
 }

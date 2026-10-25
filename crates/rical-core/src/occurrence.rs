@@ -65,6 +65,48 @@ pub struct Occurrence {
     pub recurring: bool,
     /// For tasks, when they are due (they may be shown on another day).
     pub due: Option<When>,
+    /// When to remind (from VALARMs that display or make a sound).
+    pub alarms: Vec<Trigger>,
+}
+
+/// When an alarm goes off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Trigger {
+    /// Relative to the start, or with RELATED=END to the end.
+    Relative {
+        offset: TimeDelta,
+        from_end: bool,
+    },
+    Absolute(DateTime<Utc>),
+}
+
+/// The display and audio alarms of a component (not email ones).
+fn alarms(component: &AnyComponent) -> Vec<Trigger> {
+    component
+        .components()
+        .iter()
+        .filter(|c| c.component_kind() == "VALARM")
+        .filter(|c| {
+            !matches!(
+                c.property_value("ACTION")
+                    .map(str::to_ascii_uppercase)
+                    .as_deref(),
+                Some("EMAIL" | "NONE")
+            )
+        })
+        .filter_map(|c| {
+            let prop = c.properties().get("TRIGGER")?;
+            let param = |k: &str| prop.params().get(k).map(|p| p.value().to_ascii_uppercase());
+            if param("VALUE").as_deref() == Some("DATE-TIME") {
+                return When::parse(prop.value(), None)
+                    .map(|w| Trigger::Absolute(w.to_utc(Tz::UTC)));
+            }
+            Some(Trigger::Relative {
+                offset: parse_duration(prop.value())?,
+                from_end: param("RELATED").as_deref() == Some("END"),
+            })
+        })
+        .collect()
 }
 
 impl Occurrence {
@@ -197,6 +239,7 @@ impl<'a> Fields<'a> {
             end: start.add(self.duration),
             all_day: start.is_date(),
             recurring,
+            alarms: alarms(self.component),
             due: self
                 .component
                 .properties()
@@ -439,4 +482,20 @@ pub fn unescape_text(s: &str) -> String {
         }
     }
     out
+}
+
+impl Occurrence {
+    /// When this occurrence's alarms go off, for a viewer in `local`.
+    pub fn alarm_times(&self, local: Tz) -> Vec<DateTime<Utc>> {
+        self.alarms
+            .iter()
+            .map(|t| match t {
+                Trigger::Absolute(at) => *at,
+                Trigger::Relative { offset, from_end } => {
+                    let base = if *from_end { &self.end } else { &self.start };
+                    base.to_utc(local) + *offset
+                }
+            })
+            .collect()
+    }
 }

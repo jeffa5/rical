@@ -16,7 +16,7 @@ use crate::{
     binds::{self, Key, Lookup},
     cmds::{self, parse_date, parse_shift},
     command::{Parsed, Registry},
-    details, help,
+    details, format, help,
     layout::ViewKind,
 };
 
@@ -84,6 +84,17 @@ impl Window {
                 }
             }
             "details" => self.show_details(),
+            "link" => {
+                let occ = self.current_item().ok_or("select an event first")?;
+                let url =
+                    format::join_url(&occ).ok_or("it has no link in its location or notes")?;
+                details::open_uri(Some(self.window.upcast_ref()), &url);
+            }
+            "map" => {
+                let occ = self.current_item().ok_or("select an event first")?;
+                let place = format::place(&occ).ok_or("it has no location")?;
+                details::open_uri(Some(self.window.upcast_ref()), &format::map_url(place));
+            }
             "new" => self.run_new(p)?,
             "edit" => self.edit_selected(),
             "done" => self.toggle_done()?,
@@ -155,6 +166,34 @@ impl Window {
                 self.split.set_show_sidebar(show);
             }
             "reload" => self.reload_all(),
+            "notifications" => {
+                let on = {
+                    let mut s = self.state.borrow_mut();
+                    s.notifications = match p.arg(0) {
+                        Some("on") => true,
+                        Some("off") => false,
+                        _ => !s.notifications,
+                    };
+                    s.notifications
+                };
+                self.toast(if on { "Reminders on" } else { "Reminders off" });
+            }
+            "remind" => {
+                let text = p.arg(0).unwrap();
+                let before = match text {
+                    "none" | "off" => None,
+                    _ => Some(
+                        parse_shift(text)
+                            .filter(|d| *d > TimeDelta::zero())
+                            .ok_or(format!("not a duration: “{text}”"))?,
+                    ),
+                };
+                self.state.borrow_mut().default_reminder = before;
+                self.toast(&match before {
+                    Some(_) => format!("Reminding {text} before events without alarms"),
+                    None => "Only events with alarms remind".to_owned(),
+                });
+            }
             "search" => search::open(self, p.arg(0).unwrap_or_default()),
             "help" => {
                 help::dialog(&self.binds, self.state.borrow().view).present(Some(&self.window))
@@ -206,6 +245,9 @@ impl Window {
             None => TimeDelta::hours(1),
         };
         let mut draft = Draft::new(start, start.add(length));
+        if let Some(location) = p.flag("location") {
+            draft.location = location.to_owned();
+        }
         if p.flag("kind") == Some("todo") {
             draft.kind = Kind::Todo;
         }

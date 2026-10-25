@@ -20,6 +20,7 @@ pub struct NewArgs {
     pub calendar: Option<String>,
     pub at: Option<String>,
     pub length: Option<String>,
+    pub location: Option<String>,
     pub todo: bool,
     pub due: Option<String>,
     pub title: String,
@@ -83,6 +84,7 @@ pub fn new(args: &NewArgs) -> anyhow::Result<()> {
         };
         let mut draft = Draft::new(start, start.add(length));
         draft.summary = args.title.clone();
+        draft.location = args.location.clone().unwrap_or_default();
         vdir.create(&calendar, &draft)?
     };
     println!("{}", change.path.display());
@@ -141,6 +143,7 @@ pub fn delete(vdir: &Path, id: &str) -> anyhow::Result<()> {
         all_day: true,
         recurring: false,
         due: None,
+        alarms: Vec::new(),
     };
     vdir.delete(&occ, Scope::All)?;
     println!("deleted {uid} from {}", path.display());

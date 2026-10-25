@@ -250,3 +250,63 @@ mod tests {
         );
     }
 }
+
+/// The first web link in `text`, e.g. a video call in a location or notes.
+pub fn first_url(text: &str) -> Option<String> {
+    text.split(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '(' | ')'))
+        .find(|w| w.starts_with("https://") || w.starts_with("http://"))
+        .map(|w| w.trim_end_matches(['.', ',', ';']).to_owned())
+}
+
+/// A link to look `place` up on a map.
+pub fn map_url(place: &str) -> String {
+    let mut q = String::new();
+    for b in place.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                q.push(b as char)
+            }
+            b' ' => q.push('+'),
+            b => q.push_str(&format!("%{b:02X}")),
+        }
+    }
+    format!("https://www.openstreetmap.org/search?query={q}")
+}
+
+/// Where to join `o` online, from its location or notes.
+pub fn join_url(o: &Occurrence) -> Option<String> {
+    [o.location.as_deref(), o.description.as_deref()]
+        .into_iter()
+        .flatten()
+        .find_map(first_url)
+}
+
+/// A place to show on a map: the location, unless it is just a link.
+pub fn place(o: &Occurrence) -> Option<&str> {
+    o.location
+        .as_deref()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && first_url(l).as_deref() != Some(*l))
+}
+
+#[cfg(test)]
+mod location_tests {
+    use super::*;
+
+    #[test]
+    fn urls() {
+        assert_eq!(
+            first_url("Join: https://meet.example.com/abc-def. Thanks").as_deref(),
+            Some("https://meet.example.com/abc-def")
+        );
+        assert_eq!(
+            first_url("<https://x.org/a>").as_deref(),
+            Some("https://x.org/a")
+        );
+        assert_eq!(first_url("Room 4"), None);
+        assert_eq!(
+            map_url("Bistro 21, Leeds"),
+            "https://www.openstreetmap.org/search?query=Bistro+21%2C+Leeds"
+        );
+    }
+}

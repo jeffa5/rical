@@ -14,6 +14,8 @@ use chrono::{Datelike, Days, Utc};
 use gtk::{gio, glib};
 use log::{info, warn};
 
+#[path = "notify.rs"]
+mod notify;
 #[path = "ops.rs"]
 mod ops;
 #[path = "palette.rs"]
@@ -48,7 +50,8 @@ pub struct Window {
     agenda: Rc<AgendaView>,
     tasks: Rc<TasksView>,
     syncing: Cell<bool>,
-    last_view: Cell<Option<ViewKind>>,
+    /// First day and number of days the grid last showed.
+    last_grid_days: Cell<Option<(chrono::NaiveDate, usize)>>,
     monitors: RefCell<Vec<gio::FileMonitor>>,
     pending: RefCell<BTreeSet<PathBuf>>,
     reload_all_pending: Cell<bool>,
@@ -60,6 +63,9 @@ pub struct Window {
     history: RefCell<Vec<String>>,
     /// Scope given by a command, so it does not ask.
     forced_scope: Cell<Option<rical_core::write::Scope>>,
+    /// Alarms up to here have been checked.
+    alarm_check: Cell<chrono::DateTime<Utc>>,
+    alarms_fired: RefCell<notify::Fired>,
 }
 
 impl Window {
@@ -97,6 +103,17 @@ impl Window {
         this.watch();
         this.rebuild_calendar_list();
         this.refresh();
+
+        // reminders
+        this.check_alarms();
+        let weak = Rc::downgrade(&this);
+        glib::timeout_add_seconds_local(15, move || match weak.upgrade() {
+            Some(w) => {
+                w.check_alarms();
+                glib::ControlFlow::Continue
+            }
+            None => glib::ControlFlow::Break,
+        });
 
         // keep the now line current, and everything else when the day
         // changes (today's highlight, tasks carried over to today)
@@ -298,7 +315,7 @@ impl Window {
             agenda,
             tasks,
             syncing: Cell::new(false),
-            last_view: Cell::new(None),
+            last_grid_days: Cell::new(None),
             monitors: Default::default(),
             pending: Default::default(),
             reload_all_pending: Cell::new(false),
@@ -308,6 +325,8 @@ impl Window {
             pending_keys: Default::default(),
             history: Default::default(),
             forced_scope: Cell::new(None),
+            alarm_check: Cell::new(Utc::now() - notify::CATCH_UP),
+            alarms_fired: Default::default(),
         }
     }
 
@@ -563,15 +582,22 @@ impl Window {
             }
         }
 
-        let first_grid = matches!(view, ViewKind::Day | ViewKind::Week)
-            && !matches!(self.last_view.get(), Some(ViewKind::Day | ViewKind::Week));
-        self.last_view.set(Some(view));
-        if first_grid {
-            // after allocation, so the scroller knows its size
-            let grid = self.grid.clone();
-            glib::timeout_add_local_once(Duration::from_millis(50), move || {
-                grid.scroll_to_now_or_morning();
-            });
+        // when the grid shows different days, scroll to something useful:
+        // the selected event, now if today is shown, or the first event
+        let grid_days = state_days(&self.state.borrow());
+        if grid_days != self.last_grid_days.get() {
+            self.last_grid_days.set(grid_days);
+            if grid_days.is_some() {
+                // after allocation, so the scroller knows its size
+                let grid = self.grid.clone();
+                let has_selection = self.state.borrow().selected.is_some();
+                glib::timeout_add_local_once(Duration::from_millis(50), move || {
+                    grid.scroll_to_now_or_morning();
+                    if has_selection {
+                        grid.reveal_selected();
+                    }
+                });
+            }
         }
         self.syncing.set(false);
     }
@@ -681,4 +707,12 @@ impl Window {
         });
         *self.debounce.borrow_mut() = Some(id);
     }
+}
+
+/// The days the time grid shows, if it is the current view.
+fn state_days(state: &crate::state::State) -> Option<(chrono::NaiveDate, usize)> {
+    matches!(state.view, ViewKind::Day | ViewKind::Week).then(|| {
+        let days = state.visible_days();
+        (days[0], days.len())
+    })
 }

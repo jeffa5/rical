@@ -1,3 +1,4 @@
+pub mod alarm;
 pub mod component;
 pub mod doc;
 pub mod event;

@@ -131,11 +131,14 @@ fn new_done_delete() {
         "2025-03-04 14:00",
         "--for",
         "45m",
+        "--location",
+        "Room 4",
         "Design",
         "review",
     ]);
     let text = std::fs::read_to_string(path.trim()).unwrap();
     assert!(text.contains("SUMMARY:Design review"));
+    assert!(text.contains("LOCATION:Room 4"));
     assert!(text.contains("DTSTART;TZID=Europe/London:20250304T140000"));
     assert!(text.contains("DTEND;TZID=Europe/London:20250304T144500"));
 

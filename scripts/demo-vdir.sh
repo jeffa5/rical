@@ -33,7 +33,7 @@ task() { # calendar uid summary [extra lines...]
   item "$cal" BEGIN:VTODO "UID:$uid" DTSTAMP:20250101T000000Z "SUMMARY:$summary" "$@" END:VTODO
 }
 
-event work standup 0 0930 0945 "Standup" "RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR" "LOCATION:Video call"
+event work standup 0 0930 0945 "Standup" "RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR" "LOCATION:https://meet.example.com/abc-defg-hij"
 event work planning 0 1000 1130 "Sprint planning" "LOCATION:Room 4"
 event work oneone 1 1400 1430 "1:1 with Sam"
 event work review 2 1100 1230 "Design review" "STATUS:TENTATIVE" "DESCRIPTION:Walk through the new calendar views."
@@ -44,7 +44,7 @@ event work lunch 4 1230 1330 "Team lunch" "LOCATION:Noodle bar"
 event work cancelled 1 1600 1700 "Vendor call" "STATUS:CANCELLED"
 event personal gym 0 1800 1900 "Gym" "RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR"
 event personal dentist 1 0815 0900 "Dentist"
-event personal dinner 5 1930 2200 "Dinner with Alex" "LOCATION:Bistro 21"
+event personal dinner 5 1930 2200 "Dinner with Alex" "LOCATION:Bistro 21\, 4 Park Row\, Leeds"
 event personal piano 6 1100 1200 "Piano lesson" "RRULE:FREQ=WEEKLY"
 item personal BEGIN:VEVENT UID:trip DTSTAMP:20250101T000000Z \
   "DTSTART;VALUE=DATE:$(day 5)" "DTEND;VALUE=DATE:$(day 8)" "SUMMARY:Weekend in the Lakes" END:VEVENT
