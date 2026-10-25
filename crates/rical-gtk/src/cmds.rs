@@ -15,17 +15,20 @@ pub const AGENDA: Context = Context(4);
 pub const TASKS: Context = Context(8);
 pub const INVITATIONS: Context = Context(16);
 pub const JOURNAL: Context = Context(32);
+pub const YEAR: Context = Context(64);
 pub const ALL: Context = GRID
     .or(MONTH)
     .or(AGENDA)
     .or(TASKS)
     .or(INVITATIONS)
-    .or(JOURNAL);
+    .or(JOURNAL)
+    .or(YEAR);
 
 pub fn context(view: ViewKind) -> Context {
     match view {
         ViewKind::Day | ViewKind::Week | ViewKind::WorkWeek | ViewKind::Days(_) => GRID,
         ViewKind::Month => MONTH,
+        ViewKind::Year => YEAR,
         ViewKind::Agenda => AGENDA,
         ViewKind::Tasks => TASKS,
         ViewKind::Invitations => INVITATIONS,
@@ -38,6 +41,7 @@ pub fn section(view: ViewKind) -> &'static str {
     match view {
         ViewKind::Day | ViewKind::Week | ViewKind::WorkWeek | ViewKind::Days(_) => "grid",
         ViewKind::Month => "month",
+        ViewKind::Year => "year",
         ViewKind::Agenda => "agenda",
         ViewKind::Tasks => "tasks",
         ViewKind::Invitations => "invitations",
@@ -93,7 +97,7 @@ pub static SPECS: &[Spec] = &[
         args: &[arg("view", VIEWS)],
         ..spec(
             "view",
-            "Switch view: day, week, workweek, fullweek, Ndays (2-14), month, agenda, tasks, invitations, journal",
+            "Switch view: day, week, workweek, fullweek, Ndays (2-14), month, year, agenda, tasks, invitations, journal",
         )
     },
     Spec {
@@ -555,6 +559,7 @@ impl Values for StateValues<'_> {
                 "3days",
                 "4days",
                 "month",
+                "year",
                 "agenda",
                 "tasks",
                 "invitations",

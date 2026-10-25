@@ -41,6 +41,7 @@ use crate::{
     sidetasks::SideTasks,
     state::SharedState,
     tasks::TasksView,
+    year::YearView,
 };
 
 pub struct Window {
@@ -57,6 +58,7 @@ pub struct Window {
     calendar_list: gtk::ListBox,
     grid: Rc<TimeGrid>,
     month: Rc<MonthView>,
+    year: Rc<YearView>,
     agenda: Rc<AgendaView>,
     invitations: Rc<InvitationsView>,
     journals: Rc<JournalsView>,
@@ -172,6 +174,7 @@ impl Window {
     ) -> Self {
         let grid = TimeGrid::new(state.clone(), on_change.clone(), on_drag);
         let month = MonthView::new(state.clone(), on_change.clone());
+        let year = YearView::new(state.clone(), on_change.clone());
         let agenda = AgendaView::new(state.clone(), on_change.clone(), on_toggle.clone());
         let invitations = InvitationsView::new(state.clone(), on_change.clone(), on_reply);
         let journals = JournalsView::new(state.clone(), on_change.clone());
@@ -184,6 +187,7 @@ impl Window {
             .build();
         views.add_named(&grid.widget, Some("grid"));
         views.add_named(&month.area, Some("month"));
+        views.add_named(&year.area, Some("year"));
         views.add_named(&agenda.widget, Some("agenda"));
         views.add_named(&tasks.widget, Some("tasks"));
         views.add_named(&invitations.widget, Some("invitations"));
@@ -396,6 +400,7 @@ impl Window {
             calendar_list,
             grid,
             month,
+            year,
             agenda,
             invitations,
             journals,
@@ -549,6 +554,7 @@ impl Window {
                 self.grid.show_selected_details()
             }
             ViewKind::Month => self.month.show_selected_details(),
+            ViewKind::Year => {}
             ViewKind::Agenda => self.agenda.show_selected_details(),
             ViewKind::Invitations => self.invitations.show_selected_details(),
             ViewKind::Tasks | ViewKind::Journal => {
@@ -569,17 +575,19 @@ impl Window {
     /// that was just switched to cannot take focus yet.
     fn focus_view(&self) {
         let view = self.state.borrow().view;
-        let (grid, month, agenda, tasks, invitations, journals) = (
+        let (grid, month, agenda, tasks, invitations, journals, year) = (
             self.grid.clone(),
             self.month.clone(),
             self.agenda.clone(),
             self.tasks.clone(),
             self.invitations.clone(),
             self.journals.clone(),
+            self.year.clone(),
         );
         glib::idle_add_local_once(move || match view {
             ViewKind::Day | ViewKind::Week | ViewKind::WorkWeek | ViewKind::Days(_) => grid.focus(),
             ViewKind::Month => month.focus(),
+            ViewKind::Year => year.focus(),
             ViewKind::Agenda => agenda.focus(),
             ViewKind::Tasks => tasks.focus(),
             ViewKind::Invitations => invitations.focus(),
@@ -711,6 +719,10 @@ impl Window {
             ViewKind::Day | ViewKind::Week | ViewKind::WorkWeek | ViewKind::Days(_) => {
                 self.views.set_visible_child_name("grid");
                 self.grid.refresh();
+            }
+            ViewKind::Year => {
+                self.views.set_visible_child_name("year");
+                self.year.refresh();
             }
             ViewKind::Month => {
                 self.views.set_visible_child_name("month");
@@ -1006,6 +1018,7 @@ fn view_toggles(state: &SharedState) -> (adw::ToggleGroup, gtk::Label) {
         ("Wor_k week", "workweek"),
         ("_3 days", "3days"),
         ("_Month", "month"),
+        ("_Year", "year"),
         ("_Agenda", "agenda"),
     ] {
         let item = gio::MenuItem::new(Some(text), None);

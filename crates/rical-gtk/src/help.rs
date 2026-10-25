@@ -178,9 +178,10 @@ fn entry(title: String, subtitle: String, keys: Vec<Vec<Key>>, extra: &str) -> E
 }
 
 /// The view sections and what to call them.
-const VIEWS: [(&str, &str); 6] = [
+const VIEWS: [(&str, &str); 7] = [
     ("grid", "Day and week"),
     ("month", "Month"),
+    ("year", "Year"),
     ("agenda", "Agenda"),
     ("tasks", "Tasks"),
     ("invitations", "Invitations"),

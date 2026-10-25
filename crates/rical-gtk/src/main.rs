@@ -32,6 +32,7 @@ mod sidetasks;
 mod state;
 mod tasks;
 mod window;
+mod year;
 mod zonepick;
 mod zones;
 

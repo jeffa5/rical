@@ -106,8 +106,12 @@ impl Window {
             },
             "open" => {
                 let view = self.state.borrow().view;
+                // the year shows days, not events: open the focused one
+                if view == ViewKind::Year {
+                    self.state.borrow_mut().selected = None;
+                    self.set_view(ViewKind::Day);
                 // tasks and journal entries are chosen in their own lists
-                if !view.is_calendar() || self.state.borrow().selected.is_some() {
+                } else if !view.is_calendar() || self.state.borrow().selected.is_some() {
                     self.show_details();
                 } else if view != ViewKind::Day {
                     self.set_view(ViewKind::Day);

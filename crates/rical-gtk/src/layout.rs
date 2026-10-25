@@ -17,6 +17,8 @@ pub enum ViewKind {
     /// This many days from the focused day.
     Days(u8),
     Month,
+    /// The twelve months of the focused day's year.
+    Year,
     Agenda,
     Tasks,
     /// Journal entries and notes.
@@ -35,6 +37,7 @@ impl ViewKind {
             Self::WorkWeek => "workweek".into(),
             Self::Days(n) => format!("{n}days"),
             Self::Month => "month".into(),
+            Self::Year => "year".into(),
             Self::Agenda => "agenda".into(),
             Self::Tasks => "tasks".into(),
             Self::Invitations => "invitations".into(),
@@ -49,6 +52,7 @@ impl ViewKind {
             "fullweek" => Self::Week,
             "workweek" => Self::WorkWeek,
             "month" => Self::Month,
+            "year" => Self::Year,
             "agenda" => Self::Agenda,
             "tasks" => Self::Tasks,
             "invitations" | "invites" => Self::Invitations,
@@ -87,6 +91,7 @@ impl ViewKind {
             Self::WorkWeek => "Work week".into(),
             Self::Days(n) => format!("{n} days"),
             Self::Month => "Month".into(),
+            Self::Year => "Year".into(),
             Self::Agenda => "Agenda".into(),
             Self::Tasks => "Tasks".into(),
             Self::Invitations => "Invitations".into(),
@@ -129,6 +134,10 @@ pub fn visible_days(view: ViewKind, date: NaiveDate) -> Vec<NaiveDate> {
         ViewKind::WorkWeek => (work_week_start(date), 5),
         ViewKind::Days(n) => (date, n as u64),
         ViewKind::Month => (week_start(date.with_day(1).unwrap()), 42),
+        ViewKind::Year => {
+            let first = NaiveDate::from_ymd_opt(date.year(), 1, 1).unwrap();
+            (first, first.leap_year() as u64 + 365)
+        }
         ViewKind::Agenda => (date, AGENDA_DAYS),
         // tasks are not by date; the focused day still matters for "today"
         ViewKind::Tasks | ViewKind::Journal => (date, 1),
@@ -152,6 +161,14 @@ pub fn step(view: ViewKind, date: NaiveDate, forward: bool) -> NaiveDate {
         ViewKind::Days(n) => shift(date, n as u64),
         ViewKind::Agenda => shift(date, AGENDA_DAYS),
         ViewKind::Tasks | ViewKind::Invitations | ViewKind::Journal => date,
+        ViewKind::Year => {
+            let months = chrono::Months::new(12);
+            if forward {
+                date.checked_add_months(months).unwrap_or(date)
+            } else {
+                date.checked_sub_months(months).unwrap_or(date)
+            }
+        }
         ViewKind::Month => {
             let months = chrono::Months::new(1);
             if forward {

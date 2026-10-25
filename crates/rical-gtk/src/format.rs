@@ -87,6 +87,7 @@ pub fn view_title(view: ViewKind, date: NaiveDate, days: &[NaiveDate]) -> (Strin
             (title, sub)
         }
         ViewKind::Month => (date.format("%B %Y").to_string(), String::new()),
+        ViewKind::Year => (date.format("%Y").to_string(), String::new()),
         ViewKind::Agenda => (
             format!("From {}", date.format("%-d %B %Y")),
             format!("Next {} days", layout::AGENDA_DAYS),
