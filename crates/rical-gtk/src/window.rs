@@ -32,6 +32,7 @@ use crate::{
     grid::{DragAction, TimeGrid},
     layout::{self, ViewKind},
     month::MonthView,
+    sidetasks::SideTasks,
     state::SharedState,
     tasks::TasksView,
 };
@@ -50,6 +51,7 @@ pub struct Window {
     month: Rc<MonthView>,
     agenda: Rc<AgendaView>,
     tasks: Rc<TasksView>,
+    side_tasks: Rc<SideTasks>,
     syncing: Cell<bool>,
     /// First day and number of days the grid last showed.
     last_grid_days: Cell<Option<(chrono::NaiveDate, usize)>>,
@@ -147,6 +149,7 @@ impl Window {
         let grid = TimeGrid::new(state.clone(), on_change.clone(), on_drag);
         let month = MonthView::new(state.clone(), on_change.clone());
         let agenda = AgendaView::new(state.clone(), on_change.clone());
+        let side_tasks = SideTasks::new(state.clone(), on_toggle.clone());
         let tasks = TasksView::new(state.clone(), on_change, on_toggle);
 
         let views = gtk::Stack::builder()
@@ -257,6 +260,7 @@ impl Window {
                 .build(),
         );
         sidebar_box.append(&calendar_list);
+        sidebar_box.append(&side_tasks.widget);
         let sidebar_scroll = gtk::ScrolledWindow::builder()
             .child(&sidebar_box)
             .hscrollbar_policy(gtk::PolicyType::Never)
@@ -327,6 +331,7 @@ impl Window {
             month,
             agenda,
             tasks,
+            side_tasks,
             syncing: Cell::new(false),
             last_grid_days: Cell::new(None),
             monitors: Default::default(),
@@ -577,6 +582,7 @@ impl Window {
     /// Bring every part of the window in line with the state.
     pub fn refresh(&self) {
         details::close();
+        self.side_tasks.refresh();
         self.syncing.set(true);
         let state = self.state.borrow();
         let view = state.view;

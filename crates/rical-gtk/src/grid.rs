@@ -42,6 +42,12 @@ pub enum DragAction {
         start: When,
         end: When,
     },
+    /// A task dropped from the sidebar: a time on the grid, or a date on
+    /// the all-day row.
+    DropTask {
+        task: (std::path::PathBuf, String),
+        at: When,
+    },
 }
 
 enum DragKind {
@@ -146,6 +152,8 @@ impl TimeGrid {
         this.setup_drawing();
         this.setup_clicks(on_change);
         this.setup_cursor();
+        this.setup_drop(&this.grid.clone(), false);
+        this.setup_drop(&this.all_day.clone(), true);
         this
     }
 
@@ -349,6 +357,40 @@ impl TimeGrid {
             }
         });
         area.add_controller(gesture);
+    }
+
+    /// Accept tasks dragged from the sidebar.
+    fn setup_drop(self: &Rc<Self>, area: &gtk::DrawingArea, all_day: bool) {
+        let target = gtk::DropTarget::new(String::static_type(), gtk::gdk::DragAction::COPY);
+        let this = Rc::downgrade(self);
+        let widget = area.clone();
+        target.connect_drop(move |_, value, x, y| {
+            let Some(this) = this.upgrade() else {
+                return false;
+            };
+            let Some(task) = value
+                .get::<String>()
+                .ok()
+                .and_then(|s| crate::sidetasks::decode(&s))
+            else {
+                return false;
+            };
+            let Some(day) = this.day_at(x.max(GUTTER), widget.width() as f64) else {
+                return false;
+            };
+            let at = if all_day {
+                When::Date(day)
+            } else {
+                let local = this.state.borrow().local;
+                When::Zoned(
+                    (layout::day_start(day, local) + TimeDelta::minutes(snap(minute_at(y)) as i64))
+                        .with_timezone(&local),
+                )
+            };
+            (this.on_drag)(DragAction::DropTask { task, at });
+            true
+        });
+        area.add_controller(target);
     }
 
     /// Hint what dragging will do: move or, near the bottom edge, resize.
@@ -657,7 +699,7 @@ impl TimeGrid {
             if hour > 0 {
                 let label = draw::layout(
                     area,
-                    &format!("{hour:02}:00"),
+                    &hour_label(days[0], hour, state.local),
                     &TextStyle::SMALL,
                     GUTTER - 10.0,
                     1,
@@ -873,4 +915,30 @@ fn draw_ghost(
     draw::rounded_rect(cr, x + 0.75, y + 0.75, w - 1.5, h - 1.5, 5.0);
     let _ = cr.stroke();
     cr.set_dash(&[], 0.0);
+}
+
+/// The local time `hours` after the start of `day`; on days the clocks
+/// change this differs from the plain hour number.
+fn hour_label(day: NaiveDate, hours: i64, local: chrono_tz::Tz) -> String {
+    (layout::day_start(day, local) + TimeDelta::hours(hours))
+        .with_timezone(&local)
+        .format("%H:%M")
+        .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hour_labels_follow_clock_changes() {
+        let london = chrono_tz::Tz::Europe__London;
+        let normal = NaiveDate::from_ymd_opt(2026, 10, 24).unwrap();
+        assert_eq!(hour_label(normal, 5, london), "05:00");
+        // the clocks go back at 02:00 BST on 25 October 2026
+        let change = NaiveDate::from_ymd_opt(2026, 10, 25).unwrap();
+        assert_eq!(hour_label(change, 1, london), "01:00");
+        assert_eq!(hour_label(change, 2, london), "01:00");
+        assert_eq!(hour_label(change, 5, london), "04:00");
+    }
 }

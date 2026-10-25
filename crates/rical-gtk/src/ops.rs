@@ -27,6 +27,7 @@ impl Window {
         match action {
             DragAction::Move { occ, start, end } => self.set_times(*occ, start, end),
             DragAction::Create { start, end } => self.new_item(Some((start, end))),
+            DragAction::DropTask { task, at } => self.drop_task(&task, at),
         }
     }
 
@@ -353,14 +354,7 @@ impl Window {
         }
         let (path, uid) = state.selected_task.as_ref()?;
         let t = state.vdir.task(path, uid)?;
-        // undated tasks are edited as due today
-        let start = t.start.or(t.due).unwrap_or(When::Date(state.today()));
-        let end = t.due.unwrap_or(start);
-        let mut occ = t.on_day(state.today());
-        occ.start = start;
-        occ.end = end;
-        occ.all_day = start.is_date();
-        Some(occ)
+        Some(task_occurrence(&t, state.today()))
     }
 
     /// The task the user means: selected in the tasks view, or a selected
@@ -461,6 +455,11 @@ impl Window {
             .current_item()
             .filter(|o| o.kind == Kind::Todo)
             .ok_or("select a task to schedule")?;
+        self.schedule(occ, start, length);
+        Ok(())
+    }
+
+    fn schedule(self: &Rc<Self>, occ: Occurrence, start: When, length: TimeDelta) {
         let mut draft = self.state.borrow().vdir.draft(&occ);
         draft.start = start;
         draft.end = start.add(length);
@@ -472,7 +471,6 @@ impl Window {
             self.reselect(&occ.uid, &start);
             self.toast(&format!("Scheduled “{}”", occ.summary));
         }
-        Ok(())
     }
 
     /// Change how the selected event repeats (the whole series).
@@ -492,4 +490,39 @@ impl Window {
         }
         Ok(())
     }
+
+    /// A task dragged onto the calendar: a time schedules it for an hour,
+    /// a day (the all-day row) makes it due then.
+    fn drop_task(self: &Rc<Self>, id: &(PathBuf, String), at: When) {
+        let (task, today) = {
+            let s = self.state.borrow();
+            (s.vdir.task(&id.0, &id.1), s.today())
+        };
+        let Some(task) = task else { return };
+        if at.is_date() {
+            let summary = task.summary.clone();
+            if self.perform("set the due date", |v| {
+                v.set_due(&task, Some(at)).map(|c| vec![c])
+            }) {
+                let local = self.state.borrow().local;
+                self.toast(&format!(
+                    "“{summary}” due {}",
+                    crate::format::day(at.date(local))
+                ));
+            }
+        } else {
+            self.schedule(task_occurrence(&task, today), at, TimeDelta::hours(1));
+        }
+    }
+}
+
+/// A task as an occurrence for editing: on its dates, or today if undated.
+fn task_occurrence(t: &Task, today: chrono::NaiveDate) -> Occurrence {
+    let start = t.start.or(t.due).unwrap_or(When::Date(today));
+    let end = t.due.unwrap_or(start);
+    let mut occ = t.on_day(today);
+    occ.start = start;
+    occ.end = end;
+    occ.all_day = start.is_date();
+    occ
 }

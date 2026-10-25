@@ -21,6 +21,7 @@ mod listhead;
 mod month;
 mod repeat;
 
+mod sidetasks;
 mod state;
 mod tasks;
 mod window;
