@@ -1,5 +1,6 @@
 pub mod alarm;
-pub mod compact;
+/// The compact parser calendars are loaded with.
+pub use compact_ics as compact;
 pub mod component;
 pub mod doc;
 pub mod event;

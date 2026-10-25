@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+compact-ics.workspace = true
 chrono.workspace = true
 chrono-tz = "0.10.4"
 iana-time-zone = "0.1.65"

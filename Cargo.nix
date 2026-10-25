@@ -43,6 +43,16 @@ rec {
   # You can override the features with
   # workspaceMembers."${crateName}".build.override { features = [ "default" "feature1" ... ]; }.
   workspaceMembers = {
+    "compact-ics" = rec {
+      packageId = "compact-ics";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "compact-ics";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "rical" = rec {
       packageId = "rical";
       build = internal.buildRustCrateWithFeatures {
@@ -1238,6 +1248,14 @@ rec {
           "tty" = [ "dep:crossterm" ];
         };
         resolvedDefaultFeatures = [ "default" "tty" ];
+      };
+      "compact-ics" = rec {
+        crateName = "compact-ics";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/compact-ics; };
+        libName = "compact_ics";
+
       };
       "concurrent-queue" = rec {
         crateName = "concurrent-queue";
@@ -4803,6 +4821,10 @@ rec {
           {
             name = "chrono-tz";
             packageId = "chrono-tz";
+          }
+          {
+            name = "compact-ics";
+            packageId = "compact-ics";
           }
           {
             name = "iana-time-zone";

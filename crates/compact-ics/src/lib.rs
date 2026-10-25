@@ -1,10 +1,46 @@
-//! A compact parsed form of `.ics` items, for keeping a whole vdir in
-//! memory cheaply: one pass over the text, properties in file order with
-//! their names shared (not a string each), and VTIMEZONEs skipped (zone
-//! rules come from the built-in time zone database; their TZIDs are noted
-//! so a file can be found to copy one from).
+//! A small, fast iCalendar (RFC 5545) parser into a compact in-memory form,
+//! for keeping many items in memory cheaply: one pass over the text,
+//! properties kept in file order (repeated ones included) with common
+//! names shared rather than a string each, and VTIMEZONEs skipped (their
+//! TZIDs are returned, so a caller can find a file to copy one from; zone
+//! rules are better taken from a time zone database).
+//!
+//! Values are kept as written: unescaping TEXT, and parsing dates,
+//! durations and rules, is up to the caller.
+//!
+//! ```
+//! let text = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:a\r\nSUMMARY:Lunch\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+//! let (items, _tzids) = compact_ics::parse(text).unwrap();
+//! assert_eq!(items[0].value("SUMMARY"), Some("Lunch"));
+//! ```
 
-use std::borrow::Cow;
+use std::{borrow::Cow, fmt};
+
+/// Why a text could not be parsed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Error {
+    /// `END:X` with no component open.
+    EndWithoutBegin(String),
+    /// `END:X` closing a different component.
+    Mismatched { begin: String, end: String },
+    /// A component left open at the end.
+    Unclosed(String),
+    /// Nothing calendar-like in the text.
+    NoCalendar,
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EndWithoutBegin(k) => write!(f, "END:{k} without BEGIN"),
+            Self::Mismatched { begin, end } => write!(f, "END:{end} closes BEGIN:{begin}"),
+            Self::Unclosed(k) => write!(f, "BEGIN:{k} is never closed"),
+            Self::NoCalendar => write!(f, "no calendar in text"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
 
 /// A property or component name, upper-cased; common ones are shared.
 pub type Name = Cow<'static, str>;
@@ -178,7 +214,7 @@ fn split_line(line: &str) -> Option<Prop> {
 
 /// The top-level components in `text` (those inside VCALENDAR), and the
 /// TZIDs of the VTIMEZONEs it skipped.
-pub fn parse(text: &str) -> anyhow::Result<(Vec<Component>, Vec<String>)> {
+pub fn parse(text: &str) -> Result<(Vec<Component>, Vec<String>), Error> {
     let mut out = Vec::new();
     let mut tzids = Vec::new();
     let mut stack: Vec<Component> = Vec::new();
@@ -187,7 +223,7 @@ pub fn parse(text: &str) -> anyhow::Result<(Vec<Component>, Vec<String>)> {
     let mut logical = String::new();
 
     let mut handle =
-        |line: &str, stack: &mut Vec<Component>, out: &mut Vec<Component>| -> anyhow::Result<()> {
+        |line: &str, stack: &mut Vec<Component>, out: &mut Vec<Component>| -> Result<(), Error> {
             if line.is_empty() {
                 return Ok(());
             }
@@ -217,9 +253,12 @@ pub fn parse(text: &str) -> anyhow::Result<(Vec<Component>, Vec<String>)> {
                 } else {
                     let mut c = stack
                         .pop()
-                        .ok_or_else(|| anyhow::anyhow!("END:{kind} without BEGIN"))?;
+                        .ok_or_else(|| Error::EndWithoutBegin(kind.to_owned()))?;
                     if !c.kind.eq_ignore_ascii_case(kind) {
-                        anyhow::bail!("END:{kind} closes BEGIN:{}", c.kind);
+                        return Err(Error::Mismatched {
+                            begin: c.kind.to_string(),
+                            end: kind.to_owned(),
+                        });
                     }
                     c.props.shrink_to_fit();
                     c.children.shrink_to_fit();
@@ -256,10 +295,10 @@ pub fn parse(text: &str) -> anyhow::Result<(Vec<Component>, Vec<String>)> {
     }
     handle(&logical, &mut stack, &mut out)?;
     if let Some(c) = stack.last() {
-        anyhow::bail!("BEGIN:{} is never closed", c.kind);
+        return Err(Error::Unclosed(c.kind.to_string()));
     }
     if !seen_calendar && out.is_empty() {
-        anyhow::bail!("no calendar in file");
+        return Err(Error::NoCalendar);
     }
     out.shrink_to_fit();
     Ok((out, tzids))

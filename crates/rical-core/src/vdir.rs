@@ -406,7 +406,7 @@ fn read_item(path: &Path) -> Option<Vec<AnyComponent>> {
 fn read_item_without_timezones(path: &Path) -> Option<(Vec<AnyComponent>, Vec<String>)> {
     let parsed = std::fs::read_to_string(path)
         .map_err(anyhow::Error::from)
-        .and_then(|text| crate::compact::parse(&text));
+        .and_then(|text| Ok(crate::compact::parse(&text)?));
     match parsed {
         Ok((components, tzids)) => {
             // one copy of the path for all of a file's components

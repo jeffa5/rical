@@ -1,0 +1,7 @@
+[package]
+name = "compact-ics"
+description = "A small, fast iCalendar (RFC 5545) parser into a compact in-memory form"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
