@@ -52,7 +52,7 @@ pub fn open(
         .title("Type")
         .model(&gtk::StringList::new(&["Event", "Todo"]))
         .selected(u32::from(draft.kind == Kind::Todo))
-        .visible(options.is_new)
+        .visible(options.is_new && draft.kind != Kind::Journal)
         .build();
 
     let names = calendars
@@ -85,11 +85,12 @@ pub fn open(
     };
     // the zones the times are typed in: the event's own, mine for new ones
     let zones = Rc::new(ZonePicker::new(local, &draft));
-    // a task's dates are each optional: empty for none
+    // a task's dates are each optional, and a note's date: empty for none
     let task = draft.kind == Kind::Todo;
+    let optional_start = task || draft.kind == Kind::Journal;
     let starts = adw::EntryRow::builder()
         .title(labels(task).0)
-        .text(if task && !draft.has_start {
+        .text(if optional_start && !draft.has_start {
             String::new()
         } else {
             format::input(&draft.start, zones.start_tz())
@@ -280,6 +281,8 @@ pub fn open(
     when.add(&ends);
     // a journal entry is dated, not timed: no end, no guests or call
     if draft.kind == Kind::Journal {
+        starts.set_title("Date (empty for an undated note)");
+        location.set_visible(false);
         ends.set_visible(false);
         zones.end.set_visible(false);
         video.set_visible(false);
@@ -436,7 +439,7 @@ pub fn open(
             // a task may leave either date empty
             let task = kind == Kind::Todo;
             let (start_text, end_text) = (starts.text(), ends.text());
-            let has_start = !(task && start_text.trim().is_empty());
+            let has_start = !((task || kind == Kind::Journal) && start_text.trim().is_empty());
             // a journal entry has only its date
             let has_due = kind != Kind::Journal && !(task && end_text.trim().is_empty());
             // times are read in their zones; all-day ones are plain dates

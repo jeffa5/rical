@@ -6,7 +6,7 @@ use adw::prelude::*;
 use gtk::{gdk, glib};
 use rical_core::{Kind, Occurrence};
 
-use crate::{format, state::State};
+use crate::{format, layout::ViewKind, state::State};
 
 /// Show the details of `occ` in a popover pointing at `rect` in `parent`.
 pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurrence, state: &State) {
@@ -282,8 +282,37 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
             .build();
         actions.append(&sub);
     }
+    // from a list, its place among the days around it
+    let in_days = matches!(
+        state.view,
+        ViewKind::Day | ViewKind::Week | ViewKind::WorkWeek | ViewKind::Days(_) | ViewKind::Month
+    );
+    if !in_days && has_day(occ, state) {
+        actions.append(&action(
+            "Show in calendar",
+            Some("find-location-symbolic"),
+            "Show in the calendar (v)",
+            "reveal",
+        ));
+    }
     let spacer = gtk::Box::builder().hexpand(true).build();
     actions.append(&spacer);
+    if occ.kind != Kind::Journal {
+        let (icon, tip) = if occ.kind == Kind::Todo {
+            (
+                "x-office-calendar-symbolic",
+                "Make it an event (:convert, Ctrl+T)",
+            )
+        } else {
+            (
+                "checkbox-checked-symbolic",
+                "Make it a task (:convert, Ctrl+T)",
+            )
+        };
+        let convert = action(tip, Some(icon), tip, "convert");
+        convert.add_css_class("flat");
+        actions.append(&convert);
+    }
     let raw = action(
         "Raw",
         Some("text-x-generic-symbolic"),
@@ -304,12 +333,19 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
     content.append(&actions);
 
     close();
+    // beside a spot on a calendar; under a row of a list, which spans the
+    // width and leaves no room beside it
+    let position = if parent.as_ref().is::<gtk::ListBoxRow>() {
+        gtk::PositionType::Bottom
+    } else {
+        gtk::PositionType::Right
+    };
     // Not modal: keys keep going to the window, so j/k/e/x still work while
     // it is open. It closes on the next change or with Escape.
     let popover = gtk::Popover::builder()
         .child(&content)
         .pointing_to(&rect)
-        .position(gtk::PositionType::Right)
+        .position(position)
         .autohide(false)
         .can_focus(false)
         .build();
@@ -495,4 +531,20 @@ pub fn open_uri(parent: Option<&gtk::Window>, uri: &str) {
             log::warn!("could not open link: {e}");
         }
     });
+}
+
+/// Whether `occ` has a day to show it on: undated tasks and notes do not.
+fn has_day(occ: &Occurrence, state: &State) -> bool {
+    match occ.kind {
+        Kind::Todo => state
+            .vdir
+            .task(&occ.path, &occ.uid)
+            .is_some_and(|t| t.day(state.local).is_some()),
+        Kind::Journal => state
+            .vdir
+            .journals()
+            .iter()
+            .any(|(o, dated)| *dated && o.path == occ.path && o.uid == occ.uid),
+        Kind::Event => true,
+    }
 }

@@ -54,6 +54,8 @@ pub struct Window {
     toggles: [adw::ToggleGroup; 2],
     /// The calendar view each switcher's Calendar part names.
     calendar_labels: [gtk::Label; 2],
+    /// The header's + button: a new event, task or journal entry by view.
+    add: gtk::Button,
     mini: Rc<MiniMonth>,
     calendar_list: gtk::ListBox,
     grid: Rc<TimeGrid>,
@@ -396,6 +398,7 @@ impl Window {
             views,
             toggles: [toggle, toggle_bottom],
             calendar_labels: [label_top, label_bottom],
+            add: add.clone(),
             mini,
             calendar_list,
             grid,
@@ -708,6 +711,14 @@ impl Window {
         } else {
             state.calendar_view
         };
+        let (command, tip) = match view {
+            ViewKind::Journal => ("note", "New journal entry (C)"),
+            ViewKind::Tasks => ("new --kind todo", "New task (c)"),
+            _ => ("new", "New event (c)"),
+        };
+        self.add
+            .set_action_target_value(Some(&command.to_variant()));
+        self.add.set_tooltip_text(Some(tip));
         for label in &self.calendar_labels {
             label.set_label(&calendar_view.label());
         }

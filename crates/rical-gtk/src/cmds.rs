@@ -232,6 +232,13 @@ pub static SPECS: &[Spec] = &[
         ..spec("resize", "Change the selected event's end, e.g. +15m")
     },
     Spec {
+        aliases: &["to-task", "to-event"],
+        ..spec(
+            "convert",
+            "Turn the selected event into a task, or task into an event",
+        )
+    },
+    Spec {
         aliases: &["complete"],
         ..spec("done", "Mark the selected task done, or not done again")
     },
@@ -256,6 +263,31 @@ pub static SPECS: &[Spec] = &[
             },
         ],
         ..spec("task", "Add a task, e.g. :task Buy milk --due fri")
+    },
+    Spec {
+        aliases: &["jot"],
+        args: &[Arg {
+            name: "title",
+            kind: Kind::Text("title"),
+            optional: true,
+            rest: true,
+        }],
+        flags: &[
+            Flag {
+                name: "date",
+                kind: DATE,
+                help: "the day it is for, or \"none\" for an undated note",
+            },
+            Flag {
+                name: "calendar",
+                kind: Kind::Dynamic("calendar"),
+                help: "calendar to add to",
+            },
+        ],
+        ..spec(
+            "note",
+            "Add a journal entry, e.g. :note Ran 5k today; without text the editor opens",
+        )
     },
     Spec {
         args: &[Arg {

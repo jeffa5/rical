@@ -105,6 +105,17 @@ impl Window {
         self.toasts.add_toast(adw::Toast::new(text));
     }
 
+    /// A toast that replaces any showing, for the result of what was just
+    /// done.
+    pub(super) fn toast_now(&self, text: &str) {
+        self.toasts.add_toast(
+            adw::Toast::builder()
+                .title(text)
+                .priority(adw::ToastPriority::High)
+                .build(),
+        );
+    }
+
     /// Select the occurrence of `uid` starting at `start`, if visible.
     pub(super) fn reselect(&self, uid: &str, start: &When) {
         {
@@ -165,15 +176,70 @@ impl Window {
         );
     }
 
+    /// Open the editor for a new journal entry.
+    pub(super) fn open_new_note(self: &Rc<Self>, draft: Draft, calendar: String) {
+        let weak = Rc::downgrade(self);
+        editor::open(
+            &self.window,
+            &self.state,
+            editor::Options {
+                title: "New Journal Entry",
+                draft,
+                calendar,
+                is_new: true,
+                invitation: false,
+                uid: None,
+            },
+            move |draft, calendar| {
+                if let Some(w) = weak.upgrade() {
+                    w.create(draft, calendar);
+                }
+            },
+            None,
+        );
+    }
+
     /// Create an item and select it.
     pub(super) fn create(self: &Rc<Self>, draft: Draft, calendar: String) {
         self.state.borrow_mut().last_calendar = Some(calendar.clone());
         let mut created = None;
-        let ok = self.perform("create the event", |v| {
+        let what = match draft.kind {
+            Kind::Journal => "add the journal entry",
+            _ => "create the event",
+        };
+        let ok = self.perform(what, |v| {
             let change = v.create(&calendar, &draft)?;
             created = Some(change.path.clone());
             Ok(vec![change])
         });
+        if ok && draft.kind == Kind::Journal {
+            // selected in the journal view, and shown on its day elsewhere
+            let path = created.unwrap();
+            let uid = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let local = self.state.borrow().local;
+            {
+                let mut s = self.state.borrow_mut();
+                s.selected_journal = Some((path, uid.clone()));
+                if draft.has_start {
+                    s.date = draft.start.date(local);
+                }
+            }
+            if draft.has_start && self.state.borrow().view.is_calendar() {
+                self.reselect(&uid, &draft.start);
+            } else {
+                self.refresh();
+            }
+            let day = if draft.has_start {
+                crate::format::day(draft.start.date(local))
+            } else {
+                "an undated note".into()
+            };
+            self.toast_now(&format!("Added “{}” · {day}", draft.summary));
+            return;
+        }
         if ok
             && let Some(uid) = created
                 .as_ref()
@@ -853,7 +919,7 @@ impl Window {
             };
             // a view of days around it: the last one used, or the week
             let view = match s.calendar_view {
-                ViewKind::Agenda => s.week_view,
+                ViewKind::Agenda | ViewKind::Year => s.week_view,
                 v if v.is_calendar() => v,
                 _ => s.week_view,
             };
@@ -874,6 +940,57 @@ impl Window {
         self.refresh();
         self.focus_view();
         self.grid.reveal_selected();
+        Ok(())
+    }
+
+    /// `:convert`: turn the selected event into a task, or task into an
+    /// event, and select what it became.
+    pub(super) fn convert(self: &Rc<Self>) -> Result<(), String> {
+        let occ = self.current_item().ok_or("select an event or task first")?;
+        crate::details::close();
+        let today = self.today_date();
+        let local = self.state.borrow().local;
+        let what = match occ.kind {
+            Kind::Todo => "make it an event",
+            _ => "make it a task",
+        };
+        let mut made = None;
+        if !self.perform(what, |v| {
+            let (changes, uid) = v.convert(&occ, today, local)?;
+            made = Some((changes[0].path.clone(), uid));
+            Ok(changes)
+        }) {
+            return Ok(());
+        }
+        let (path, uid) = made.unwrap();
+        if occ.kind == Kind::Todo {
+            // the event, selected on its day
+            let found = {
+                let mut s = self.state.borrow_mut();
+                let around = occ.start.to_utc(local);
+                let range = around - TimeDelta::days(400)..around + TimeDelta::days(400);
+                let first = s
+                    .vdir
+                    .query(&range, &[Kind::Event], local)
+                    .into_iter()
+                    .filter(|o| o.path == path && o.uid == uid)
+                    .min_by_key(|o| (o.start.date(local) - today).num_days().abs());
+                if let Some(o) = &first
+                    && s.view.is_calendar()
+                {
+                    s.date = o.start.date(local);
+                }
+                first
+            };
+            if let Some(o) = found {
+                self.reselect(&uid, &o.start);
+            }
+            self.toast_now(&format!("“{}” is now an event · u undoes", occ.summary));
+        } else {
+            self.state.borrow_mut().selected_task = Some((path, uid));
+            self.refresh();
+            self.toast_now(&format!("“{}” is now a task · u undoes", occ.summary));
+        }
         Ok(())
     }
 }

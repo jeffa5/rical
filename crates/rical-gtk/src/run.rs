@@ -119,6 +119,7 @@ impl Window {
             }
             "details" => self.show_details(),
             "reveal" => self.reveal()?,
+            "convert" => self.convert()?,
             "link" => {
                 let occ = self.current_item().ok_or("select an event first")?;
                 let url =
@@ -131,6 +132,7 @@ impl Window {
                 details::open_uri(Some(self.window.upcast_ref()), &format::map_url(place));
             }
             "new" => self.run_new(p)?,
+            "note" => self.run_note(p)?,
             "edit" => self.edit_selected(),
             "invite" | "uninvite" => {
                 let words = p.arg(0).unwrap_or_default();
@@ -396,7 +398,7 @@ impl Window {
         Ok(())
     }
 
-    fn today_date(&self) -> chrono::NaiveDate {
+    pub(super) fn today_date(&self) -> chrono::NaiveDate {
         Utc::now()
             .with_timezone(&self.state.borrow().local)
             .date_naive()
@@ -416,6 +418,63 @@ impl Window {
             _ => self.open_new(draft, calendar),
         }
         Ok(())
+    }
+
+    /// `note [--date D] [--calendar C] [text]`: a journal entry, dated by
+    /// the day the text names ("Ran 5k today"), else the focused day (today
+    /// in the journal view); `--date none` makes an undated note. Without
+    /// text the editor opens.
+    fn run_note(self: &Rc<Self>, p: &Parsed) -> Result<(), String> {
+        let (draft, calendar) = self.note_draft(p)?;
+        match p.arg(0) {
+            Some(_) if !draft.summary.is_empty() => self.create(draft, calendar),
+            _ => self.open_new_note(draft, calendar),
+        }
+        Ok(())
+    }
+
+    pub(super) fn note_draft(&self, p: &Parsed) -> Result<(Draft, String), String> {
+        let (local, focused, view) = {
+            let s = self.state.borrow();
+            (s.local, s.date, s.view)
+        };
+        let today = self.today_date();
+        let q =
+            rical_core::quick::parse(p.arg(0).unwrap_or_default(), today, focused, local, false);
+        let mut day = Some(if view == ViewKind::Journal {
+            today
+        } else {
+            focused
+        });
+        match p.flag("date") {
+            Some("none") => day = None,
+            Some(text) => {
+                day = Some(parse_date(text, today).ok_or(format!("not a date: “{text}”"))?);
+            }
+            None => {}
+        }
+        let mut draft = q.note_draft(day, local);
+        if p.flag("date").is_some() {
+            draft.has_start = day.is_some();
+            draft.start = When::Date(day.unwrap_or(today));
+            draft.end = draft.start.add(TimeDelta::days(1));
+        }
+        // the calendar named, else the one the latest entry is in
+        let calendar = match p.flag("calendar").or(q.calendar.as_deref()) {
+            Some(name) => self.find_calendar(name)?,
+            None => {
+                let s = self.state.borrow();
+                s.vdir
+                    .journals()
+                    .into_iter()
+                    .filter(|(o, _)| s.calendar(&o.calendar).is_some())
+                    .max_by_key(|(o, _)| o.start.to_utc(local))
+                    .map(|(o, _)| o.calendar)
+                    .or_else(|| s.default_calendar())
+                    .ok_or("there are no calendars to add to")?
+            }
+        };
+        Ok((draft, calendar))
     }
 
     /// The draft and calendar a `new` or `task` line means: its text read
@@ -722,11 +781,16 @@ impl Window {
         let p = REGISTRY.parse(line, ctx).ok()?;
         let task = match p.spec {
             "new" => p.flag("kind") == Some("todo"),
-            "task" => true,
+            "task" | "note" => true,
             _ => return None,
         };
         p.arg(0).filter(|t| !t.trim().is_empty())?;
-        let (draft, calendar) = match self.quick_draft(&p, task) {
+        let found = if p.spec == "note" {
+            self.note_draft(&p)
+        } else {
+            self.quick_draft(&p, task)
+        };
+        let (draft, calendar) = match found {
             Ok(found) => found,
             Err(e) => return Some(format!("⚠ {e}")),
         };
@@ -767,7 +831,14 @@ fn describe(d: &Draft, calendar: &str, local: chrono_tz::Tz) -> String {
     } else {
         &d.summary
     };
-    if d.kind == Kind::Todo {
+    if d.kind == Kind::Journal {
+        parts.push(format!("Journal entry “{title}”"));
+        parts.push(if d.has_start {
+            date(&d.start)
+        } else {
+            "undated".into()
+        });
+    } else if d.kind == Kind::Todo {
         parts.push(format!("Task “{title}”"));
         if d.has_start {
             parts.push(format!("starts {}", date(&d.start)));

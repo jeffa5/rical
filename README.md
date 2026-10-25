@@ -49,8 +49,10 @@ Every action is a `:command` with completion, and keys are bound to
 commands (aerc style). Press `?` for help, `:` for the command line, `c` for a
 new event, `e` to edit, `D` to mark a task done. `I` lists invitations
 waiting for your reply; `y`, `Y` and `N` accept, answer maybe, or decline
-(your server, e.g. Nextcloud, tells the organiser). Change the bindings in
-`~/.config/rical/binds.conf`.
+(your server, e.g. Nextcloud, tells the organiser). `E` shows the journal
+and `:note` adds to it. From a task, journal entry or agenda item, `v` shows
+it in the calendar; `Ctrl+T` turns an event into a task or back. Change the
+bindings in `~/.config/rical/binds.conf`.
 
 Add things in plain language; the command line shows what it understood
 before you press Enter, and `rical new` reads the same:
@@ -61,6 +63,7 @@ before you press Enter, and `rical new` reads the same:
 :new Standup every weekday 9:30 for 15m #work
 :new Offsite 3-5 dec
 :task Submit expenses by fri 5pm !
+:note Ran 5k along the canal yesterday
 ```
 
 ## License
