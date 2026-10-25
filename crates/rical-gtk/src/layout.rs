@@ -135,6 +135,24 @@ pub fn day_start(day: NaiveDate, local: Tz) -> DateTime<Utc> {
     resolve_local(local, day.and_time(NaiveTime::MIN)).to_utc()
 }
 
+/// Where instant `t` falls on `day`'s grid: wall-clock minutes since its
+/// midnight in `local`, as the hour labels read, clamped to the day. On
+/// the days the clocks change this is not the time elapsed: the hour
+/// that repeats shares its rows, the hour that is skipped is empty.
+pub fn wall_minutes(t: DateTime<Utc>, day: NaiveDate, local: Tz) -> f64 {
+    let seen = t.with_timezone(&local).naive_local();
+    ((seen - day.and_time(NaiveTime::MIN)).num_minutes() as f64).clamp(0.0, 24.0 * 60.0)
+}
+
+/// The instant at wall-clock `minutes` on `day`, the inverse of
+/// [`wall_minutes`] (a time in a skipped hour moves on past it).
+pub fn at_wall(day: NaiveDate, minutes: f64, local: Tz) -> DateTime<Tz> {
+    resolve_local(
+        local,
+        day.and_time(NaiveTime::MIN) + chrono::TimeDelta::minutes(minutes as i64),
+    )
+}
+
 /// Instants covered by `days` (which must be consecutive).
 pub fn days_range(days: &[NaiveDate], local: Tz) -> Range<DateTime<Utc>> {
     let first = days[0];
@@ -185,7 +203,6 @@ pub fn day_segments(
 ) -> Vec<Segment> {
     let start = day_start(day, local);
     let end = day_start(day + Days::new(1), local);
-    let day_len = (end - start).num_minutes() as f64;
 
     let mut segs = occurrences
         .iter()
@@ -200,10 +217,9 @@ pub fn day_segments(
                 s < end && e > start
             };
             touches.then(|| {
-                let start_min = ((s - start).num_minutes() as f64).max(0.0);
-                let end_min = ((e - start).num_minutes() as f64)
-                    .min(day_len)
-                    .max(start_min + min_duration_min);
+                // by the clock, so it lines up with the hour labels
+                let start_min = wall_minutes(s, day, local);
+                let end_min = wall_minutes(e, day, local).max(start_min + min_duration_min);
                 Segment {
                     index,
                     start_min,
@@ -516,6 +532,28 @@ mod tests {
         // two at the same time sit side by side over what's running
         assert_eq!(place(3), (0, 2, 2));
         assert_eq!(place(4), (1, 2, 2));
+    }
+
+    #[test]
+    fn days_the_clocks_change_line_up_with_the_labels() {
+        let london = chrono_tz::Tz::Europe__London;
+        // back an hour at 02:00 BST on 25 October 2026: 09:00 GMT is 09:00Z
+        let o = [occ("20261025T090000Z", "20261025T100000Z")];
+        let s = day_segments(&o, date("2026-10-25"), london, 15.0);
+        assert_eq!((s[0].start_min, s[0].end_min), (540.0, 600.0));
+        // forward at 01:00 GMT on 29 March 2026: 09:00 BST is 08:00Z
+        let o = [occ("20260329T080000Z", "20260329T090000Z")];
+        let s = day_segments(&o, date("2026-03-29"), london, 15.0);
+        assert_eq!((s[0].start_min, s[0].end_min), (540.0, 600.0));
+        // and back from the grid: 01:30 does not exist that morning
+        let t = at_wall(date("2026-03-29"), 90.0, london);
+        assert_eq!(t.format("%H:%M %Z").to_string(), "02:00 BST");
+        assert_eq!(
+            at_wall(date("2026-10-25"), 540.0, london)
+                .format("%H:%M %Z")
+                .to_string(),
+            "09:00 GMT"
+        );
     }
 
     #[test]

@@ -243,8 +243,8 @@ impl TimeGrid {
                         Some(DragKind::Resize { occ })
                     }
                     (Some(_), Some(occ), Some(day)) => {
-                        let into_day = (occ.start.to_utc(s.local) - layout::day_start(day, s.local))
-                            .num_minutes() as f64;
+                        let into_day =
+                            layout::wall_minutes(occ.start.to_utc(s.local), day, s.local);
                         Some(DragKind::Move {
                             occ,
                             grab_min: minute_at(y) - into_day,
@@ -289,12 +289,7 @@ impl TimeGrid {
             let day = this
                 .day_at(x.clamp(GUTTER, width - 1.0), width)
                 .unwrap_or(days[0]);
-            let at = |day: NaiveDate, min: f64| {
-                When::Zoned(
-                    (layout::day_start(day, local) + TimeDelta::minutes(min as i64))
-                        .with_timezone(&local),
-                )
-            };
+            let at = |day: NaiveDate, min: f64| When::Zoned(layout::at_wall(day, min, local));
             drag.preview = match &drag.kind {
                 DragKind::Move { occ, press_day, .. } if all_day => {
                     let shift = TimeDelta::days((day - *press_day).num_days());
@@ -384,10 +379,7 @@ impl TimeGrid {
                 When::Date(day)
             } else {
                 let local = this.state.borrow().local;
-                When::Zoned(
-                    (layout::day_start(day, local) + TimeDelta::minutes(snap(minute_at(y)) as i64))
-                        .with_timezone(&local),
-                )
+                When::Zoned(layout::at_wall(day, snap(minute_at(y)), local))
             };
             (this.on_drag)(DragAction::DropTask { task, at });
             true
@@ -701,13 +693,8 @@ impl TimeGrid {
             cr.line_to(width, (y + HOUR_HEIGHT / 2.0).round() + 0.5);
             let _ = cr.stroke();
             if hour > 0 {
-                let label = draw::layout(
-                    area,
-                    &hour_label(days[0], hour, state.local),
-                    &TextStyle::SMALL,
-                    GUTTER - 10.0,
-                    1,
-                );
+                let label =
+                    draw::layout(area, &hour_label(hour), &TextStyle::SMALL, GUTTER - 10.0, 1);
                 let (lw, lh) = label.pixel_size();
                 pal.fg(cr, 0.55);
                 draw::show_layout(cr, &label, GUTTER - 10.0 - lw as f64, y - lh as f64 / 2.0);
@@ -952,28 +939,8 @@ fn draw_ghost(
     cr.set_dash(&[], 0.0);
 }
 
-/// The local time `hours` after the start of `day`; on days the clocks
-/// change this differs from the plain hour number.
-fn hour_label(day: NaiveDate, hours: i64, local: chrono_tz::Tz) -> String {
-    (layout::day_start(day, local) + TimeDelta::hours(hours))
-        .with_timezone(&local)
-        .format("%H:%M")
-        .to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hour_labels_follow_clock_changes() {
-        let london = chrono_tz::Tz::Europe__London;
-        let normal = NaiveDate::from_ymd_opt(2026, 10, 24).unwrap();
-        assert_eq!(hour_label(normal, 5, london), "05:00");
-        // the clocks go back at 02:00 BST on 25 October 2026
-        let change = NaiveDate::from_ymd_opt(2026, 10, 25).unwrap();
-        assert_eq!(hour_label(change, 1, london), "01:00");
-        assert_eq!(hour_label(change, 2, london), "01:00");
-        assert_eq!(hour_label(change, 5, london), "04:00");
-    }
+/// The label of the row `hours` down: the grid is laid out by the clock,
+/// so it is the hour itself, whatever the day.
+fn hour_label(hours: i64) -> String {
+    format!("{hours:02}:00")
 }
