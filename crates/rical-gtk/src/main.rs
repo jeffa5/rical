@@ -47,6 +47,14 @@ fn main() -> glib::ExitCode {
             return glib::ExitCode::FAILURE;
         }
     };
+    // GTK's GPU renderers keep a driver and its buffers loaded, 15-40 MB
+    // more than cairo, which draws this app just as quickly
+    if let Some(r) = &options.renderer
+        && std::env::var_os("GSK_RENDERER").is_none()
+    {
+        // SAFETY: before GTK starts, while this is the only thread
+        unsafe { std::env::set_var("GSK_RENDERER", r) };
+    }
 
     // one instance: launching again (say, to open an invitation from a
     // mail client) hands the files to the running one over D-Bus

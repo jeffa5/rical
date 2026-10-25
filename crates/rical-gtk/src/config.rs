@@ -167,6 +167,11 @@ pub const SETTINGS: &[(&str, &str)] = &[
         "Extra time zones beside the hours, comma-separated: America/New_York, or \
          NYC=America/New_York with a label.",
     ),
+    (
+        "renderer",
+        "How GTK draws: cairo (on the CPU, the least memory), gl, vulkan or auto (GTK's \
+         choice). Default cairo. GSK_RENDERER, if set, wins.",
+    ),
 ];
 
 /// The environment variable for a setting: `RICAL_NO_NOTIFICATIONS`.
@@ -188,13 +193,18 @@ pub struct Options {
     pub me: Vec<String>,
     pub contacts: Option<PathBuf>,
     pub zones: Vec<crate::zones::Zone>,
+    /// GSK_RENDERER to start GTK with; None leaves it to GTK.
+    pub renderer: Option<String>,
 }
 
 impl Options {
     /// Read the config file (RICAL_CONFIG, else the default if it exists),
     /// then let the environment override it.
     pub fn load() -> Result<Self, String> {
-        let mut o = Self::default();
+        let mut o = Self {
+            renderer: Some("cairo".to_owned()),
+            ..Self::default()
+        };
         let path = match std::env::var_os("RICAL_CONFIG").filter(|v| !v.is_empty()) {
             Some(p) => Some(PathBuf::from(p)),
             None => default_path().filter(|p| p.exists()),
@@ -235,6 +245,17 @@ impl Options {
             "zones" => {
                 self.zones =
                     crate::zones::Zone::parse_list(value).map_err(|e| format!("{origin}: {e}"))?;
+            }
+            "renderer" => {
+                self.renderer = match value.to_ascii_lowercase().as_str() {
+                    "auto" => None,
+                    r @ ("cairo" | "gl" | "ngl" | "vulkan") => Some(r.to_owned()),
+                    _ => {
+                        return Err(format!(
+                            "{origin}: renderer is cairo, gl, vulkan or auto, not “{value}”"
+                        ));
+                    }
+                };
             }
             "date" => {
                 self.date = Some(
