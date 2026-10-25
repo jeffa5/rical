@@ -3,6 +3,7 @@
 
 use std::{
     cell::{Cell, RefCell},
+    collections::{HashMap, HashSet},
     path::PathBuf,
     rc::Rc,
 };
@@ -142,7 +143,30 @@ impl TasksView {
             .filter(|t| !state.hidden.contains(&t.calendar))
             .collect::<Vec<_>>();
 
-        let (done, open): (Vec<_>, Vec<_>) = tasks.into_iter().partition(Task::is_done);
+        // subtasks are listed under their parent, unless the parent is done
+        // and they are not (they would be lost in Done)
+        let open_uids = tasks
+            .iter()
+            .filter(|t| !t.is_done())
+            .map(|t| t.uid.clone())
+            .collect::<HashSet<_>>();
+        let all_uids = tasks.iter().map(|t| t.uid.clone()).collect::<HashSet<_>>();
+        let mut children: HashMap<String, Vec<Task>> = HashMap::new();
+        let mut top = Vec::new();
+        for t in tasks {
+            match t.parent.clone() {
+                Some(p)
+                    if p != t.uid
+                        && all_uids.contains(&p)
+                        && (open_uids.contains(&p) || t.is_done()) =>
+                {
+                    children.entry(p).or_default().push(t);
+                }
+                _ => top.push(t),
+            }
+        }
+
+        let (done, open): (Vec<_>, Vec<_>) = top.into_iter().partition(Task::is_done);
         let mut groups: [(&str, Vec<Task>); 7] = [
             ("Overdue", Vec::new()),
             ("Today", Vec::new()),
@@ -182,8 +206,17 @@ impl TasksView {
             // the heading sits on the group's first row, not a row of its
             // own, so keyboard navigation goes straight through
             let mut heading = Some(label);
-            for t in tasks {
-                let row = self.row(t, today, &state);
+            // each task, then its subtasks (open first) indented below it
+            let mut stack = tasks.iter().rev().map(|t| (t, 0)).collect::<Vec<_>>();
+            let mut seen = HashSet::new();
+            while let Some((t, depth)) = stack.pop() {
+                if !seen.insert(t.uid.clone()) {
+                    continue; // a loop of parents
+                }
+                let kids = children.get(&t.uid).map(Vec::as_slice).unwrap_or_default();
+                let progress = (!kids.is_empty())
+                    .then(|| (kids.iter().filter(|k| k.is_done()).count(), kids.len()));
+                let row = self.row(t, today, &state, depth, progress);
                 self.headings
                     .borrow_mut()
                     .push(heading.take().map(|l| l.upcast()));
@@ -193,6 +226,9 @@ impl TasksView {
                 }
                 self.list.append(&row);
                 rows.push(Some(id));
+                let mut kids = kids.iter().collect::<Vec<_>>();
+                kids.sort_by_key(|k| (k.is_done(), sort_key(k)));
+                stack.extend(kids.into_iter().rev().map(|k| (k, depth + 1)));
             }
         }
         self.widget
@@ -219,14 +255,23 @@ impl TasksView {
         }
     }
 
-    fn row(&self, t: &Task, today: NaiveDate, state: &crate::state::State) -> gtk::ListBoxRow {
+    /// A task's row, `depth` levels in as a subtask; `progress` is how many
+    /// of its own subtasks are done, of how many.
+    fn row(
+        &self,
+        t: &Task,
+        today: NaiveDate,
+        state: &crate::state::State,
+        depth: usize,
+        progress: Option<(usize, usize)>,
+    ) -> gtk::ListBoxRow {
         let local = state.local;
         let b = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(12)
             .margin_top(4)
             .margin_bottom(4)
-            .margin_start(6)
+            .margin_start(6 + 28 * depth as i32)
             .margin_end(6)
             .build();
         let id = (t.path.clone(), t.uid.clone());
@@ -285,6 +330,12 @@ impl TasksView {
             } else {
                 format!("due {}", when(due))
             });
+        }
+        if let Some((done, all)) = progress {
+            sub.push(format!(
+                "{done} of {all} {} done",
+                if all == 1 { "subtask" } else { "subtasks" }
+            ));
         }
         if t.recurring && !t.is_done() {
             sub.push("repeats".to_owned());

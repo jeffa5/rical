@@ -231,6 +231,23 @@ pub static SPECS: &[Spec] = &[
     },
     Spec {
         args: &[Arg {
+            name: "title",
+            kind: Kind::Text("title"),
+            optional: false,
+            rest: true,
+        }],
+        flags: &[Flag {
+            name: "due",
+            kind: DATE,
+            help: "due date",
+        }],
+        ..spec(
+            "subtask",
+            "Add a subtask to the selected task, e.g. :subtask Book taxi --due fri",
+        )
+    },
+    Spec {
+        args: &[Arg {
             rest: true,
             ..arg("when", DATE)
         }],

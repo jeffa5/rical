@@ -62,7 +62,7 @@ pub fn new(args: &NewArgs) -> anyhow::Result<()> {
                 parse_date(text, today).with_context(|| format!("not a date: {text:?}"))?,
             )),
         };
-        vdir.create_task(&calendar, &args.title, due)?
+        vdir.create_task(&calendar, &args.title, due, None)?
     } else {
         let start = match args.at.as_deref() {
             Some(at) => {
@@ -146,6 +146,7 @@ pub fn delete(vdir: &Path, id: &str) -> anyhow::Result<()> {
         alarms: Vec::new(),
         organizer: None,
         attendees: Vec::new(),
+        parent: None,
     };
     vdir.delete(&occ, Scope::All)?;
     println!("deleted {uid} from {}", path.display());

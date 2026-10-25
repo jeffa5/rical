@@ -178,7 +178,25 @@ impl Window {
                             .ok_or(format!("not a date: “{text}”"))?,
                     )),
                 };
-                self.add_task(calendar, p.arg(0).unwrap(), due);
+                self.add_task(calendar, p.arg(0).unwrap(), due, None);
+            }
+            "subtask" => {
+                // under the selected task, in its calendar
+                let parent = self.selected_task().ok_or("select a task first")?;
+                let due = match p.flag("due") {
+                    None | Some("none") => None,
+                    Some(text) => {
+                        let (focused, local) = {
+                            let s = self.state.borrow();
+                            (s.date, s.local)
+                        };
+                        Some(
+                            parse_at(text, focused, self.today_date(), local)
+                                .ok_or(format!("not a date: “{text}”"))?,
+                        )
+                    }
+                };
+                self.add_task(parent.calendar, p.arg(0).unwrap(), due, Some(parent.uid));
             }
             "schedule" => {
                 let (local, focused) = {

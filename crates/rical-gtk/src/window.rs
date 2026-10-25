@@ -434,6 +434,16 @@ impl Window {
             }
         });
         self.window.add_action(&open);
+        // the command line with something already typed, e.g. "subtask "
+        let prompt = gio::SimpleAction::new("prompt", Some(glib::VariantTy::STRING));
+        let weak = Rc::downgrade(self);
+        prompt.connect_activate(move |_, arg| {
+            if let (Some(w), Some(text)) = (weak.upgrade(), arg.and_then(|a| a.str())) {
+                crate::details::close();
+                palette::open(&w, text);
+            }
+        });
+        self.window.add_action(&prompt);
     }
 
     /// Keys go through the bindings (see `run.rs` and `binds.conf`).

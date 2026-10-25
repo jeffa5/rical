@@ -31,6 +31,8 @@ pub struct Task {
     pub priority: Option<u8>,
     /// Has an RRULE: completing it moves it to the next occurrence.
     pub recurring: bool,
+    /// For a subtask, its parent task's UID (RELATED-TO;RELTYPE=PARENT).
+    pub parent: Option<String>,
 }
 
 impl Task {
@@ -70,6 +72,7 @@ impl Task {
             alarms: Vec::new(),
             organizer: None,
             attendees: Vec::new(),
+            parent: self.parent.clone(),
         }
     }
 }
@@ -101,6 +104,7 @@ impl Vdir {
                         .and_then(|p| p.trim().parse().ok())
                         .filter(|p| *p > 0),
                     recurring: c.property_value("RRULE").is_some(),
+                    parent: crate::occurrence::parent_of(c),
                 }
             })
             .collect()
@@ -183,12 +187,14 @@ impl Vdir {
         Ok(change)
     }
 
-    /// Create a task with a title and optional due date.
+    /// Create a task with a title, an optional due date and, for a subtask,
+    /// the UID of its parent task.
     pub fn create_task(
         &mut self,
         calendar: &str,
         summary: &str,
         due: Option<When>,
+        parent: Option<&str>,
     ) -> anyhow::Result<Change> {
         let dir = self
             .calendar(calendar)
@@ -206,6 +212,13 @@ impl Vdir {
         c.insert(Line::new("SEQUENCE:0"));
         c.insert(Line::new("STATUS:NEEDS-ACTION"));
         c.set_text("SUMMARY", summary);
+        if let Some(parent) = parent {
+            c.insert(Line::property(
+                "RELATED-TO",
+                &[("RELTYPE", "PARENT")],
+                parent,
+            ));
+        }
         if let Some(due) = due {
             c.set_when("DUE", &due);
         }

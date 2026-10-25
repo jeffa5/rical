@@ -70,6 +70,8 @@ pub struct Occurrence {
     /// Who sent it, for invitations and meetings.
     pub organizer: Option<Person>,
     pub attendees: Vec<Person>,
+    /// For a subtask, its parent task's UID.
+    pub parent: Option<String>,
 }
 
 /// An ORGANIZER or ATTENDEE.
@@ -124,6 +126,50 @@ impl Person {
             .as_deref()
             .is_some_and(|e| addresses.iter().any(|a| a.eq_ignore_ascii_case(e)))
     }
+}
+
+/// The UID of the component's parent (RELATED-TO with RELTYPE=PARENT, the
+/// default): a subtask's task.
+pub fn parent_of(component: &AnyComponent) -> Option<String> {
+    let single = component.properties().get("RELATED-TO").into_iter();
+    let multi = component
+        .multi_properties()
+        .get("RELATED-TO")
+        .into_iter()
+        .flatten();
+    let mut any = false;
+    let parent = single
+        .chain(multi)
+        .inspect(|_| any = true)
+        .find(|p| {
+            p.params()
+                .get("RELTYPE")
+                .is_none_or(|r| r.value().eq_ignore_ascii_case("PARENT"))
+        })
+        .map(|p| p.value().trim().to_owned());
+    match parent {
+        Some(uid) => Some(uid).filter(|u| !u.is_empty()),
+        // the icalendar crate keeps only the last RELATED-TO (it does not
+        // list it as repeatable), so a parent link before a sibling or
+        // child one is lost: read this item's own lines instead
+        None if any => parent_from_file(component),
+        None => None,
+    }
+}
+
+/// The parent link of `component`, read from its file's lines.
+fn parent_from_file(component: &AnyComponent) -> Option<String> {
+    let text = std::fs::read_to_string(component.path()).ok()?;
+    let doc = crate::doc::Document::parse(&text).ok()?;
+    let uid = component.get_uid()?;
+    let item = doc.items().find(|c| c.uid() == Some(uid))?;
+    item.properties("RELATED-TO")
+        .find(|l| {
+            l.param("RELTYPE")
+                .is_none_or(|r| r.eq_ignore_ascii_case("PARENT"))
+        })
+        .map(|l| l.value().trim().to_owned())
+        .filter(|u| !u.is_empty())
 }
 
 /// Whether the server sent this component's invitations: CalDAV servers
@@ -327,6 +373,7 @@ impl<'a> Fields<'a> {
             alarms: alarms(self.component),
             organizer: people(self.component, "ORGANIZER").into_iter().next(),
             attendees: people(self.component, "ATTENDEE"),
+            parent: parent_of(self.component),
             due: self
                 .component
                 .properties()

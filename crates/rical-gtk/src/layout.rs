@@ -425,6 +425,7 @@ mod tests {
             alarms: Vec::new(),
             organizer: None,
             attendees: Vec::new(),
+            parent: None,
         }
     }
 

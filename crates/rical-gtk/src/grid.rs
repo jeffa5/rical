@@ -517,6 +517,7 @@ impl TimeGrid {
                 alarms: Vec::new(),
                 organizer: None,
                 attendees: Vec::new(),
+                parent: None,
             },
         };
         ghost.start = start;

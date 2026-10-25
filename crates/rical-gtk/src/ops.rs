@@ -483,11 +483,20 @@ impl Window {
         Ok(())
     }
 
-    pub(super) fn add_task(self: &Rc<Self>, calendar: String, title: &str, due: Option<When>) {
-        self.state.borrow_mut().last_calendar = Some(calendar.clone());
+    pub(super) fn add_task(
+        self: &Rc<Self>,
+        calendar: String,
+        title: &str,
+        due: Option<When>,
+        parent: Option<String>,
+    ) {
+        // a subtask goes with its parent, not where new things usually go
+        if parent.is_none() {
+            self.state.borrow_mut().last_calendar = Some(calendar.clone());
+        }
         let mut created = None;
         if self.perform("create the task", |v| {
-            let change = v.create_task(&calendar, title, due)?;
+            let change = v.create_task(&calendar, title, due, parent.as_deref())?;
             created = Some(change.path.clone());
             Ok(vec![change])
         }) && let Some(path) = created

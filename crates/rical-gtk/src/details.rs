@@ -88,6 +88,38 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
     if let Some(location) = occ.location.as_deref().filter(|l| !l.is_empty()) {
         content.append(&row("mark-location-symbolic", location));
     }
+    // where it sits among tasks: its parent, and how its subtasks are going
+    if occ.kind == Kind::Todo {
+        let tasks = state.vdir.tasks();
+        if let Some(parent) = occ
+            .parent
+            .as_ref()
+            .and_then(|p| tasks.iter().find(|t| t.uid == *p))
+        {
+            content.append(&row(
+                "go-up-symbolic",
+                &format!("Subtask of “{}”", parent.summary),
+            ));
+        }
+        let kids = tasks
+            .iter()
+            .filter(|t| t.parent.as_deref() == Some(occ.uid.as_str()))
+            .collect::<Vec<_>>();
+        if !kids.is_empty() {
+            let done = kids.iter().filter(|k| k.is_done()).count();
+            let names = kids
+                .iter()
+                .map(|k| format!("{} {}", if k.is_done() { "✓" } else { "○" }, k.summary))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let r = row(
+                "view-list-symbolic",
+                &format!("{done} of {} subtasks done", kids.len()),
+            );
+            r.set_tooltip_text(Some(&names));
+            content.append(&r);
+        }
+    }
     if let Some(invite) = state.invitation(occ) {
         let mut text = format!("Invitation from {}", invite.from.display());
         if let Some(reply) = invite.reply {
@@ -186,6 +218,13 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
             "Mark done or not (D)",
             "done",
         ));
+        let sub = gtk::Button::builder()
+            .icon_name("list-add-symbolic")
+            .tooltip_text("Add a subtask (:subtask)")
+            .action_name("win.prompt")
+            .action_target(&"subtask ".to_variant())
+            .build();
+        actions.append(&sub);
     }
     let spacer = gtk::Box::builder().hexpand(true).build();
     actions.append(&spacer);

@@ -590,7 +590,7 @@ fn tasks_list_and_complete() {
 #[test]
 fn create_and_date_tasks() {
     let (_dir, mut vdir) = setup(&[]);
-    let change = vdir.create_task("home", "Buy milk", None).unwrap();
+    let change = vdir.create_task("home", "Buy milk", None, None).unwrap();
     let text = change.after.unwrap();
     assert!(text.contains("BEGIN:VTODO") && text.contains("SUMMARY:Buy milk"));
     assert!(!text.contains("DUE") && !text.contains("DTSTART"));
@@ -980,4 +980,53 @@ fn a_drag_keeps_the_events_zone() {
         text.contains("DTSTART;TZID=Asia/Singapore:20261214T100000\r\n"),
         "{text}"
     );
+}
+
+#[test]
+fn subtasks_link_to_their_parent() {
+    let (_dir, mut vdir) = setup(&[("home/pack.ics", TRIP_TASK)]);
+    let change = vdir
+        .create_task("home", "Book the taxi", None, Some("pack"))
+        .unwrap();
+    let text = change.after.unwrap();
+    assert!(
+        text.contains("RELATED-TO;RELTYPE=PARENT:pack\r\n"),
+        "{text}"
+    );
+    let tasks = vdir.tasks();
+    let taxi = tasks.iter().find(|t| t.summary == "Book the taxi").unwrap();
+    assert_eq!(taxi.parent.as_deref(), Some("pack"));
+    let pack = tasks.iter().find(|t| t.uid == "pack").unwrap();
+    assert_eq!(pack.parent, None);
+}
+
+#[test]
+fn related_to_without_reltype_is_a_parent() {
+    // RFC 5545: RELTYPE defaults to PARENT; siblings and children are not
+    let child = "
+        BEGIN:VTODO
+        UID:child
+        DTSTAMP:20261001T000000Z
+        SUMMARY:Child
+        RELATED-TO:pack
+        RELATED-TO;RELTYPE=SIBLING:other
+        END:VTODO
+    ";
+    let sibling = "
+        BEGIN:VTODO
+        UID:sib
+        DTSTAMP:20261001T000000Z
+        SUMMARY:Sibling only
+        RELATED-TO;RELTYPE=SIBLING:pack
+        END:VTODO
+    ";
+    let (_dir, vdir) = setup(&[
+        ("home/pack.ics", TRIP_TASK),
+        ("home/child.ics", child),
+        ("home/sib.ics", sibling),
+    ]);
+    let tasks = vdir.tasks();
+    let parent_of = |uid: &str| tasks.iter().find(|t| t.uid == uid).unwrap().parent.clone();
+    assert_eq!(parent_of("child").as_deref(), Some("pack"));
+    assert_eq!(parent_of("sib"), None);
 }
