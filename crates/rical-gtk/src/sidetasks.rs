@@ -102,14 +102,10 @@ impl SideTasks {
         let state = self.state.borrow();
         for t in tasks.iter().take(SHOWN) {
             let b = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-            let check = gtk::CheckButton::builder()
-                .css_classes(["selection-mode"])
-                .valign(gtk::Align::Center)
-                .tooltip_text("Done")
-                .build();
             let id = (t.path.clone(), t.uid.clone());
             let toggle = self.on_toggle.clone();
-            check.connect_toggled(move |c| toggle(id.clone(), c.is_active()));
+            let check =
+                format::task_check(false, Some(Box::new(move |done| toggle(id.clone(), done))));
             b.append(&check);
             b.append(&format::color_dot(state.color(&t.calendar), 8));
             let label = gtk::Label::builder()

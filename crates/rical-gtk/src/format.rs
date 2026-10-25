@@ -60,14 +60,6 @@ pub fn day(d: NaiveDate) -> String {
     }
 }
 
-pub fn todo_mark(o: &Occurrence) -> &'static str {
-    match o.status.as_deref() {
-        Some("COMPLETED") => "☑",
-        Some("CANCELLED") => "☒",
-        _ => "☐",
-    }
-}
-
 /// Header title and subtitle for the current view.
 pub fn view_title(view: ViewKind, date: NaiveDate) -> (String, String) {
     let this_year = chrono::Utc::now().year();
@@ -118,17 +110,8 @@ pub fn is_inactive(o: &Occurrence) -> bool {
     matches!(o.status.as_deref(), Some("CANCELLED" | "COMPLETED"))
 }
 
-/// The text to show for an occurrence: tasks get a checkbox, and overdue
-/// tasks say when they were due.
-pub fn title(o: &Occurrence, local: Tz) -> String {
-    match o.kind {
-        rical_core::Kind::Todo => format!("{} {}", todo_mark(o), label(o, local)),
-        _ => o.summary.clone(),
-    }
-}
-
-/// The text without a tick mark, for views that draw their own (tasks
-/// still say when they were due if overdue).
+/// The text to show for an occurrence; overdue tasks say when they were
+/// due. Views draw the task circle themselves.
 pub fn label(o: &Occurrence, local: Tz) -> String {
     let mut t = o.summary.clone();
     if is_overdue(o, local)
@@ -321,4 +304,51 @@ mod location_tests {
             "https://www.openstreetmap.org/search?query=Bistro+21%2C+Leeds"
         );
     }
+}
+
+/// The tick circle used for tasks everywhere: a ring, ticked when done,
+/// drawn just like the circles in the time grid and month. Clicking it
+/// toggles it and calls `on_toggle`; with None it only shows the state.
+pub fn task_check(done: bool, on_toggle: Option<Box<dyn Fn(bool)>>) -> gtk::DrawingArea {
+    let area = gtk::DrawingArea::builder()
+        .content_width(18)
+        .content_height(18)
+        .valign(gtk::Align::Center)
+        .accessible_role(gtk::AccessibleRole::Checkbox)
+        .build();
+    let state = std::rc::Rc::new(std::cell::Cell::new(done));
+    let set_accessible = |area: &gtk::DrawingArea, done: bool| {
+        area.update_state(&[gtk::accessible::State::Checked(if done {
+            gtk::AccessibleTristate::True
+        } else {
+            gtk::AccessibleTristate::False
+        })]);
+    };
+    set_accessible(&area, done);
+    let s = state.clone();
+    area.set_draw_func(move |area, cr, w, h| {
+        let pal = draw::Palette::of(area);
+        pal.fg(cr, if s.get() { 0.55 } else { 0.8 });
+        let r = w.min(h) as f64 / 2.0 - 2.0;
+        draw::task_circle(cr, w as f64 / 2.0, h as f64 / 2.0, r, s.get());
+    });
+    match on_toggle {
+        Some(on_toggle) => {
+            area.set_tooltip_text(Some("Done"));
+            area.set_cursor_from_name(Some("pointer"));
+            let click = gtk::GestureClick::new();
+            let a = area.clone();
+            click.connect_released(move |g, _, _, _| {
+                g.set_state(gtk::EventSequenceState::Claimed);
+                let done = !state.get();
+                state.set(done);
+                set_accessible(&a, done);
+                a.queue_draw();
+                on_toggle(done);
+            });
+            area.add_controller(click);
+        }
+        None => area.set_tooltip_text(Some(if done { "Done" } else { "To do" })),
+    }
+    area
 }

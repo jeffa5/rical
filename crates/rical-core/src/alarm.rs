@@ -70,7 +70,7 @@ impl Alarm {
         let o = &self.occurrence;
         let mut title = o.summary.clone();
         if o.kind == Kind::Todo {
-            title = format!("☐ {title}");
+            title = format!("Task: {title}");
         }
         let start = o.start.to_tz(local);
         let mut body = vec![relative(o.start.to_utc(local) - now, o.all_day)];

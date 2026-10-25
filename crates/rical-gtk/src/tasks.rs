@@ -233,16 +233,12 @@ impl TasksView {
             .margin_start(6)
             .margin_end(6)
             .build();
-        let check = gtk::CheckButton::builder()
-            .css_classes(["selection-mode"])
-            .active(t.is_done())
-            .valign(gtk::Align::Center)
-            .tooltip_text("Done (space)")
-            .focus_on_click(false)
-            .build();
         let id = (t.path.clone(), t.uid.clone());
         let toggle = self.on_toggle.clone();
-        check.connect_toggled(move |c| toggle(id.clone(), c.is_active()));
+        let check = format::task_check(
+            t.is_done(),
+            Some(Box::new(move |done| toggle(id.clone(), done))),
+        );
         b.append(&check);
         b.append(&format::color_dot(state.color(&t.calendar), 10));
 

@@ -34,11 +34,12 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
     );
     content.append(&cal_row);
 
-    let title = match occ.kind {
-        Kind::Todo => format::title(occ, state.local),
-        _ => occ.summary.clone(),
-    };
-    content.append(
+    let title = format::label(occ, state.local);
+    let title_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    if occ.kind == Kind::Todo {
+        title_row.append(&format::task_check(format::is_done(occ), None));
+    }
+    title_row.append(
         &gtk::Label::builder()
             .label(if title.is_empty() {
                 "(untitled)"
@@ -52,6 +53,7 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
             .xalign(0.0)
             .build(),
     );
+    content.append(&title_row);
 
     let mut when = format::time_range(occ, state.local);
     if occ.recurring {

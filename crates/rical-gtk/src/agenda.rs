@@ -239,16 +239,14 @@ impl AgendaView {
                 .build(),
         );
         if o.kind == Kind::Todo {
-            let check = gtk::CheckButton::builder()
-                .css_classes(["selection-mode"])
-                .active(format::is_done(o))
-                .valign(gtk::Align::Center)
-                .tooltip_text("Done")
-                .build();
             let id = (o.path.clone(), o.uid.clone());
             let toggle = self.on_toggle.clone();
-            check.connect_toggled(move |c| toggle(id.clone(), c.is_active()));
+            let check = format::task_check(
+                format::is_done(o),
+                Some(Box::new(move |done| toggle(id.clone(), done))),
+            );
             b.append(&check);
+            b.append(&format::color_dot(state.display_color(o), 10));
         } else {
             b.append(&format::color_dot(state.display_color(o), 10));
         }

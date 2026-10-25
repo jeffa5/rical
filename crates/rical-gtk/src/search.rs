@@ -213,25 +213,30 @@ fn find(w: &Window, query: &str) -> Vec<Hit> {
 
 fn row(hit: &Hit, state: &crate::state::State) -> gtk::ListBoxRow {
     let local = state.local;
-    let (when, title, calendar, place) = match hit {
+    // tasks show their tick circle: Some(done)
+    let (when, title, calendar, place, task) = match hit {
         Hit::Occurrence(o) => (
             format::time_range(o, local),
-            format::title(o, local),
+            format::label(o, local),
             o.calendar.clone(),
             o.location.clone().unwrap_or_default(),
+            (o.kind == rical_core::Kind::Todo).then(|| format::is_done(o)),
         ),
         Hit::Task(path, uid) => {
             let t = state.vdir.task(path, uid);
             (
                 "no date".to_owned(),
-                t.as_ref()
-                    .map_or_else(String::new, |t| format!("☐ {}", t.summary)),
-                t.map(|t| t.calendar).unwrap_or_default(),
+                t.as_ref().map_or_else(String::new, |t| t.summary.clone()),
+                t.as_ref().map(|t| t.calendar.clone()).unwrap_or_default(),
                 String::new(),
+                t.map(|t| t.is_done()),
             )
         }
     };
     let b = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    if let Some(done) = task {
+        b.append(&format::task_check(done, None));
+    }
     b.append(&format::color_dot(state.color(&calendar), 10));
     let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
     text.append(
