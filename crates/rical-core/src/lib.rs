@@ -23,7 +23,7 @@ pub mod write;
 
 pub use component::AnyComponent;
 pub use event::Event;
-pub use occurrence::{Kind, Occurrence, Person};
+pub use occurrence::{Conference, Kind, Occurrence, Person};
 pub use task::Task;
 pub use todo::Todo;
 pub use vdir::{Calendar, Rgb, Vdir};

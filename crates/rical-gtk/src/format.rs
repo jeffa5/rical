@@ -292,12 +292,21 @@ pub fn map_url(place: &str) -> String {
     format!("https://www.openstreetmap.org/search?query={q}")
 }
 
-/// Where to join `o` online, from its location or notes.
+/// Where to join `o` online: its video conference, else any conference
+/// that opens in a browser (RFC 7986), else a link in its location or
+/// notes.
 pub fn join_url(o: &Occurrence) -> Option<String> {
-    [o.location.as_deref(), o.description.as_deref()]
-        .into_iter()
-        .flatten()
-        .find_map(first_url)
+    let c = &o.conferences;
+    c.iter()
+        .find(|c| c.has("VIDEO") && c.is_web())
+        .or_else(|| c.iter().find(|c| c.is_web()))
+        .map(|c| c.uri.clone())
+        .or_else(|| {
+            [o.location.as_deref(), o.description.as_deref()]
+                .into_iter()
+                .flatten()
+                .find_map(first_url)
+        })
 }
 
 /// A place to show on a map: the location, unless it is just a link.

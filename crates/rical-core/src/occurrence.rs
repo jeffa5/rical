@@ -69,6 +69,8 @@ pub struct Occurrence {
     /// Who sent it, for invitations and meetings.
     pub organizer: Option<Person>,
     pub attendees: Vec<Person>,
+    /// Ways to join online (RFC 7986 CONFERENCE).
+    pub conferences: Vec<Conference>,
     /// For a subtask, its parent task's UID.
     pub parent: Option<String>,
 }
@@ -150,6 +152,66 @@ pub fn server_scheduled(component: &AnyComponent) -> bool {
 /// The people of `name` (ATTENDEE, ORGANIZER) on a component.
 pub fn people(component: &AnyComponent, name: &str) -> Vec<Person> {
     component.props(name).map(Person::from_property).collect()
+}
+
+/// A way to join an event (RFC 7986 CONFERENCE): a video call, a dial-in
+/// number, a chat.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Conference {
+    /// Where: https:, tel:, sip:, xmpp:…
+    pub uri: String,
+    /// FEATURE, upper case: AUDIO, CHAT, FEED, MODERATOR, PHONE, SCREEN,
+    /// VIDEO (or others).
+    pub features: Vec<String>,
+    /// LABEL, e.g. "Attendee dial-in".
+    pub label: Option<String>,
+}
+
+impl Conference {
+    pub fn has(&self, feature: &str) -> bool {
+        self.features.iter().any(|f| f == feature)
+    }
+
+    /// Opens in a browser (rather than a phone or chat app).
+    pub fn is_web(&self) -> bool {
+        let u = self.uri.to_ascii_lowercase();
+        u.starts_with("https://") || u.starts_with("http://")
+    }
+}
+
+/// The component's CONFERENCE properties; failing those, the video link
+/// Google puts in X-GOOGLE-CONFERENCE.
+pub fn conferences(component: &AnyComponent) -> Vec<Conference> {
+    let mut out = component
+        .props("CONFERENCE")
+        .filter(|p| !p.value().trim().is_empty())
+        .map(|p| Conference {
+            uri: p.value().trim().to_owned(),
+            features: p
+                .param("FEATURE")
+                .map(|f| {
+                    f.split(',')
+                        .map(|s| s.trim().to_ascii_uppercase())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            label: p.param("LABEL").map(unescape_text),
+        })
+        .collect::<Vec<_>>();
+    if out.is_empty()
+        && let Some(uri) = component
+            .property_value("X-GOOGLE-CONFERENCE")
+            .map(|v| v.trim().to_owned())
+            .filter(|v| !v.is_empty())
+    {
+        out.push(Conference {
+            uri,
+            features: vec!["VIDEO".into(), "AUDIO".into()],
+            label: Some("Google Meet".into()),
+        });
+    }
+    out
 }
 
 /// When an alarm goes off.
@@ -315,6 +377,7 @@ impl<'a> Fields<'a> {
             alarms: alarms(self.component),
             organizer: people(self.component, "ORGANIZER").into_iter().next(),
             attendees: people(self.component, "ATTENDEE"),
+            conferences: conferences(self.component),
             parent: parent_of(self.component),
             due: self.component.prop("DUE").and_then(When::from_property),
         }

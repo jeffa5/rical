@@ -248,6 +248,16 @@ pub fn open(
         .title("Location")
         .text(&draft.location)
         .build();
+    // the video call (RFC 7986 CONFERENCE); events only
+    let video = adw::EntryRow::builder()
+        .title("Video call link")
+        .text(draft.video.as_deref().unwrap_or_default())
+        .visible(draft.kind == Kind::Event)
+        .build();
+    {
+        let v = video.clone();
+        kind.connect_selected_notify(move |k| v.set_visible(k.selected() == 0));
+    }
     let notes = gtk::TextView::builder()
         .wrap_mode(gtk::WrapMode::WordChar)
         .accepts_tab(false)
@@ -275,6 +285,7 @@ pub fn open(
     }
     let more = adw::PreferencesGroup::new();
     more.add(&location);
+    more.add(&video);
     let known = state.borrow().people();
     let guests = GuestsEditor::new(
         draft.guests.as_deref().unwrap_or_default(),
@@ -404,6 +415,7 @@ pub fn open(
             notes.clone(),
         );
         let (guests, state, invitation) = (guests.clone(), state.clone(), options.invitation);
+        let video = video.clone();
         let (zones, priority, done) = (zones.clone(), priority.clone(), done.clone());
         let (parent_row, parents) = (parent_row.clone(), parents.clone());
         move || {
@@ -497,6 +509,8 @@ pub fn open(
                 organizer,
                 summary: title.text().trim().to_owned(),
                 location: location.text().trim().to_owned(),
+                // the organiser's to change on an invitation
+                video: (kind == Kind::Event && !invitation).then(|| video.text().trim().to_owned()),
                 description: buffer
                     .text(&buffer.start_iter(), &buffer.end_iter(), false)
                     .trim_end()
@@ -527,7 +541,7 @@ pub fn open(
 
     let s = do_save.clone();
     save.connect_clicked(move |_| s());
-    for row in [&title, &starts, &ends, &location] {
+    for row in [&title, &starts, &ends, &location, &video] {
         let s = do_save.clone();
         row.connect_entry_activated(move |_| s());
     }

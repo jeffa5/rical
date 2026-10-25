@@ -88,6 +88,46 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
     if let Some(location) = occ.location.as_deref().filter(|l| !l.is_empty()) {
         content.append(&row("mark-location-symbolic", location));
     }
+    // ways to join (RFC 7986 CONFERENCE), each opening its link
+    for c in &occ.conferences {
+        let (icon, what) = if c.has("VIDEO") {
+            ("camera-web-symbolic", "Join video call")
+        } else if c.has("PHONE") || c.uri.to_ascii_lowercase().starts_with("tel:") {
+            ("call-start-symbolic", "Dial in")
+        } else if c.has("CHAT") {
+            ("chat-symbolic", "Open chat")
+        } else if c.has("AUDIO") {
+            ("audio-headphones-symbolic", "Join call")
+        } else {
+            ("web-browser-symbolic", "Join online")
+        };
+        let shown = c
+            .uri
+            .split_once(':')
+            .map_or(c.uri.as_str(), |(scheme, rest)| {
+                if scheme.eq_ignore_ascii_case("tel") {
+                    rest
+                } else {
+                    rest.trim_start_matches('/')
+                }
+            });
+        let text = match &c.label {
+            Some(label) => format!("{label}: {shown}"),
+            None => format!("{what}: {shown}"),
+        };
+        let button = gtk::Button::builder()
+            .child(&row(icon, &text))
+            .css_classes(["flat"])
+            .halign(gtk::Align::Start)
+            .tooltip_text(&c.uri)
+            .build();
+        let uri = c.uri.clone();
+        button.connect_clicked(move |b| {
+            close();
+            open_uri(b.root().and_downcast_ref::<gtk::Window>(), &uri);
+        });
+        content.append(&button);
+    }
     // where it sits among tasks: its parent, and how its subtasks are going
     if occ.kind == Kind::Todo {
         let tasks = state.vdir.tasks();

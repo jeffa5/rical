@@ -1134,3 +1134,92 @@ fn replying_sets_my_answer_on_every_instance() {
     );
     assert_eq!(fs::read_to_string(&path).unwrap(), before);
 }
+
+#[test]
+fn conference_links_are_read_and_written_per_rfc_7986() {
+    let call = "
+        BEGIN:VEVENT
+        UID:call
+        DTSTAMP:20250101T000000Z
+        DTSTART:20250303T090000Z
+        DURATION:PT30M
+        SUMMARY:Call
+        CONFERENCE;VALUE=URI;FEATURE=PHONE;LABEL=Dial-in:tel:+44-20-7946-0000
+        CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO;LABEL=Meet:https://meet.example.com/abc
+        END:VEVENT
+    ";
+    let google = "
+        BEGIN:VEVENT
+        UID:google
+        DTSTAMP:20250101T000000Z
+        DTSTART:20250304T090000Z
+        DURATION:PT30M
+        SUMMARY:Sync
+        X-GOOGLE-CONFERENCE:https://meet.google.com/xyz
+        END:VEVENT
+    ";
+    let plain = "
+        BEGIN:VEVENT
+        UID:plain
+        DTSTAMP:20250101T000000Z
+        DTSTART:20250305T090000Z
+        DURATION:PT30M
+        SUMMARY:Plain
+        END:VEVENT
+    ";
+    let (dir, mut vdir) = setup(&[
+        ("work/call.ics", call),
+        ("work/google.ics", google),
+        ("work/plain.ics", plain),
+    ]);
+    let all = query(&vdir, range("2025-03-01 00:00", "2025-03-10 00:00"));
+    let find = |all: &[Occurrence], uid: &str| all.iter().find(|o| o.uid == uid).unwrap().clone();
+
+    let c = find(&all, "call");
+    assert_eq!(c.conferences.len(), 2);
+    assert_eq!(c.conferences[0].features, ["PHONE"]);
+    assert_eq!(c.conferences[1].features, ["AUDIO", "VIDEO"]);
+    assert_eq!(c.conferences[1].label.as_deref(), Some("Meet"));
+    assert_eq!(
+        vdir.draft(&c).video.as_deref(),
+        Some("https://meet.example.com/abc")
+    );
+    let g = find(&all, "google");
+    assert!(g.conferences[0].has("VIDEO"));
+    assert_eq!(g.conferences[0].uri, "https://meet.google.com/xyz");
+
+    // a new link replaces the video one, keeping its parameters as written
+    let path = dir.path().join("work/call.ics");
+    let before = fs::read_to_string(&path).unwrap();
+    let mut d = vdir.draft(&c);
+    d.video = Some("https://meet.example.com/new".into());
+    vdir.update(&c, Scope::All, &d, None).unwrap();
+    // compared unfolded: long lines are folded at 75 octets
+    let after = fs::read_to_string(&path).unwrap().replace("\r\n ", "");
+    assert_eq!(
+        changed_lines(&before.replace("\r\n ", ""), &after),
+        [
+            "CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO;LABEL=Meet:https://meet.example.com/new",
+            "SEQUENCE:1",
+        ]
+    );
+    assert!(after.contains("tel:+44-20-7946-0000"));
+
+    // added where there was none; untouched drafts leave files alone
+    let p = find(&all, "plain");
+    let mut d = vdir.draft(&p);
+    assert_eq!(d.video.as_deref(), Some(""));
+    d.video = Some("https://meet.example.com/p".into());
+    vdir.update(&p, Scope::All, &d, None).unwrap();
+    let text = fs::read_to_string(dir.path().join("work/plain.ics")).unwrap();
+    assert!(
+        text.contains("CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO:https://meet.example.com/p\r\n")
+    );
+
+    // cleared: Google's copy goes too, so it is not read back
+    let mut d = vdir.draft(&g);
+    d.video = Some(String::new());
+    vdir.update(&g, Scope::All, &d, None).unwrap();
+    let all = query(&vdir, range("2025-03-01 00:00", "2025-03-10 00:00"));
+    assert!(find(&all, "google").conferences.is_empty());
+}

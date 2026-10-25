@@ -95,6 +95,9 @@ pub struct Draft {
     /// For a task: the UID of the task it is a subtask of
     /// (RELATED-TO;RELTYPE=PARENT), or None for a task of its own.
     pub parent: Option<String>,
+    /// The video call link (RFC 7986 CONFERENCE); "" for none, None to
+    /// leave conferences as they are.
+    pub video: Option<String>,
 }
 
 /// Someone invited, or to invite.
@@ -122,6 +125,7 @@ impl Draft {
             priority: None,
             done: None,
             parent: None,
+            video: None,
         }
     }
 }
@@ -191,6 +195,8 @@ impl Vdir {
                 })
             }),
             parent: occ.parent.clone(),
+            video: (occ.kind == Kind::Event)
+                .then(|| video_of(&occ.conferences).unwrap_or_default()),
         }
     }
 
@@ -565,6 +571,74 @@ fn master_start_kind(master_start: &When, new: &When) -> When {
     }
 }
 
+/// The video call link among `conferences`: one with FEATURE=VIDEO, else
+/// the first that opens in a browser.
+pub fn video_of(conferences: &[crate::Conference]) -> Option<String> {
+    conferences
+        .iter()
+        .find(|c| c.has("VIDEO") && c.is_web())
+        .or_else(|| conferences.iter().find(|c| c.is_web()))
+        .map(|c| c.uri.clone())
+}
+
+/// Set the video call link: change the CONFERENCE that has it (keeping
+/// its FEATURE and LABEL), add one, or with "" remove it. Other ways in
+/// (dial-in numbers, chat) are left as they are.
+fn set_video(c: &mut Component, video: &str) {
+    let is_web = |v: &str| {
+        let v = v.trim().to_ascii_lowercase();
+        v.starts_with("https://") || v.starts_with("http://")
+    };
+    let lines = c.properties("CONFERENCE").cloned().collect::<Vec<_>>();
+    let target = lines
+        .iter()
+        .find(|l| {
+            is_web(l.value())
+                && l.param("FEATURE")
+                    .is_some_and(|f| f.split(',').any(|f| f.trim().eq_ignore_ascii_case("VIDEO")))
+        })
+        .or_else(|| lines.iter().find(|l| is_web(l.value())))
+        .cloned();
+    let google = c.property("X-GOOGLE-CONFERENCE").cloned();
+    let current = target
+        .as_ref()
+        .or(if lines.is_empty() {
+            google.as_ref()
+        } else {
+            None
+        })
+        .map(|l| l.value().trim().to_owned());
+    if current.as_deref().unwrap_or("") == video {
+        return;
+    }
+    // Google's own copy would otherwise still be read as the link
+    c.remove("X-GOOGLE-CONFERENCE");
+    match target {
+        Some(old) => {
+            for i in c.items.iter_mut() {
+                if let Item::Line(l) = i
+                    && *l == old
+                {
+                    if video.is_empty() {
+                        *l = Line::new("");
+                    } else {
+                        // the parameters exactly as written (FEATURE is a
+                        // list, which quoting would make one value)
+                        let head = &l.content()[..l.content().len() - l.value().len()];
+                        *l = Line::new(format!("{head}{video}"));
+                    }
+                }
+            }
+            c.items
+                .retain(|i| !matches!(i, Item::Line(l) if l.content().is_empty()));
+        }
+        None if !video.is_empty() => c.insert(Line::new(format!(
+            "CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO:{video}"
+        ))),
+        None => {}
+    }
+}
+
 /// Write summary, location, description and (for masters) the repeat rule.
 fn set_fields(c: &mut Component, draft: &Draft, repeat: bool) {
     fn current(c: &Component, name: &str) -> Option<String> {
@@ -585,6 +659,9 @@ fn set_fields(c: &mut Component, draft: &Draft, repeat: bool) {
     }
     if let Some(guests) = &draft.guests {
         set_guests(c, guests, draft.organizer.as_ref());
+    }
+    if let Some(video) = &draft.video {
+        set_video(c, video.trim());
     }
     if draft.kind == Kind::Todo {
         set_parent(c, draft.parent.as_deref());

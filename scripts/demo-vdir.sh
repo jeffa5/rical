@@ -35,7 +35,9 @@ task() { # calendar uid summary [extra lines...]
 
 event work standup 0 0930 0945 "Standup" "RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR" "LOCATION:https://meet.example.com/abc-defg-hij"
 event work planning 0 1000 1130 "Sprint planning" "LOCATION:Room 4"
-event work oneone 1 1400 1430 "1:1 with Sam"
+event work oneone 1 1400 1430 "1:1 with Sam" \
+  "CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO;LABEL=Video call:https://meet.example.com/sam-alex" \
+  "CONFERENCE;VALUE=URI;FEATURE=PHONE;LABEL=Dial-in:tel:+44-20-7946-0123"
 event work review 2 1100 1230 "Design review" "STATUS:TENTATIVE" "DESCRIPTION:Walk through the new calendar views."
 event work interview 2 1130 1215 "Interview: backend engineer"
 event work focus 3 1300 1600 "Focus time" "DESCRIPTION:No meetings."

@@ -71,6 +71,7 @@ impl Task {
             alarms: Vec::new(),
             organizer: None,
             attendees: Vec::new(),
+            conferences: Vec::new(),
             parent: self.parent.clone(),
         }
     }

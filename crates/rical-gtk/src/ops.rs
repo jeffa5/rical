@@ -300,6 +300,7 @@ impl Window {
     }
 
     pub(super) fn edit_selected(self: &Rc<Self>) {
+        crate::details::close();
         let Some(occ) = self.current_item() else {
             self.toast("Select an event to edit");
             return;
