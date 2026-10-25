@@ -58,6 +58,8 @@ pub struct State {
     pub notifications: bool,
     /// What "week" means: the full week, the work week or a number of days.
     pub week_view: ViewKind,
+    /// The calendar view last shown, to go back to from tasks or invitations.
+    pub calendar_view: ViewKind,
     /// Reminder for timed events that have no alarms of their own.
     pub default_reminder: Option<chrono::TimeDelta>,
     /// Bumped whenever the data or the hidden set changes.
@@ -115,6 +117,7 @@ impl State {
             redo: Vec::new(),
             notifications: true,
             week_view: ViewKind::Week,
+            calendar_view: ViewKind::Week,
             default_reminder: None,
             generation: 0,
             cache: RefCell::new(None),
@@ -472,6 +475,7 @@ impl State {
     pub fn view_named(&self, name: &str) -> Option<ViewKind> {
         match name {
             "week" => Some(self.week_view),
+            "calendar" => Some(self.calendar_view),
             _ => ViewKind::from_name(name),
         }
     }

@@ -50,6 +50,8 @@ pub struct Window {
     views: gtk::Stack,
     /// View switchers: in the header, and in the bottom bar on narrow windows.
     toggles: [adw::ToggleGroup; 2],
+    /// Beside each switcher, the calendar view menu (Week ▾).
+    view_menus: [gtk::MenuButton; 2],
     mini: Rc<MiniMonth>,
     calendar_list: gtk::ListBox,
     grid: Rc<TimeGrid>,
@@ -188,8 +190,16 @@ impl Window {
         // the view switcher: in the header, or on narrow windows a bottom bar
         let toggle = view_toggles();
         let toggle_bottom = view_toggles();
+        let view_menu_top = view_menu();
+        let view_menu_bottom = view_menu();
+        let switcher = gtk::Box::builder().spacing(6).build();
+        switcher.append(&view_menu_top);
+        switcher.append(&toggle);
+        let switcher_bottom = gtk::Box::builder().spacing(6).build();
+        switcher_bottom.append(&view_menu_bottom);
+        switcher_bottom.append(&toggle_bottom);
         let bottom_bar = gtk::ActionBar::builder().revealed(false).build();
-        bottom_bar.set_center_widget(Some(&toggle_bottom));
+        bottom_bar.set_center_widget(Some(&switcher_bottom));
 
         let sidebar_button = gtk::ToggleButton::builder()
             .icon_name("sidebar-show-symbolic")
@@ -251,7 +261,7 @@ impl Window {
             .build();
         header.pack_end(&add);
         header.pack_end(&menu_button);
-        header.pack_end(&toggle);
+        header.pack_end(&switcher);
 
         let content = adw::ToolbarView::new();
         content.add_top_bar(&header);
@@ -371,7 +381,7 @@ impl Window {
             adw::LengthUnit::Sp,
         ));
         narrow.add_setter(&split, "collapsed", Some(&true.to_value()));
-        narrow.add_setter(&toggle, "visible", Some(&false.to_value()));
+        narrow.add_setter(&switcher, "visible", Some(&false.to_value()));
         narrow.add_setter(&bottom_bar, "revealed", Some(&true.to_value()));
         narrow.add_setter(&today, "visible", Some(&false.to_value()));
         narrow.add_setter(&today_icon, "visible", Some(&true.to_value()));
@@ -385,6 +395,7 @@ impl Window {
             split,
             views,
             toggles: [toggle, toggle_bottom],
+            view_menus: [view_menu_top, view_menu_bottom],
             mini,
             calendar_list,
             grid,
@@ -668,8 +679,15 @@ impl Window {
         for toggle in &self.toggles {
             toggle.set_active_name(Some(view.toggle_name()));
         }
+        for menu in &self.view_menus {
+            menu.set_label(&view.label());
+            menu.set_visible(view.is_calendar());
+        }
         self.mini.refresh();
         drop(state);
+        if view.is_calendar() {
+            self.state.borrow_mut().calendar_view = view;
+        }
 
         match view {
             ViewKind::Day | ViewKind::Week | ViewKind::WorkWeek | ViewKind::Days(_) => {
@@ -921,23 +939,51 @@ fn calendar_info(cal: &rical_core::Calendar, state: &crate::state::State) -> gtk
     gtk::Popover::builder().child(&grid).build()
 }
 
+/// Calendar, tasks or invitations; the calendar goes back to its last view.
 fn view_toggles() -> adw::ToggleGroup {
     let toggle = adw::ToggleGroup::builder().css_classes(["round"]).build();
-    for (view, label, key) in [
-        (ViewKind::Day, "Day", "d"),
-        (ViewKind::Week, "Week", "w"),
-        (ViewKind::Month, "Month", "m"),
-        (ViewKind::Agenda, "Agenda", "a"),
-        (ViewKind::Tasks, "Tasks", "T"),
-        (ViewKind::Invitations, "Invites", "I"),
+    for (view, label, tooltip) in [
+        (ViewKind::Week, "Calendar", "Calendar (d, w, m, a)"),
+        (ViewKind::Tasks, "Tasks", "Tasks (T)"),
+        (
+            ViewKind::Invitations,
+            "Invites",
+            "Invitations waiting for a reply (I)",
+        ),
     ] {
         toggle.add(
             adw::Toggle::builder()
                 .name(view.toggle_name())
                 .label(label)
-                .tooltip(format!("{label} view ({key})"))
+                .tooltip(tooltip)
                 .build(),
         );
     }
     toggle
+}
+
+/// Which calendar view: day, week, month, agenda and the rest.
+fn view_menu() -> gtk::MenuButton {
+    let menu = gio::Menu::new();
+    for (label, view) in [
+        ("_Day", "day"),
+        ("_Week", "fullweek"),
+        ("Wor_k week", "workweek"),
+        ("_3 days", "3days"),
+        ("_Month", "month"),
+        ("_Agenda", "agenda"),
+    ] {
+        let item = gio::MenuItem::new(Some(label), None);
+        item.set_action_and_target_value(
+            Some("win.run"),
+            Some(&format!("view {view}").to_variant()),
+        );
+        menu.append_item(&item);
+    }
+    gtk::MenuButton::builder()
+        .menu_model(&menu)
+        .always_show_arrow(true)
+        .css_classes(["flat"])
+        .tooltip_text("Calendar view")
+        .build()
 }

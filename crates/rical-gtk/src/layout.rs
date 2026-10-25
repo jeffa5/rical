@@ -59,15 +59,32 @@ impl ViewKind {
         })
     }
 
-    /// Which view switcher button stands for this view.
+    /// Which view switcher button stands for this view: the calendar
+    /// views share one.
     pub fn toggle_name(self) -> &'static str {
         match self {
-            Self::Day => "day",
-            Self::Week | Self::WorkWeek | Self::Days(_) => "week",
-            Self::Month => "month",
-            Self::Agenda => "agenda",
             Self::Tasks => "tasks",
             Self::Invitations => "invitations",
+            _ => "calendar",
+        }
+    }
+
+    /// A view of the calendar by date, as opposed to tasks or invitations.
+    pub fn is_calendar(self) -> bool {
+        !matches!(self, Self::Tasks | Self::Invitations)
+    }
+
+    /// What the calendar view menu calls it.
+    pub fn label(self) -> String {
+        match self {
+            Self::Day => "Day".into(),
+            Self::Week => "Week".into(),
+            Self::WorkWeek => "Work week".into(),
+            Self::Days(n) => format!("{n} days"),
+            Self::Month => "Month".into(),
+            Self::Agenda => "Agenda".into(),
+            Self::Tasks => "Tasks".into(),
+            Self::Invitations => "Invitations".into(),
         }
     }
 
