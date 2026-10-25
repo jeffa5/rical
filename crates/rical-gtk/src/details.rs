@@ -102,7 +102,7 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
         } else if c.has("PHONE") || c.uri.to_ascii_lowercase().starts_with("tel:") {
             ("call-start-symbolic", "Dial in")
         } else if c.has("CHAT") {
-            ("chat-symbolic", "Open chat")
+            ("chat-message-new-symbolic", "Open chat")
         } else if c.has("AUDIO") {
             ("audio-headphones-symbolic", "Join call")
         } else {

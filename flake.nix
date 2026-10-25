@@ -34,6 +34,12 @@
       version = "0.1.0";
       dontUnpack = true;
       nativeBuildInputs = [pkgs.wrapGAppsHook4];
+      # the icon theme too: without it, a session that provides none (sway)
+      # shows broken-image icons for those GTK does not build in. After the
+      # session's own, so a theme chosen there still wins.
+      preFixup = ''
+        gappsWrapperArgs+=(--suffix XDG_DATA_DIRS : "${pkgs.adwaita-icon-theme}/share:${pkgs.hicolor-icon-theme}/share")
+      '';
       buildInputs = [pkgs.gtk4 pkgs.libadwaita];
       installPhase = ''
         mkdir -p $out/bin
