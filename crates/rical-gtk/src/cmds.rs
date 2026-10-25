@@ -341,6 +341,26 @@ pub static SPECS: &[Spec] = &[
             "Remind this long before events without alarms of their own, or \"none\"",
         )
     },
+    Spec {
+        args: &[
+            Arg {
+                name: "action",
+                kind: Kind::Choice(&["toggle", "show", "hide", "add", "remove"]),
+                optional: true,
+                rest: false,
+            },
+            Arg {
+                name: "zone",
+                kind: Kind::Dynamic("zone"),
+                optional: true,
+                rest: false,
+            },
+        ],
+        ..spec(
+            "zones",
+            "Show or hide the extra time zones beside the hours, or add one for now",
+        )
+    },
     spec("reload", "Reload the vdir from disk"),
     Spec {
         aliases: &["shortcuts"],
@@ -366,6 +386,7 @@ impl Values for StateValues<'_> {
                 .map(|c| c.name.clone())
                 .collect(),
             "guest" => self.described(key).into_iter().map(|(v, _)| v).collect(),
+            "zone" => crate::zones::names(),
             _ => Vec::new(),
         }
     }

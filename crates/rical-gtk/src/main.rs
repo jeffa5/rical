@@ -30,6 +30,7 @@ mod sidetasks;
 mod state;
 mod tasks;
 mod window;
+mod zones;
 
 const APP_ID: &str = "net.jeffas.Rical";
 
@@ -150,6 +151,7 @@ fn setup(o: config::Options) -> Result<(state::SharedState, binds::Binds), Strin
     state.notifications = !o.no_notifications;
     state.me = o.me;
     state.contacts = o.contacts;
+    state.zones = o.zones;
     if let Some(text) = &o.remind {
         match rical_core::input::parse_shift(text) {
             Some(d) if d > chrono::TimeDelta::zero() => state.default_reminder = Some(d),

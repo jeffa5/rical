@@ -162,6 +162,11 @@ pub const SETTINGS: &[(&str, &str)] = &[
         "contacts",
         "A folder of vCards (e.g. a vdirsyncer address book) to suggest guests from.",
     ),
+    (
+        "zones",
+        "Extra time zones beside the hours, comma-separated: America/New_York, or \
+         NYC=America/New_York with a label.",
+    ),
 ];
 
 /// The environment variable for a setting: `RICAL_NO_NOTIFICATIONS`.
@@ -182,6 +187,7 @@ pub struct Options {
     pub no_notifications: bool,
     pub me: Vec<String>,
     pub contacts: Option<PathBuf>,
+    pub zones: Vec<crate::zones::Zone>,
 }
 
 impl Options {
@@ -225,6 +231,10 @@ impl Options {
                     .map(|s| s.trim().to_owned())
                     .filter(|s| !s.is_empty())
                     .collect();
+            }
+            "zones" => {
+                self.zones =
+                    crate::zones::Zone::parse_list(value).map_err(|e| format!("{origin}: {e}"))?;
             }
             "date" => {
                 self.date = Some(

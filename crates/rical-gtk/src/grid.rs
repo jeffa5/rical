@@ -21,6 +21,10 @@ use crate::{
 pub const HOUR_HEIGHT: f64 = 48.0;
 pub const GUTTER: f64 = 56.0;
 const HEADER_HEIGHT: i32 = 52;
+/// Width of each extra time zone's column of hour labels.
+const ZONE_WIDTH: f64 = 64.0;
+/// Below this width extra time zones are hidden.
+const ZONES_MIN_WIDTH: f64 = 760.0;
 const LANE_HEIGHT: f64 = 24.0;
 /// The all-day row shows this many lanes before scrolling.
 const MAX_ALL_DAY_LANES: f64 = 4.5;
@@ -287,7 +291,7 @@ impl TimeGrid {
             let days = state.visible_days();
             let width = target.width() as f64;
             let day = this
-                .day_at(x.clamp(GUTTER, width - 1.0), width)
+                .day_at(x.clamp(this.gutter(width), width - 1.0), width)
                 .unwrap_or(days[0]);
             let at = |day: NaiveDate, min: f64| When::Zoned(layout::at_wall(day, min, local));
             drag.preview = match &drag.kind {
@@ -372,7 +376,10 @@ impl TimeGrid {
             else {
                 return false;
             };
-            let Some(day) = this.day_at(x.max(GUTTER), widget.width() as f64) else {
+            let Some(day) = this.day_at(
+                x.max(this.gutter(widget.width() as f64)),
+                widget.width() as f64,
+            ) else {
                 return false;
             };
             let at = if all_day {
@@ -446,13 +453,47 @@ impl TimeGrid {
         Some(ghost)
     }
 
+    /// The extra time zones to show at this width: none in narrow windows,
+    /// where they would squeeze the events.
+    fn zones(&self, width: f64) -> Vec<crate::zones::Zone> {
+        let state = self.state.borrow();
+        if !state.zones_shown || width < ZONES_MIN_WIDTH {
+            return Vec::new();
+        }
+        state.zones.clone()
+    }
+
+    /// Width of the hour labels: one column per extra zone, then local.
+    fn gutter(&self, width: f64) -> f64 {
+        GUTTER + self.zones(width).len() as f64 * ZONE_WIDTH
+    }
+
+    /// The day the zone labels are worked out for: the focused one if it is
+    /// shown, so clock changes there or here are right for it.
+    fn label_day(&self) -> NaiveDate {
+        let state = self.state.borrow();
+        let days = state.visible_days();
+        if days.contains(&state.date) {
+            state.date
+        } else {
+            days[0]
+        }
+    }
+
+    /// Redraw what shows the time: the now line and the zone headers.
+    pub fn tick(&self) {
+        self.header.queue_draw();
+        self.grid.queue_draw();
+    }
+
     fn day_at(&self, x: f64, width: f64) -> Option<NaiveDate> {
         let days = self.state.borrow().visible_days();
-        let col_w = (width - GUTTER) / days.len() as f64;
-        if x < GUTTER {
+        let g = self.gutter(width);
+        let col_w = (width - g) / days.len() as f64;
+        if x < g {
             return None;
         }
-        days.get(((x - GUTTER) / col_w) as usize).copied()
+        days.get(((x - g) / col_w) as usize).copied()
     }
 
     /// Redraw after the state changed.
@@ -548,11 +589,56 @@ impl TimeGrid {
         let state = self.state.borrow();
         let pal = Palette::of(area);
         let days = state.visible_days();
-        let col_w = (width - GUTTER) / days.len() as f64;
+        let g = self.gutter(width);
+        let col_w = (width - g) / days.len() as f64;
         let today = Utc::now().with_timezone(&state.local).date_naive();
 
+        // over each extra zone's hours: its name, the time there now, and
+        // its abbreviation; over the local hours, the local abbreviation
+        let zones = self.zones(width);
+        if !zones.is_empty() {
+            let now = Utc::now();
+            let local = crate::zones::Zone {
+                label: String::new(),
+                tz: state.local,
+            };
+            let column = |x: f64, w: f64, lines: [(String, f64, bool); 3]| {
+                for (i, (text, alpha, bold)) in lines.into_iter().enumerate() {
+                    let style = TextStyle {
+                        scale: 0.75,
+                        bold,
+                        strikethrough: false,
+                    };
+                    let l = draw::layout(area, &text, &style, w - 4.0, 1);
+                    let lw = l.pixel_size().0 as f64;
+                    pal.fg(cr, alpha);
+                    draw::show_layout(cr, &l, x + (w - lw) / 2.0, 5.0 + i as f64 * 14.0);
+                }
+            };
+            for (i, z) in zones.iter().enumerate() {
+                column(
+                    i as f64 * ZONE_WIDTH,
+                    ZONE_WIDTH,
+                    [
+                        (z.label.clone(), 0.75, true),
+                        (z.at(now, today).0, 0.9, false),
+                        (z.abbreviation(now), 0.5, false),
+                    ],
+                );
+            }
+            column(
+                zones.len() as f64 * ZONE_WIDTH,
+                GUTTER,
+                [
+                    (String::new(), 0.0, false),
+                    (String::new(), 0.0, false),
+                    (local.abbreviation(now), 0.5, false),
+                ],
+            );
+        }
+
         for (i, day) in days.iter().enumerate() {
-            let x = GUTTER + i as f64 * col_w;
+            let x = g + i as f64 * col_w;
             let is_today = *day == today;
             let is_focus = *day == state.date && days.len() > 1;
 
@@ -604,7 +690,8 @@ impl TimeGrid {
         let pal = Palette::of(area);
         let days = state.visible_days();
         let occ = state.occurrences(&days);
-        let col_w = (width - GUTTER) / days.len() as f64;
+        let g = self.gutter(width);
+        let col_w = (width - g) / days.len() as f64;
 
         let label = draw::layout(area, "all day", &TextStyle::SMALL, GUTTER - 8.0, 1);
         pal.fg(cr, 0.5);
@@ -612,7 +699,7 @@ impl TimeGrid {
 
         pal.fg(cr, 0.1);
         for i in 0..=days.len() {
-            let x = (GUTTER + i as f64 * col_w).round() + 0.5;
+            let x = (g + i as f64 * col_w).round() + 0.5;
             cr.move_to(x, 0.0);
             cr.line_to(x, height);
         }
@@ -622,7 +709,7 @@ impl TimeGrid {
         hits.clear();
         for bar in layout::all_day_bars(&occ, &days, state.local) {
             let o = &occ[bar.index];
-            let x = GUTTER + bar.first as f64 * col_w + 2.0;
+            let x = g + bar.first as f64 * col_w + 2.0;
             let w = (bar.last - bar.first + 1) as f64 * col_w - 4.0;
             let y = 3.0 + bar.lane as f64 * LANE_HEIGHT;
             let h = LANE_HEIGHT - 3.0;
@@ -643,7 +730,7 @@ impl TimeGrid {
         if let Some(ghost) = self.drag_ghost(true) {
             let ghosts = [ghost];
             for bar in layout::all_day_bars(&ghosts, &days, state.local) {
-                let x = GUTTER + bar.first as f64 * col_w + 2.0;
+                let x = g + bar.first as f64 * col_w + 2.0;
                 let w = (bar.last - bar.first + 1) as f64 * col_w - 4.0;
                 draw_ghost(
                     area,
@@ -666,14 +753,15 @@ impl TimeGrid {
         let pal = Palette::of(area);
         let days = state.visible_days();
         let occ = state.occurrences(&days);
-        let col_w = (width - GUTTER) / days.len() as f64;
+        let g = self.gutter(width);
+        let col_w = (width - g) / days.len() as f64;
         let height = 24.0 * HOUR_HEIGHT;
         let now = Utc::now().with_timezone(&state.local);
         let today = now.date_naive();
 
         // today and focused day backgrounds
         for (i, day) in days.iter().enumerate() {
-            let x = GUTTER + i as f64 * col_w;
+            let x = g + i as f64 * col_w;
             if *day == today {
                 pal.accent(cr, 0.06);
                 cr.rectangle(x, 0.0, col_w, height);
@@ -685,11 +773,11 @@ impl TimeGrid {
         for hour in 0..24 {
             let y = hour as f64 * HOUR_HEIGHT;
             pal.fg(cr, 0.12);
-            cr.move_to(GUTTER - 6.0, y.round() + 0.5);
+            cr.move_to(g - 6.0, y.round() + 0.5);
             cr.line_to(width, y.round() + 0.5);
             let _ = cr.stroke();
             pal.fg(cr, 0.05);
-            cr.move_to(GUTTER, (y + HOUR_HEIGHT / 2.0).round() + 0.5);
+            cr.move_to(g, (y + HOUR_HEIGHT / 2.0).round() + 0.5);
             cr.line_to(width, (y + HOUR_HEIGHT / 2.0).round() + 0.5);
             let _ = cr.stroke();
             if hour > 0 {
@@ -697,14 +785,49 @@ impl TimeGrid {
                     draw::layout(area, &hour_label(hour), &TextStyle::SMALL, GUTTER - 10.0, 1);
                 let (lw, lh) = label.pixel_size();
                 pal.fg(cr, 0.55);
-                draw::show_layout(cr, &label, GUTTER - 10.0 - lw as f64, y - lh as f64 / 2.0);
+                draw::show_layout(cr, &label, g - 10.0 - lw as f64, y - lh as f64 / 2.0);
             }
+        }
+
+        // extra zones: the time there at each row, worked out for the
+        // label day so clock changes in either place are right
+        let zones = self.zones(width);
+        if !zones.is_empty() {
+            let day = self.label_day();
+            for hour in 1..24 {
+                let y = hour as f64 * HOUR_HEIGHT;
+                let at = layout::at_wall(day, hour as f64 * 60.0, state.local);
+                for (i, z) in zones.iter().enumerate() {
+                    let (time, days_off) = z.at(at, day);
+                    let text = match days_off {
+                        0 => time,
+                        d => format!(
+                            "{time} {}",
+                            if d > 0 {
+                                format!("+{d}")
+                            } else {
+                                format!("−{}", -d)
+                            }
+                        ),
+                    };
+                    let l = draw::layout(area, &text, &TextStyle::SMALL, ZONE_WIDTH - 4.0, 1);
+                    let (lw, lh) = l.pixel_size();
+                    pal.fg(cr, if days_off == 0 { 0.45 } else { 0.3 });
+                    let right = (i + 1) as f64 * ZONE_WIDTH - 6.0;
+                    draw::show_layout(cr, &l, right - lw as f64, y - lh as f64 / 2.0);
+                }
+            }
+            pal.fg(cr, 0.08);
+            let x = (zones.len() as f64 * ZONE_WIDTH).round() + 0.5;
+            cr.move_to(x, 0.0);
+            cr.line_to(x, height);
+            let _ = cr.stroke();
         }
 
         // day separators
         pal.fg(cr, 0.12);
         for i in 0..=days.len() {
-            let x = (GUTTER + i as f64 * col_w).round() + 0.5;
+            let x = (g + i as f64 * col_w).round() + 0.5;
             cr.move_to(x, 0.0);
             cr.line_to(x, height);
         }
@@ -714,7 +837,7 @@ impl TimeGrid {
         let mut hits = self.grid_hits.borrow_mut();
         hits.clear();
         for (i, day) in days.iter().enumerate() {
-            let x0 = GUTTER + i as f64 * col_w;
+            let x0 = g + i as f64 * col_w;
             let inner = col_w - 6.0;
             for seg in layout::day_segments(&occ, *day, state.local, MIN_EVENT_MINUTES) {
                 let o = &occ[seg.index];
@@ -751,7 +874,7 @@ impl TimeGrid {
             let ghosts = [ghost];
             for (i, day) in days.iter().enumerate() {
                 for seg in layout::day_segments(&ghosts, *day, state.local, MIN_EVENT_MINUTES) {
-                    let x = GUTTER + i as f64 * col_w + 2.0;
+                    let x = g + i as f64 * col_w + 2.0;
                     let y = seg.start_min / 60.0 * HOUR_HEIGHT + 1.0;
                     let h = (seg.end_min - seg.start_min) / 60.0 * HOUR_HEIGHT - 2.0;
                     draw_ghost(
@@ -773,10 +896,10 @@ impl TimeGrid {
         // now line
         if let Some(i) = days.iter().position(|d| *d == today) {
             let y = (now.hour() * 60 + now.minute()) as f64 / 60.0 * HOUR_HEIGHT;
-            let x = GUTTER + i as f64 * col_w;
+            let x = g + i as f64 * col_w;
             cr.set_source_rgba(0.88, 0.11, 0.14, 0.35);
             cr.set_line_width(1.0);
-            cr.move_to(GUTTER, y);
+            cr.move_to(g, y);
             cr.line_to(width, y);
             let _ = cr.stroke();
             cr.set_source_rgb(0.88, 0.11, 0.14);
@@ -786,6 +909,24 @@ impl TimeGrid {
             let _ = cr.stroke();
             cr.arc(x, y, 5.0, 0.0, std::f64::consts::TAU);
             let _ = cr.fill();
+            // and what time it is in each extra zone, where the line meets it
+            let bold = TextStyle {
+                scale: 0.8,
+                bold: true,
+                strikethrough: false,
+            };
+            for (i, z) in zones.iter().enumerate() {
+                let (time, _) = z.at(now, today);
+                let l = draw::layout(area, &time, &bold, ZONE_WIDTH, 1);
+                let (lw, lh) = l.pixel_size();
+                let (lw, lh) = (lw as f64, lh as f64);
+                let lx = i as f64 * ZONE_WIDTH + (ZONE_WIDTH - lw) / 2.0;
+                cr.set_source_rgb(0.88, 0.11, 0.14);
+                draw::rounded_rect(cr, lx - 4.0, y - lh / 2.0 - 1.0, lw + 8.0, lh + 2.0, 4.0);
+                let _ = cr.fill();
+                cr.set_source_rgb(1.0, 1.0, 1.0);
+                draw::show_layout(cr, &l, lx, y - lh / 2.0);
+            }
         }
     }
 }

@@ -60,6 +60,27 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
         when.push_str(" · repeats");
     }
     content.append(&row("x-office-calendar-symbolic", &when));
+    // set in another time zone (a flight, a call abroad): its time there
+    if let rical_core::When::Zoned(start) = occ.start
+        && start.timezone() != state.local
+    {
+        let tz = start.timezone();
+        let end = occ.end.to_utc(state.local).with_timezone(&tz);
+        let place = crate::zones::Zone {
+            label: String::new(),
+            tz,
+        };
+        let name = tz.name().rsplit('/').next().unwrap_or("").replace('_', " ");
+        content.append(&row(
+            "preferences-system-time-symbolic",
+            &format!(
+                "{}–{} {name} time ({})",
+                start.format("%H:%M"),
+                end.format("%H:%M"),
+                place.abbreviation(start.to_utc())
+            ),
+        ));
+    }
 
     if let Some(status) = &occ.status {
         content.append(&row("dialog-information-symbolic", &status.to_lowercase()));

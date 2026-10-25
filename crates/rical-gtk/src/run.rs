@@ -234,6 +234,41 @@ impl Window {
                 };
                 self.split.set_show_sidebar(show);
             }
+            "zones" => {
+                {
+                    let mut s = self.state.borrow_mut();
+                    match (p.arg(0).unwrap_or("toggle"), p.arg(1)) {
+                        ("toggle", _) => s.zones_shown = !s.zones_shown,
+                        ("show", _) => s.zones_shown = true,
+                        ("hide", _) => s.zones_shown = false,
+                        ("add", Some(name)) => {
+                            let z = crate::zones::Zone::parse(name)?;
+                            if !s.zones.contains(&z) {
+                                s.zones.push(z);
+                            }
+                            s.zones_shown = true;
+                        }
+                        ("remove", Some(name)) => {
+                            let before = s.zones.len();
+                            s.zones.retain(|z| {
+                                !(z.tz.name().eq_ignore_ascii_case(name)
+                                    || z.label.eq_ignore_ascii_case(name))
+                            });
+                            if s.zones.len() == before {
+                                return Err(format!("“{name}” is not shown"));
+                            }
+                        }
+                        (action, _) => return Err(format!("{action} which zone?")),
+                    }
+                    if s.zones.is_empty() && s.zones_shown {
+                        drop(s);
+                        self.toast(
+                            "No extra zones: set zones = … in the config, or :zones add NAME",
+                        );
+                    }
+                }
+                self.refresh();
+            }
             "reload" => self.reload_all(),
             "section" => {
                 let name = p.arg(0).unwrap();

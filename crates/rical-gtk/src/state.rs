@@ -72,6 +72,9 @@ pub struct State {
     guessed_me: RefCell<(Option<u64>, Vec<String>)>,
     /// A folder of vCards to suggest guests from.
     pub contacts: Option<std::path::PathBuf>,
+    /// Extra time zones beside the grid's hour labels, and whether shown.
+    pub zones: Vec<crate::zones::Zone>,
+    pub zones_shown: bool,
     people: RefCell<(Option<u64>, Rc<Vec<Known>>)>,
 }
 
@@ -120,6 +123,8 @@ impl State {
             me: Vec::new(),
             guessed_me: RefCell::new((None, Vec::new())),
             contacts: None,
+            zones: Vec::new(),
+            zones_shown: true,
             people: RefCell::new((None, Rc::new(Vec::new()))),
         }
     }

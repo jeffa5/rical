@@ -135,7 +135,7 @@ impl Window {
                     today = now;
                     w.refresh();
                 } else {
-                    w.grid.grid.queue_draw();
+                    w.grid.tick();
                 }
                 glib::ControlFlow::Continue
             }
