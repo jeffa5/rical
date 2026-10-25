@@ -258,6 +258,30 @@ impl Window {
             .css_classes(["navigation-sidebar"])
             .build();
         calendar_list.update_property(&[gtk::accessible::Property::Label("Calendars")]);
+        // a small heading over each account's calendars
+        calendar_list.set_header_func(|row, before| {
+            let parent = row.widget_name();
+            let shown = !parent.is_empty() && before.is_none_or(|b| b.widget_name() != parent);
+            row.set_header(
+                shown
+                    .then(|| {
+                        gtk::Label::builder()
+                            .label(parent.as_str())
+                            .css_classes(["dim-label", "caption-heading"])
+                            .xalign(0.0)
+                            .margin_start(12)
+                            .margin_top(if before.is_some() { 8 } else { 2 })
+                            .margin_bottom(2)
+                            .build()
+                    })
+                    .as_ref(),
+            );
+        });
+        calendar_list.connect_row_activated(|_, row| {
+            if let Some(check) = calendar_check(row) {
+                check.set_active(!check.is_active());
+            }
+        });
         // collapsible sections, remembered between runs
         let sections: Rc<RefCell<Vec<Rc<Section>>>> = Default::default();
         let save: Rc<dyn Fn()> = {
@@ -509,6 +533,7 @@ impl Window {
             self.calendar_list.remove(&row);
         }
         let state = self.state.borrow();
+        let mut css = String::new();
         for (i, cal) in state.vdir.calendars.iter().enumerate() {
             let check = gtk::CheckButton::builder()
                 .active(!state.hidden.contains(&cal.id))
@@ -532,37 +557,53 @@ impl Window {
                 }
                 w.refresh();
             });
-            let row = adw::ActionRow::builder()
-                .title(gtk::glib::markup_escape_text(&cal.label))
-                .title_lines(1)
-                .subtitle_lines(1)
-                .activatable_widget(&check)
-                .tooltip_text(cal.path.display().to_string())
-                .build();
-            // the folder it is in (an account, say), when nested
-            if let Some((parent, _)) = cal.id.rsplit_once('/') {
-                row.set_subtitle(&gtk::glib::markup_escape_text(parent));
-            }
+            // the checkbox wears the calendar's colour
+            let c = state.color(&cal.id);
+            check.add_css_class(&format!("cal-{i}"));
+            css += &format!(
+                ".cal-{i} check {{ border-color: #{r:02x}{g:02x}{b:02x}; }}\n\
+                 .cal-{i} check:checked {{ background-color: #{r:02x}{g:02x}{b:02x}; \
+                 color: {fg}; }}\n",
+                r = c.r,
+                g = c.g,
+                b = c.b,
+                fg = if crate::draw::contrasting(c).r == 0 {
+                    "black"
+                } else {
+                    "white"
+                },
+            );
+            let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            line.append(&check);
+            line.append(
+                &gtk::Label::builder()
+                    .label(&cal.label)
+                    .xalign(0.0)
+                    .hexpand(true)
+                    .ellipsize(gtk::pango::EllipsizeMode::End)
+                    .build(),
+            );
             let info = gtk::MenuButton::builder()
                 .icon_name("dialog-information-symbolic")
                 .tooltip_text("About this calendar")
                 .valign(gtk::Align::Center)
-                .css_classes(["flat"])
+                .css_classes(["flat", "circular", "dim-label"])
                 .popover(&calendar_info(cal, &state))
                 .build();
-            row.add_suffix(&info);
-            row.add_prefix(&format::color_dot(state.color(&cal.id), 12));
+            line.append(&info);
+            let mut tip = cal.path.display().to_string();
             if i < 9 {
-                row.add_suffix(
-                    &gtk::Label::builder()
-                        .label(format!("Alt+{}", i + 1))
-                        .css_classes(["dim-label", "caption"])
-                        .build(),
-                );
+                tip += &format!("\nShow or hide: Alt+{}", i + 1);
             }
-            row.add_suffix(&check);
+            let row = gtk::ListBoxRow::builder()
+                .child(&line)
+                .tooltip_text(tip)
+                // the folder it is in (an account, say) heads its group
+                .name(cal.id.rsplit_once('/').map_or("", |(parent, _)| parent))
+                .build();
             self.calendar_list.append(&row);
         }
+        CALENDAR_CSS.with(|p| p.load_from_string(&css));
     }
 
     fn sync_calendar_list(&self) {
@@ -572,9 +613,7 @@ impl Window {
             let check = self
                 .calendar_list
                 .row_at_index(i as i32)
-                .and_then(|r| r.downcast::<adw::ActionRow>().ok())
-                .and_then(|r| r.activatable_widget())
-                .and_then(|w| w.downcast::<gtk::CheckButton>().ok());
+                .and_then(|r| calendar_check(&r));
             if let Some(check) = check {
                 check.set_active(!state.hidden.contains(&cal.id));
             }
@@ -756,6 +795,26 @@ fn state_days(state: &crate::state::State) -> Option<(chrono::NaiveDate, usize)>
         let days = state.visible_days();
         (days[0], days.len())
     })
+}
+
+thread_local! {
+    /// Colours each sidebar calendar's checkbox; reloaded on rebuild.
+    static CALENDAR_CSS: gtk::CssProvider = {
+        let provider = gtk::CssProvider::new();
+        if let Some(display) = gtk::gdk::Display::default() {
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &provider,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+        }
+        provider
+    };
+}
+
+/// The show/hide checkbox of a sidebar calendar row.
+fn calendar_check(row: &gtk::ListBoxRow) -> Option<gtk::CheckButton> {
+    row.child()?.first_child()?.downcast().ok()
 }
 
 /// Details of a calendar: where it is on disk and what it holds.
