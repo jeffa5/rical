@@ -160,6 +160,29 @@ impl Vdir {
         })
     }
 
+    /// Whether `uid` is `ancestor` or one of its subtasks (at any depth):
+    /// such a task cannot become `ancestor`'s parent without a loop.
+    pub fn is_within(&self, uid: &str, ancestor: &str) -> bool {
+        let parents = self
+            .tasks()
+            .into_iter()
+            .map(|t| (t.uid, t.parent))
+            .collect::<std::collections::HashMap<_, _>>();
+        let mut at = Some(uid.to_owned());
+        let mut steps = 0;
+        while let Some(u) = at {
+            if u == ancestor {
+                return true;
+            }
+            steps += 1;
+            if steps > parents.len() {
+                return true; // already a loop
+            }
+            at = parents.get(&u).cloned().flatten();
+        }
+        false
+    }
+
     /// Set or clear when a task starts.
     pub fn set_start(&mut self, task: &Task, start: Option<When>) -> anyhow::Result<Change> {
         self.edit_task(task, |c| match start {

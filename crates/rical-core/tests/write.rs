@@ -1030,3 +1030,54 @@ fn related_to_without_reltype_is_a_parent() {
     assert_eq!(parent_of("child").as_deref(), Some("pack"));
     assert_eq!(parent_of("sib"), None);
 }
+
+#[test]
+fn changing_a_tasks_parent() {
+    let (dir, mut vdir) = setup(&[("home/pack.ics", TRIP_TASK)]);
+    let taxi = vdir
+        .create_task("home", "Book the taxi", None, Some("pack"))
+        .unwrap()
+        .path;
+    let other = vdir
+        .create_task("home", "Trip admin", None, None)
+        .unwrap()
+        .path;
+    let admin_uid = vdir
+        .tasks()
+        .into_iter()
+        .find(|t| t.path == other)
+        .unwrap()
+        .uid;
+    let taxi_task = vdir.tasks().into_iter().find(|t| t.path == taxi).unwrap();
+    // a loop is refused before it is written: pack is not within taxi
+    assert!(vdir.is_within(&taxi_task.uid, "pack"));
+    assert!(!vdir.is_within("pack", &taxi_task.uid));
+
+    // move the taxi under "Trip admin" through an edit draft
+    let occ = rical_core::Occurrence {
+        ..taxi_task.on_day(chrono::NaiveDate::from_ymd_opt(2026, 12, 1).unwrap())
+    };
+    let mut d = vdir.draft(&occ);
+    assert_eq!(d.parent.as_deref(), Some("pack"));
+    d.parent = Some(admin_uid.clone());
+    d.has_start = false;
+    d.has_due = false;
+    vdir.update(&occ, Scope::All, &d, None).unwrap();
+    let text = fs::read_to_string(&taxi).unwrap();
+    assert!(
+        text.contains(&format!("RELATED-TO;RELTYPE=PARENT:{admin_uid}\r\n")),
+        "{text}"
+    );
+    assert_eq!(text.matches("RELATED-TO").count(), 1);
+
+    // and make it a task of its own again
+    let taxi_task = vdir.tasks().into_iter().find(|t| t.path == taxi).unwrap();
+    let occ = taxi_task.on_day(chrono::NaiveDate::from_ymd_opt(2026, 12, 1).unwrap());
+    let mut d = vdir.draft(&occ);
+    d.parent = None;
+    d.has_start = false;
+    d.has_due = false;
+    vdir.update(&occ, Scope::All, &d, None).unwrap();
+    assert!(!fs::read_to_string(&taxi).unwrap().contains("RELATED-TO"));
+    let _ = dir;
+}

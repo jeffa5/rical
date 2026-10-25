@@ -93,6 +93,9 @@ pub struct Draft {
     /// For a task: whether it is done. Not written by `update`: completing
     /// goes through [`Vdir::set_done`], as a repeating task moves on instead.
     pub done: Option<bool>,
+    /// For a task: the UID of the task it is a subtask of
+    /// (RELATED-TO;RELTYPE=PARENT), or None for a task of its own.
+    pub parent: Option<String>,
 }
 
 /// Someone invited, or to invite.
@@ -119,6 +122,7 @@ impl Draft {
             has_due: true,
             priority: None,
             done: None,
+            parent: None,
         }
     }
 }
@@ -187,6 +191,7 @@ impl Vdir {
                         || matches!(c.property_value("STATUS"), Some("COMPLETED" | "CANCELLED"))
                 })
             }),
+            parent: occ.parent.clone(),
         }
     }
 
@@ -533,6 +538,9 @@ fn set_fields(c: &mut Component, draft: &Draft, repeat: bool) {
         set_guests(c, guests, draft.organizer.as_ref());
     }
     if draft.kind == Kind::Todo {
+        set_parent(c, draft.parent.as_deref());
+    }
+    if draft.kind == Kind::Todo {
         let current = c
             .property("PRIORITY")
             .and_then(|l| l.value().trim().parse::<u8>().ok())
@@ -562,6 +570,28 @@ fn set_fields(c: &mut Component, draft: &Draft, repeat: bool) {
                 }
             }
         }
+    }
+}
+
+/// Make `parent` the task this one is a subtask of: its RELATED-TO with
+/// RELTYPE=PARENT (or none, the default), leaving other relations alone.
+fn set_parent(c: &mut Component, parent: Option<&str>) {
+    let is_parent = |l: &Line| {
+        l.name() == "RELATED-TO"
+            && l.param("RELTYPE")
+                .is_none_or(|r| r.eq_ignore_ascii_case("PARENT"))
+    };
+    let current = c
+        .lines()
+        .find(|l| is_parent(l))
+        .map(|l| l.value().trim().to_owned());
+    if current.as_deref() == parent {
+        return;
+    }
+    c.items
+        .retain(|i| !matches!(i, Item::Line(l) if is_parent(l)));
+    if let Some(p) = parent {
+        c.insert(Line::property("RELATED-TO", &[("RELTYPE", "PARENT")], p));
     }
 }
 

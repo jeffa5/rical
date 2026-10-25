@@ -106,8 +106,47 @@ impl SideTasks {
             );
         }
         let state = self.state.borrow();
-        for t in tasks.iter().take(SHOWN) {
-            let b = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        // subtasks under their parent when it is listed too; otherwise
+        // marked as a subtask, with the parent named on hover
+        let titles = state
+            .vdir
+            .tasks()
+            .into_iter()
+            .map(|t| (t.uid, t.summary))
+            .collect::<std::collections::HashMap<_, _>>();
+        let listed = tasks
+            .iter()
+            .map(|t| t.uid.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        let nested = |t: &Task| {
+            t.parent
+                .as_deref()
+                .is_some_and(|p| listed.contains(p) && p != t.uid)
+        };
+        let mut order = Vec::new();
+        let mut stack = tasks
+            .iter()
+            .filter(|t| !nested(t))
+            .rev()
+            .map(|t| (t, 0))
+            .collect::<Vec<_>>();
+        let mut seen = std::collections::HashSet::new();
+        while let Some((t, depth)) = stack.pop() {
+            if !seen.insert(t.uid.as_str()) {
+                continue;
+            }
+            order.push((t, depth));
+            let kids = tasks
+                .iter()
+                .filter(|k| k.parent.as_deref() == Some(t.uid.as_str()) && nested(k));
+            stack.extend(kids.rev().map(|k| (k, depth + 1)));
+        }
+        for (t, depth) in order.into_iter().take(SHOWN) {
+            let b = gtk::Box::builder()
+                .orientation(gtk::Orientation::Horizontal)
+                .spacing(8)
+                .margin_start(20 * depth)
+                .build();
             let id = (t.path.clone(), t.uid.clone());
             let toggle = self.on_toggle.clone();
             let check =
@@ -130,7 +169,21 @@ impl SideTasks {
             }
             b.append(&label);
             let row = gtk::ListBoxRow::builder().child(&b).build();
-            row.set_tooltip_text(Some("Drag onto the calendar to schedule"));
+            let mut tip = "Drag onto the calendar to schedule".to_owned();
+            if depth == 0
+                && let Some(parent) = t.parent.as_ref().and_then(|p| titles.get(p))
+            {
+                // a subtask without its parent here
+                b.insert_child_after(
+                    &gtk::Label::builder()
+                        .label("↳")
+                        .css_classes(["dim-label"])
+                        .build(),
+                    Some(&check),
+                );
+                tip = format!("Subtask of “{parent}”\n{tip}");
+            }
+            row.set_tooltip_text(Some(&tip));
 
             let source = gtk::DragSource::new();
             source.set_actions(gdk::DragAction::COPY);

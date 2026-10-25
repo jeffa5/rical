@@ -180,6 +180,31 @@ impl Window {
                 };
                 self.add_task(calendar, p.arg(0).unwrap(), due, None);
             }
+            "up" => self.go_to_parent()?,
+            "subtask-of" => {
+                let text = p.arg(0).unwrap().trim();
+                let parent = if text.eq_ignore_ascii_case("none") {
+                    None
+                } else {
+                    // the open task with that title, or the only one it is part of
+                    let tasks = self.state.borrow().vdir.tasks();
+                    let open = tasks.iter().filter(|t| !t.is_done());
+                    let exact = open
+                        .clone()
+                        .filter(|t| t.summary.eq_ignore_ascii_case(text))
+                        .collect::<Vec<_>>();
+                    let lower = text.to_lowercase();
+                    let partial = open
+                        .filter(|t| t.summary.to_lowercase().contains(&lower))
+                        .collect::<Vec<_>>();
+                    match (exact.as_slice(), partial.as_slice()) {
+                        ([one], _) | ([], [one]) => Some(one.uid.clone()),
+                        ([], []) => return Err(format!("no open task called “{text}”")),
+                        _ => return Err(format!("more than one task matches “{text}”")),
+                    }
+                };
+                self.set_parent(parent)?;
+            }
             "subtask" => {
                 // under the selected task, in its calendar
                 let parent = self.selected_task().ok_or("select a task first")?;

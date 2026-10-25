@@ -96,10 +96,19 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
             .as_ref()
             .and_then(|p| tasks.iter().find(|t| t.uid == *p))
         {
-            content.append(&row(
-                "go-up-symbolic",
-                &format!("Subtask of “{}”", parent.summary),
-            ));
+            // a link up to it
+            let up = gtk::Button::builder()
+                .child(&row(
+                    "go-up-symbolic",
+                    &format!("Subtask of “{}”", parent.summary),
+                ))
+                .css_classes(["flat"])
+                .halign(gtk::Align::Start)
+                .tooltip_text("Go to the parent task (^)")
+                .action_name("win.run")
+                .action_target(&"up".to_variant())
+                .build();
+            content.append(&up);
         }
         let kids = tasks
             .iter()

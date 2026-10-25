@@ -31,6 +31,9 @@ pub enum Kind {
     Dynamic(&'static str),
     /// Free text; suggestions come from [`Values::suggestions`].
     Text(&'static str),
+    /// Like `Dynamic`, but one value that may have spaces (a task's title):
+    /// as the last, `rest` argument it is completed and replaced whole.
+    Phrase(&'static str),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -316,7 +319,53 @@ impl Registry {
         } else {
             (String::new(), line.len())
         };
+        let spans = words.iter().map(|(_, s)| offset + s).collect::<Vec<_>>();
         let before = words.into_iter().map(|(w, _)| w).collect::<Vec<_>>();
+
+        // a phrase as the last argument (a task's title) is completed and
+        // replaced whole, from where it begins, spaces and all
+        if let Some(spec) = before.first().and_then(|n| self.resolve(n, ctx).ok())
+            && let Some(last) = spec.args.last()
+            && let (Kind::Phrase(key), true) = (last.kind, last.rest)
+        {
+            let index = spec.args.len() - 1;
+            let mut n = 0;
+            let mut skip = false;
+            let mut phrase_at = None;
+            for (w, at) in before[1..].iter().zip(&spans[1..]) {
+                if skip {
+                    skip = false;
+                } else if w.starts_with("--") {
+                    skip = !w.contains('=');
+                } else {
+                    if n == index {
+                        phrase_at = Some(*at);
+                    }
+                    n += 1;
+                }
+            }
+            if n >= index && !current.starts_with('-') {
+                let start = phrase_at.unwrap_or(start);
+                let typed = line[start..].trim_matches('"').trim_start();
+                let candidates = fuzzy(values.described(key), typed, |(v, d)| format!("{v} {d}"))
+                    .into_iter()
+                    .map(|(v, d)| Candidate {
+                        value: v,
+                        help: if d.is_empty() {
+                            last.name.to_owned()
+                        } else {
+                            d
+                        },
+                        usage: String::new(),
+                    })
+                    .collect();
+                return Completion {
+                    start,
+                    prefix: line[start..].to_owned(),
+                    candidates,
+                };
+            }
+        }
 
         let candidates = if before.is_empty() {
             let mut c = self
@@ -367,7 +416,7 @@ fn complete_args(
         usage: String::new(),
     };
     let of_kind = |kind: &Kind, help: &str| -> Vec<Candidate> {
-        if let Kind::Dynamic(key) = kind {
+        if let Kind::Dynamic(key) | Kind::Phrase(key) = kind {
             // the description counts too: a guest's name, say
             return fuzzy(values.described(key), current, |(v, d)| format!("{v} {d}"))
                 .into_iter()
@@ -376,7 +425,7 @@ fn complete_args(
         }
         let all = match kind {
             Kind::Choice(c) => c.iter().map(|s| s.to_string()).collect(),
-            Kind::Dynamic(key) => values.values(key),
+            Kind::Dynamic(key) | Kind::Phrase(key) => values.values(key),
             Kind::Text(key) => values.suggestions(key),
         };
         fuzzy(all, current, String::clone)
@@ -552,6 +601,19 @@ mod tests {
             args: &[],
             flags: &[],
         },
+        Spec {
+            name: "under",
+            aliases: &[],
+            help: "Make it a subtask",
+            contexts: ALL,
+            args: &[Arg {
+                name: "task",
+                kind: Kind::Phrase("calendar"),
+                optional: false,
+                rest: true,
+            }],
+            flags: &[],
+        },
     ];
 
     struct V;
@@ -648,7 +710,7 @@ mod tests {
         assert_eq!(names(&r.complete(":to", ALL, &V)), ["today", "toggle"]);
         assert_eq!(
             names(&r.complete("", MONTH, &V)),
-            ["new", "today", "toggle", "v", "view"]
+            ["new", "today", "toggle", "under", "v", "view"]
         );
         let c = r.complete(":vi", ALL, &V);
         assert_eq!(c.apply(":vi", &c.candidates[0]), ":view ");
@@ -729,5 +791,19 @@ mod tests {
         );
         // nothing typed keeps everything, in order
         assert_eq!(fuzzy(zones.clone(), "", String::clone), zones);
+    }
+
+    #[test]
+    fn phrases_complete_whole() {
+        // "Work stuff" has a space: typed in two words, it is matched and
+        // replaced from where the argument begins
+        let c = reg().complete(":under Work st", ALL, &V);
+        assert_eq!(c.start, ":under ".len());
+        assert_eq!(c.prefix, "Work st");
+        assert_eq!(names(&c)[0], "Work stuff");
+        // and nothing typed yet offers them all
+        let c = reg().complete(":under ", ALL, &V);
+        assert_eq!(c.start, ":under ".len());
+        assert_eq!(names(&c).len(), 3);
     }
 }

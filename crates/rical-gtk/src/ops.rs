@@ -154,6 +154,7 @@ impl Window {
                 calendar,
                 is_new: true,
                 invitation: false,
+                uid: None,
             },
             move |draft, calendar| {
                 if let Some(w) = weak.upgrade() {
@@ -304,6 +305,7 @@ impl Window {
                 calendar: occ.calendar.clone(),
                 is_new: false,
                 invitation: self.state.borrow().invitation(&occ).is_some(),
+                uid: Some(occ.uid.clone()),
             },
             on_save,
             Some(Box::new(move || {
@@ -515,6 +517,66 @@ impl Window {
         self.perform("set the due date", |v| {
             v.set_due(&task, due).map(|c| vec![c])
         });
+        Ok(())
+    }
+
+    /// Show and select the task `uid`: on the calendar at its date if it
+    /// has one and can be seen there, otherwise in the tasks view.
+    pub(super) fn go_to_task(self: &Rc<Self>, uid: &str) -> Result<(), String> {
+        let task = self
+            .state
+            .borrow()
+            .vdir
+            .tasks()
+            .into_iter()
+            .find(|t| t.uid == uid)
+            .ok_or("that task is not in your calendars")?;
+        let view = self.state.borrow().view;
+        if view != ViewKind::Tasks
+            && let Some(when) = task.start.or(task.due)
+        {
+            let local = self.state.borrow().local;
+            self.state.borrow_mut().date = when.date(local);
+            self.refresh();
+            self.reselect(&task.uid, &when);
+            if self.state.borrow().selected.is_some() {
+                return Ok(());
+            }
+        }
+        // undated, or not on the calendar (a hidden calendar, say)
+        self.state.borrow_mut().selected_task = Some((task.path, task.uid));
+        self.set_view(ViewKind::Tasks);
+        Ok(())
+    }
+
+    /// From a subtask to its parent task.
+    pub(super) fn go_to_parent(self: &Rc<Self>) -> Result<(), String> {
+        let task = self.selected_task().ok_or("select a subtask first")?;
+        let parent = task.parent.ok_or("it is not a subtask")?;
+        crate::details::close();
+        self.go_to_task(&parent)
+    }
+
+    /// Make the selected task a subtask of `parent`, or a task of its own.
+    pub(super) fn set_parent(self: &Rc<Self>, parent: Option<String>) -> Result<(), String> {
+        let task = self.selected_task().ok_or("select a task first")?;
+        if let Some(p) = &parent
+            && self.state.borrow().vdir.is_within(p, &task.uid)
+        {
+            return Err("that is this task or one of its own subtasks".into());
+        }
+        let occ = task_occurrence(&task, self.state.borrow().today());
+        let mut draft = self.state.borrow().vdir.draft(&occ);
+        draft.parent = parent;
+        let summary = task.summary.clone();
+        if self.perform("change the parent task", |v| {
+            v.update(&occ, Scope::All, &draft, None)
+        }) {
+            self.toast(&match &draft.parent {
+                Some(_) => format!("“{summary}” is now a subtask"),
+                None => format!("“{summary}” is a task of its own"),
+            });
+        }
         Ok(())
     }
 

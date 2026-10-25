@@ -21,6 +21,9 @@ pub struct Options {
     pub is_new: bool,
     /// Someone else's event: its guests are shown but not changed.
     pub invitation: bool,
+    /// The item being edited, if it exists (so a task is not offered as
+    /// its own parent).
+    pub uid: Option<String>,
 }
 
 pub fn open(
@@ -158,9 +161,59 @@ pub fn open(
         .active(draft.done == Some(true))
         .visible(!options.is_new)
         .build();
+    // which task it is a subtask of: any open task but itself and its own
+    // subtasks, searchable by title
+    let parents = {
+        let s = state.borrow();
+        let mut tasks = s
+            .vdir
+            .tasks()
+            .into_iter()
+            // open tasks, and its current parent even if that is done
+            .filter(|t| {
+                (!t.is_done() || draft.parent.as_ref() == Some(&t.uid)) && !t.summary.is_empty()
+            })
+            .filter(|t| {
+                options
+                    .uid
+                    .as_ref()
+                    .is_none_or(|me| !s.vdir.is_within(&t.uid, me))
+            })
+            .map(|t| {
+                let cal = s
+                    .calendar(&t.calendar)
+                    .map_or(t.calendar, |c| c.name.clone());
+                (t.uid, format!("{} · {cal}", t.summary))
+            })
+            .collect::<Vec<_>>();
+        tasks.sort_by_key(|t| t.1.to_lowercase());
+        tasks
+    };
+    let parent_labels = std::iter::once("None (a task of its own)")
+        .chain(parents.iter().map(|(_, l)| l.as_str()))
+        .collect::<Vec<_>>();
+    let parent_row = adw::ComboRow::builder()
+        .title("Subtask of")
+        .model(&gtk::StringList::new(&parent_labels))
+        .enable_search(true)
+        .search_match_mode(gtk::StringFilterMatchMode::Substring)
+        .expression(gtk::PropertyExpression::new(
+            gtk::StringObject::static_type(),
+            None::<gtk::Expression>,
+            "string",
+        ))
+        .selected(
+            draft
+                .parent
+                .as_ref()
+                .and_then(|p| parents.iter().position(|(uid, _)| uid == p))
+                .map_or(0, |i| i as u32 + 1),
+        )
+        .build();
     let task_group = adw::PreferencesGroup::builder().visible(task).build();
     task_group.add(&priority);
     task_group.add(&done);
+    task_group.add(&parent_row);
     {
         let (g, hints) = (task_group.clone(), hints.clone());
         kind.connect_selected_notify(move |k| {
@@ -330,6 +383,7 @@ pub fn open(
         );
         let (guests, state, invitation) = (guests.clone(), state.clone(), options.invitation);
         let (zones, priority, done) = (zones.clone(), priority.clone(), done.clone());
+        let (parent_row, parents) = (parent_row.clone(), parents.clone());
         move || {
             let is_all_day = all_day.is_active();
             starts.remove_css_class("error");
@@ -439,6 +493,10 @@ pub fn open(
                     _ => None,
                 },
                 done: (task && done.is_visible()).then(|| done.is_active()),
+                parent: match parent_row.selected() {
+                    0 => None,
+                    i => parents.get(i as usize - 1).map(|(uid, _)| uid.clone()),
+                },
             };
             dialog.close();
             on_save(draft, calendar);

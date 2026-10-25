@@ -247,6 +247,22 @@ pub static SPECS: &[Spec] = &[
         )
     },
     Spec {
+        aliases: &["parent"],
+        ..spec("up", "Go from the selected subtask to its parent task")
+    },
+    Spec {
+        args: &[Arg {
+            name: "task",
+            kind: Kind::Phrase("task"),
+            optional: false,
+            rest: true,
+        }],
+        ..spec(
+            "subtask-of",
+            "Make the selected task a subtask of another (by title), or \"none\"",
+        )
+    },
+    Spec {
         args: &[Arg {
             rest: true,
             ..arg("when", DATE)
@@ -434,6 +450,23 @@ impl Values for StateValues<'_> {
                         k.guest.name.clone().unwrap_or_default(),
                     )
                 })
+                .collect(),
+            // open tasks by title, for :subtask-of
+            "task" => std::iter::once(("none".to_owned(), "a task of its own".to_owned()))
+                .chain(
+                    self.0
+                        .vdir
+                        .tasks()
+                        .into_iter()
+                        .filter(|t| !t.is_done() && !t.summary.is_empty())
+                        .map(|t| {
+                            let cal = self
+                                .0
+                                .calendar(&t.calendar)
+                                .map_or(t.calendar, |c| c.name.clone());
+                            (t.summary, cal)
+                        }),
+                )
                 .collect(),
             // the guests of the selected event
             "invited" => self
