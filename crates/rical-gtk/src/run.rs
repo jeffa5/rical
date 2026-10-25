@@ -6,7 +6,7 @@ use adw::prelude::*;
 use chrono::{TimeDelta, Utc};
 use gtk::{gdk, glib};
 use rical_core::{
-    Kind, When,
+    When,
     input::parse_at,
     rule::{End, Freq, Rule, parse_weekday},
     write::{Draft, Repeat, Scope},
@@ -172,22 +172,12 @@ impl Window {
             "decline" => self.reply("DECLINED")?,
             "done" => self.toggle_done()?,
             "task" => {
-                let calendar = match p.flag("calendar") {
-                    Some(name) => self.find_calendar(name)?,
-                    None => self
-                        .state
-                        .borrow()
-                        .default_calendar()
-                        .ok_or("there are no calendars to add to")?,
-                };
-                let due = match p.flag("due") {
-                    None | Some("none") => None,
-                    Some(text) => Some(When::Date(
-                        parse_date(text, self.today_date())
-                            .ok_or(format!("not a date: “{text}”"))?,
-                    )),
-                };
-                self.add_task(calendar, p.arg(0).unwrap(), due, None);
+                // in plain language: "Submit expenses by fri 5pm !"
+                let (draft, calendar) = self.quick_draft(p, true)?;
+                if draft.summary.is_empty() {
+                    return Err("what is the task? e.g. :task Buy milk tomorrow".into());
+                }
+                self.add_task_draft(draft, calendar);
             }
             "up" => self.go_to_parent()?,
             "subtask-of" => {
@@ -412,15 +402,32 @@ impl Window {
             .date_naive()
     }
 
-    /// `new [--calendar C] [--at WHEN] [--for DURATION] [--kind K] [title]`:
-    /// with a title the item is created straight away, otherwise the editor
+    /// `new [--calendar C] [--at WHEN] [--for DURATION] [--kind K] [text]`:
+    /// with text, it is read in plain language ("Lunch with Sam tomorrow
+    /// 1pm @ Bistro 21", see `rical_core::quick`) and created straight
+    /// away; flags given win over what the text says. Without, the editor
     /// opens with these values.
     fn run_new(self: &Rc<Self>, p: &Parsed) -> Result<(), String> {
+        let task = p.flag("kind") == Some("todo");
+        let (draft, calendar) = self.quick_draft(p, task)?;
+        match p.arg(0) {
+            Some(_) if !draft.summary.is_empty() => self.create(draft, calendar),
+            // nothing but a time: say what it is in the editor
+            _ => self.open_new(draft, calendar),
+        }
+        Ok(())
+    }
+
+    /// The draft and calendar a `new` or `task` line means: its text read
+    /// in plain language, then its flags.
+    pub(super) fn quick_draft(&self, p: &Parsed, task: bool) -> Result<(Draft, String), String> {
         let (local, focused) = {
             let s = self.state.borrow();
             (s.local, s.date)
         };
-        let calendar = match p.flag("calendar") {
+        let today = self.today_date();
+        let q = rical_core::quick::parse(p.arg(0).unwrap_or_default(), today, focused, local, task);
+        let calendar = match p.flag("calendar").or(q.calendar.as_deref()) {
             Some(name) => self.find_calendar(name)?,
             None => self
                 .state
@@ -428,33 +435,40 @@ impl Window {
                 .default_calendar()
                 .ok_or("there are no calendars to add to")?,
         };
-        let (mut start, _) = self.default_slot();
+        let (slot, _) = self.default_slot();
+        let mut draft = q.draft(task, if task { When::Date(focused) } else { slot });
         if let Some(at) = p.flag("at") {
-            start = parse_at(at, focused, self.today_date(), local)
-                .ok_or(format!("not a time: “{at}”"))?;
+            let start = parse_at(at, focused, today, local).ok_or(format!("not a time: “{at}”"))?;
+            let length = draft.start.until(&draft.end);
+            draft.start = start;
+            draft.end = start.add(if start.is_date() {
+                TimeDelta::days(1)
+            } else {
+                length
+            });
         }
-        let length = match p.flag("for") {
-            Some(text) => parse_shift(text)
+        if let Some(text) = p.flag("for") {
+            let length = parse_shift(text)
                 .filter(|d| *d >= TimeDelta::zero())
-                .ok_or(format!("not a duration: “{text}”"))?,
-            None if start.is_date() => TimeDelta::days(1),
-            None => TimeDelta::hours(1),
-        };
-        let mut draft = Draft::new(start, start.add(length));
+                .ok_or(format!("not a duration: “{text}”"))?;
+            draft.end = draft.start.add(length);
+        }
         if let Some(location) = p.flag("location") {
             draft.location = location.to_owned();
         }
-        if p.flag("kind") == Some("todo") {
-            draft.kind = Kind::Todo;
-        }
-        match p.arg(0) {
-            Some(title) => {
-                draft.summary = title.to_owned();
-                self.create(draft, calendar);
+        if let Some(text) = p.flag("due") {
+            if text == "none" {
+                draft.has_due = false;
+            } else {
+                let due = parse_date(text, today).ok_or(format!("not a date: “{text}”"))?;
+                draft.has_due = true;
+                draft.end = When::Date(due).add(TimeDelta::days(1));
+                if !draft.has_start {
+                    draft.start = When::Date(due);
+                }
             }
-            None => self.open_new(draft, calendar),
         }
-        Ok(())
+        Ok((draft, calendar))
     }
 
     /// A calendar by number (1-based), folder name or display name.
@@ -698,6 +712,131 @@ fn parse_repeat(p: &Parsed, today: chrono::NaiveDate) -> Result<Repeat, String> 
         (None, None) => {}
     }
     Ok(Repeat::Rule(rule))
+}
+
+impl Window {
+    /// What a `new` or `task` line will create, shown as it is typed so
+    /// plain language is never a guess.
+    pub fn quick_preview(&self, line: &str) -> Option<String> {
+        let ctx = cmds::context(self.state.borrow().view);
+        let p = REGISTRY.parse(line, ctx).ok()?;
+        let task = match p.spec {
+            "new" => p.flag("kind") == Some("todo"),
+            "task" => true,
+            _ => return None,
+        };
+        p.arg(0).filter(|t| !t.trim().is_empty())?;
+        let (draft, calendar) = match self.quick_draft(&p, task) {
+            Ok(found) => found,
+            Err(e) => return Some(format!("⚠ {e}")),
+        };
+        let state = self.state.borrow();
+        let name = state
+            .calendar(&calendar)
+            .map_or(calendar.clone(), |c| c.name.clone());
+        Some(describe(&draft, &name, state.local))
+    }
+}
+
+/// "Event “Lunch” · Thu 22 Oct 13:00–14:00 · @ Bistro 21 · in Work".
+fn describe(d: &Draft, calendar: &str, local: chrono_tz::Tz) -> String {
+    use rical_core::Kind;
+    let day = TimeDelta::days(1);
+    // a time as written: in its own zone, with the time here if that differs
+    let clock = |w: &When| match w {
+        When::Zoned(z) if z.timezone() != local => {
+            let city = z
+                .timezone()
+                .name()
+                .rsplit('/')
+                .next()
+                .unwrap_or("")
+                .replace('_', " ");
+            format!(
+                "{} {city} ({} here)",
+                z.format("%H:%M"),
+                w.to_tz(local).format("%a %H:%M")
+            )
+        }
+        w => format::time(w, local),
+    };
+    let date = |w: &When| format::day(w.date(local));
+    let mut parts = Vec::new();
+    let title = if d.summary.is_empty() {
+        "(untitled)"
+    } else {
+        &d.summary
+    };
+    if d.kind == Kind::Todo {
+        parts.push(format!("Task “{title}”"));
+        if d.has_start {
+            parts.push(format!("starts {}", date(&d.start)));
+        }
+        if d.has_due {
+            parts.push(if d.end.is_date() {
+                format!("due {}", date(&d.end.add(-day)))
+            } else {
+                format!("due {} {}", date(&d.end), clock(&d.end))
+            });
+        } else {
+            parts.push("no due date".into());
+        }
+        match d.priority {
+            Some(1..=4) => parts.push("high priority".into()),
+            Some(5) => parts.push("medium priority".into()),
+            Some(_) => parts.push("low priority".into()),
+            None => {}
+        }
+    } else {
+        parts.push(format!("Event “{title}”"));
+        if d.start.is_date() {
+            let last = d.end.add(-day);
+            parts.push(if last.date(local) > d.start.date(local) {
+                format!("{} – {}, all day", date(&d.start), date(&last))
+            } else {
+                format!("{}, all day", date(&d.start))
+            });
+        } else {
+            // in the zone it is written in, then here if that is another:
+            // "Thu 22 Oct 10:00–11:00 London time · 17:00–18:00 here"
+            let span = |tz: chrono_tz::Tz| {
+                let (s, e) = (d.start.to_tz(tz), d.end.to_tz(tz));
+                if s.date_naive() == e.date_naive() {
+                    format!(
+                        "{} {}–{}",
+                        format::day(s.date_naive()),
+                        s.format("%H:%M"),
+                        e.format("%H:%M")
+                    )
+                } else {
+                    format!(
+                        "{} {} – {} {}",
+                        format::day(s.date_naive()),
+                        s.format("%H:%M"),
+                        format::day(e.date_naive()),
+                        e.format("%H:%M")
+                    )
+                }
+            };
+            match d.start {
+                When::Zoned(z) if z.timezone() != local => {
+                    let tz = z.timezone();
+                    let city = tz.name().rsplit('/').next().unwrap_or("").replace('_', " ");
+                    parts.push(format!("{} {city} time", span(tz)));
+                    parts.push(format!("{} here", span(local)));
+                }
+                _ => parts.push(span(local)),
+            }
+        }
+    }
+    if !d.location.is_empty() {
+        parts.push(format!("@ {}", d.location));
+    }
+    if d.repeat != Repeat::None {
+        parts.push("repeats".into());
+    }
+    parts.push(format!("in {calendar}"));
+    parts.join(" · ")
 }
 
 #[cfg(test)]

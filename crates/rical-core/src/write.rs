@@ -222,6 +222,9 @@ impl Vdir {
         c.insert(Line::property("CREATED", &[], &now));
         c.insert(Line::property("LAST-MODIFIED", &[], &now));
         c.insert(Line::new("SEQUENCE:0"));
+        if draft.kind == Kind::Todo {
+            c.insert(Line::new("STATUS:NEEDS-ACTION"));
+        }
         set_fields(&mut c, draft, true);
         set_times(
             &mut c,

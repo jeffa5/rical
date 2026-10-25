@@ -1223,3 +1223,73 @@ fn conference_links_are_read_and_written_per_rfc_7986() {
     let all = query(&vdir, range("2025-03-01 00:00", "2025-03-10 00:00"));
     assert!(find(&all, "google").conferences.is_empty());
 }
+
+#[test]
+fn quick_add_writes_what_it_says() {
+    use chrono::NaiveDate;
+    use rical_core::quick;
+    // an existing item with London's VTIMEZONE, for new ones to copy
+    let meeting = format!("{LONDON_TZ}{MEETING}");
+    let (dir, mut vdir) = setup(&[("home/meeting.ics", meeting.as_str())]);
+    let today = NaiveDate::from_ymd_opt(2026, 10, 21).unwrap();
+    let slot = When::Date(today);
+    let make = |vdir: &mut Vdir, text: &str, task: bool| {
+        let q = quick::parse(text, today, today, SINGAPORE, task);
+        let change = vdir.create("work", &q.draft(task, slot)).unwrap();
+        fs::read_to_string(&change.path)
+            .unwrap()
+            .replace("\r\n ", "")
+    };
+
+    // a meeting in London time, from Singapore: written in London's zone
+    let text = make(
+        &mut vdir,
+        "Meet Priya 3 jun 2027 10am London time @ King's Cross for 1h30",
+        false,
+    );
+    assert!(text.contains("SUMMARY:Meet Priya\r\n"), "{text}");
+    assert!(
+        text.contains("DTSTART;TZID=Europe/London:20270603T100000\r\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("DTEND;TZID=Europe/London:20270603T113000\r\n"),
+        "{text}"
+    );
+    assert!(text.contains("LOCATION:King's Cross\r\n"), "{text}");
+    // its zone definition, copied from the item that has one
+    assert!(
+        text.contains("BEGIN:VTIMEZONE\r\nTZID:Europe/London\r\n"),
+        "{text}"
+    );
+
+    // a repeating event, all in the local zone
+    let text = make(&mut vdir, "Standup every weekday 9:30 for 15m", false);
+    assert!(
+        text.contains("RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR\r\n"),
+        "{text}"
+    );
+
+    // all day, over three days
+    let text = make(&mut vdir, "Offsite 3-5 dec", false);
+    assert!(text.contains("DTSTART;VALUE=DATE:20261203\r\n"), "{text}");
+    assert!(text.contains("DTEND;VALUE=DATE:20261206\r\n"), "{text}");
+
+    // a task: due date and priority, no start
+    let text = make(&mut vdir, "Submit expenses by fri !", true);
+    assert!(text.contains("BEGIN:VTODO\r\n"), "{text}");
+    assert!(text.contains("STATUS:NEEDS-ACTION\r\n"), "{text}");
+    assert!(text.contains("DUE;VALUE=DATE:20261023\r\n"), "{text}");
+    assert!(text.contains("PRIORITY:1\r\n"), "{text}");
+    assert!(!text.contains("DTSTART"), "{text}");
+
+    // a task with neither date
+    let text = make(&mut vdir, "Someday learn piano", true);
+    assert!(!text.contains("DUE") && !text.contains("DTSTART"), "{text}");
+
+    // and they all read back as written
+    let vdir = Vdir::load(dir.path()).unwrap();
+    let all = query(&vdir, range("2026-10-01 00:00", "2027-07-01 00:00"));
+    assert!(all.iter().any(|o| o.summary == "Meet Priya"));
+    assert!(all.iter().any(|o| o.summary == "Offsite" && o.all_day));
+}

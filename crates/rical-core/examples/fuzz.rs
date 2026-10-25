@@ -22,7 +22,7 @@ use std::{
 
 use chrono::{TimeZone as _, Utc};
 use chrono_tz::Tz;
-use rical_core::{AnyComponent, compact, doc::Document, occurrence};
+use rical_core::{AnyComponent, When, compact, doc::Document, occurrence, quick};
 
 /// xorshift64*: small and good enough to pick mutations.
 struct Rng(u64);
@@ -140,6 +140,37 @@ const TOKENS: &[&str] = &[
     "-",
     "+",
     "999999999999999999999",
+    // quick add
+    " tomorrow",
+    " today",
+    " fri",
+    " next mon",
+    " 9am",
+    " 9:30pm",
+    " 2-4pm",
+    " 3-5 dec",
+    " nov 14th",
+    " 14/11",
+    " at ",
+    " @ ",
+    " #work",
+    " every ",
+    " weekday",
+    " tue and thu",
+    " for 45m",
+    " for 1h30",
+    " London time",
+    " SGT",
+    " due ",
+    " by ",
+    " !",
+    " in 3 days",
+    " the 1st",
+    " until ",
+    " from 9 to 11",
+    " noon",
+    "\"",
+    " 31/02",
 ];
 
 fn mutate(input: &[u8], seeds: &[Vec<u8>], rng: &mut Rng) -> Vec<u8> {
@@ -195,6 +226,15 @@ fn mutate(input: &[u8], seeds: &[Vec<u8>], rng: &mut Rng) -> Vec<u8> {
 
 /// Every check, on one input. Panics on a failure.
 fn check(text: &str) {
+    // quick add, on each line as if typed
+    let today = chrono::NaiveDate::from_ymd_opt(2026, 10, 21).unwrap();
+    for line in text.lines().take(64) {
+        for task in [false, true] {
+            let q = quick::parse(line, today, today, Tz::Asia__Singapore, task);
+            let d = q.draft(task, When::Date(today));
+            let _ = (d.start.to_utc(Tz::UTC), d.end.to_utc(Tz::UTC));
+        }
+    }
     // the compact parser, and everything built from what it reads
     if let Ok((items, _tzids)) = compact::parse(text) {
         let path: Arc<Path> = Arc::from(Path::new("fuzz.ics"));

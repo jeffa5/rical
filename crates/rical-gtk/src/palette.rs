@@ -27,6 +27,8 @@ struct Palette {
     entry: gtk::Entry,
     list: gtk::ListBox,
     error: gtk::Label,
+    /// What a `new` or `task` line will create.
+    preview: gtk::Label,
     completion: RefCell<Completion>,
     /// Line before cycling through completions, and the current index.
     cycle: RefCell<Option<(String, usize)>>,
@@ -71,6 +73,13 @@ fn show(window: &Rc<Window>, text: &str, problem: Option<&str>) {
         .width_request(600)
         .build();
     content.append(&entry);
+    let preview = gtk::Label::builder()
+        .css_classes(["dim-label"])
+        .xalign(0.0)
+        .wrap(true)
+        .visible(false)
+        .build();
+    content.append(&preview);
     content.append(&error);
     content.append(&scroller);
 
@@ -97,6 +106,7 @@ fn show(window: &Rc<Window>, text: &str, problem: Option<&str>) {
         entry,
         list,
         error,
+        preview,
         completion: Default::default(),
         cycle: Default::default(),
         programmatic: Cell::new(false),
@@ -151,6 +161,13 @@ fn show(window: &Rc<Window>, text: &str, problem: Option<&str>) {
 impl Palette {
     fn update(&self, w: &Rc<Window>) {
         let text = self.entry.text().to_string();
+        match w.quick_preview(&text) {
+            Some(p) => {
+                self.preview.set_label(&format!("→ {p}"));
+                self.preview.set_visible(true);
+            }
+            None => self.preview.set_visible(false),
+        }
         let completion = {
             let state = w.state.borrow();
             REGISTRY.complete(&text, cmds::context(state.view), &StateValues(&state))

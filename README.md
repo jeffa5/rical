@@ -52,6 +52,17 @@ waiting for your reply; `y`, `Y` and `N` accept, answer maybe, or decline
 (your server, e.g. Nextcloud, tells the organiser). Change the bindings in
 `~/.config/rical/binds.conf`.
 
+Add things in plain language; the command line shows what it understood
+before you press Enter, and `rical new` reads the same:
+
+```text
+:new Lunch with Sam at Bistro 21 tomorrow 1pm for 90m
+:new Meet Priya 3 jun 10am London time @ King's Cross
+:new Standup every weekday 9:30 for 15m #work
+:new Offsite 3-5 dec
+:task Submit expenses by fri 5pm !
+```
+
 ## License
 
 MIT

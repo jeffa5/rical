@@ -592,6 +592,25 @@ impl Window {
         }
     }
 
+    /// Create a task from a draft (quick add), and select it.
+    pub(super) fn add_task_draft(self: &Rc<Self>, draft: Draft, calendar: String) {
+        self.state.borrow_mut().last_calendar = Some(calendar.clone());
+        let mut created = None;
+        if self.perform("create the task", |v| {
+            let change = v.create(&calendar, &draft)?;
+            created = Some(change.path.clone());
+            Ok(vec![change])
+        }) && let Some(path) = created
+        {
+            let uid = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            self.state.borrow_mut().selected_task = Some((path, uid));
+            self.refresh();
+        }
+    }
+
     pub(super) fn set_selected_due(self: &Rc<Self>, due: Option<When>) -> Result<(), String> {
         let task = self.selected_task().ok_or("select a task first")?;
         self.perform("set the due date", |v| {

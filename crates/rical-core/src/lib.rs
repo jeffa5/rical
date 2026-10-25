@@ -11,6 +11,7 @@ pub mod input;
 pub mod occurrence;
 pub mod people;
 pub mod query;
+pub mod quick;
 pub mod rule;
 pub mod short_id;
 pub mod stats;

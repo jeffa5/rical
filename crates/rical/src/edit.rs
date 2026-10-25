@@ -11,7 +11,7 @@ use rical_core::{
     Kind, Occurrence, Vdir, When,
     input::{parse_at, parse_date, parse_shift},
     when::{local_timezone, resolve_local},
-    write::{Draft, Scope},
+    write::Scope,
 };
 
 pub struct NewArgs {
@@ -52,40 +52,46 @@ pub fn new(args: &NewArgs) -> anyhow::Result<()> {
     let mut vdir = Vdir::load(&args.vdir)?;
     let local = local_timezone();
     let today = Utc::now().with_timezone(&local).date_naive();
-    let calendar = find_calendar(&vdir, args.calendar.as_deref())?;
+    // the title is read in plain language ("Lunch tomorrow 1pm @ Bistro
+    // 21", see rical_core::quick); flags win over what it says
+    let q = rical_core::quick::parse(&args.title, today, today, local, args.todo);
+    let calendar = find_calendar(&vdir, args.calendar.as_deref().or(q.calendar.as_deref()))?;
+    // the next full hour
+    let now = Utc::now().with_timezone(&local);
+    let hour = NaiveTime::from_hms_opt((now.hour() + 1).min(23), 0, 0).unwrap();
+    let slot = When::Zoned(resolve_local(local, today.and_time(hour)));
+    let mut draft = q.draft(args.todo, if args.todo { When::Date(today) } else { slot });
+    anyhow::ensure!(!draft.summary.is_empty(), "what is it called?");
 
-    let change = if args.todo {
-        let due = match args.due.as_deref() {
-            None => None,
-            Some(text) => Some(When::Date(
-                parse_date(text, today).with_context(|| format!("not a date: {text:?}"))?,
-            )),
-        };
-        vdir.create_task(&calendar, &args.title, due, None)?
-    } else {
-        let start = match args.at.as_deref() {
-            Some(at) => {
-                parse_at(at, today, today, local).with_context(|| format!("not a time: {at:?}"))?
-            }
-            None => {
-                // the next full hour
-                let now = Utc::now().with_timezone(&local);
-                let hour = NaiveTime::from_hms_opt((now.hour() + 1).min(23), 0, 0).unwrap();
-                When::Zoned(resolve_local(local, today.and_time(hour)))
-            }
-        };
-        let length = match args.length.as_deref() {
-            Some(text) => parse_shift(text)
-                .filter(|d| *d >= TimeDelta::zero())
-                .with_context(|| format!("not a duration: {text:?}"))?,
-            None if start.is_date() => TimeDelta::days(1),
-            None => TimeDelta::hours(1),
-        };
-        let mut draft = Draft::new(start, start.add(length));
-        draft.summary = args.title.clone();
-        draft.location = args.location.clone().unwrap_or_default();
-        vdir.create(&calendar, &draft)?
-    };
+    if let Some(at) = args.at.as_deref() {
+        let start =
+            parse_at(at, today, today, local).with_context(|| format!("not a time: {at:?}"))?;
+        let length = draft.start.until(&draft.end);
+        draft.start = start;
+        draft.end = start.add(if start.is_date() {
+            TimeDelta::days(1)
+        } else {
+            length
+        });
+    }
+    if let Some(text) = args.length.as_deref() {
+        let length = parse_shift(text)
+            .filter(|d| *d >= TimeDelta::zero())
+            .with_context(|| format!("not a duration: {text:?}"))?;
+        draft.end = draft.start.add(length);
+    }
+    if let Some(location) = &args.location {
+        draft.location = location.clone();
+    }
+    if let Some(text) = args.due.as_deref() {
+        let due = parse_date(text, today).with_context(|| format!("not a date: {text:?}"))?;
+        draft.has_due = true;
+        draft.end = When::Date(due).add(TimeDelta::days(1));
+        if !draft.has_start {
+            draft.start = When::Date(due);
+        }
+    }
+    let change = vdir.create(&calendar, &draft)?;
     println!("{}", change.path.display());
     Ok(())
 }

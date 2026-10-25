@@ -175,7 +175,8 @@ fn lex_spans(line: &str, allow_open: bool) -> Result<(Vec<(String, usize)>, bool
         match (quote, c) {
             (Some(q), c) if c == q => quote = None,
             (Some(_), c) => cur.push(c),
-            (None, '\'' | '"') => {
+            // a quote opens one only at the start of a word: "King's" is a word
+            (None, '\'' | '"') if start.is_none() => {
                 quote = Some(c);
                 start.get_or_insert(i);
             }
@@ -284,7 +285,16 @@ impl Registry {
         let mut words = positional.into_iter();
         for arg in spec.args {
             let value = if arg.rest {
-                let rest = words.by_ref().collect::<Vec<_>>();
+                let mut rest = words.by_ref().collect::<Vec<_>>();
+                // a title is read in plain language, where "quoted words"
+                // are kept as they are: give them their quotes back
+                if matches!(arg.kind, Kind::Text("title")) {
+                    for w in &mut rest {
+                        if w.contains(char::is_whitespace) {
+                            *w = format!("\"{w}\"");
+                        }
+                    }
+                }
                 (!rest.is_empty()).then(|| rest.join(" "))
             } else {
                 words.next()
@@ -702,6 +712,13 @@ mod tests {
             Err(Error::UnknownFlag(_))
         ));
         assert_eq!(r.parse("new --at", ALL), Err(Error::Missing("new", "at")));
+
+        // plain language: apostrophes inside words are not quotes, and a
+        // quoted part of a title keeps its quotes for quick add to read
+        let p = r.parse("new Mum's tea at King's Cross", ALL).unwrap();
+        assert_eq!(p.arg(0), Some("Mum's tea at King's Cross"));
+        let p = r.parse(r#"new "Meeting at 3" tomorrow"#, ALL).unwrap();
+        assert_eq!(p.arg(0), Some(r#""Meeting at 3" tomorrow"#));
     }
 
     #[test]
