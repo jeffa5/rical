@@ -47,6 +47,8 @@ pub struct State {
     pub redo: Vec<Vec<Change>>,
     /// Whether to show reminders.
     pub notifications: bool,
+    /// What "week" means: the full week, the work week or a number of days.
+    pub week_view: ViewKind,
     /// Reminder for timed events that have no alarms of their own.
     pub default_reminder: Option<chrono::TimeDelta>,
     /// Bumped whenever the data or the hidden set changes.
@@ -111,6 +113,7 @@ impl State {
             undo: Vec::new(),
             redo: Vec::new(),
             notifications: true,
+            week_view: ViewKind::Week,
             default_reminder: None,
             generation: 0,
             cache: RefCell::new(None),
@@ -322,5 +325,15 @@ impl State {
     /// calendars); views rebuild only then.
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+}
+
+impl State {
+    /// A view by name, with "week" meaning the configured week view.
+    pub fn view_named(&self, name: &str) -> Option<ViewKind> {
+        match name {
+            "week" => Some(self.week_view),
+            _ => ViewKind::from_name(name),
+        }
     }
 }

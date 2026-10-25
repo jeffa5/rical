@@ -40,7 +40,35 @@ impl Window {
             "today" => self.today(),
             "next" => self.step(true),
             "prev" => self.step(false),
-            "view" => self.set_view(ViewKind::from_name(p.arg(0).unwrap()).unwrap()),
+            "view" => {
+                let name = p.arg(0).unwrap();
+                let view = self.state.borrow().view_named(name).ok_or(format!(
+                    "no view “{name}” (try day, week, workweek, 3days, month)"
+                ))?;
+                self.set_view(view);
+            }
+            "week" => {
+                let name = p.arg(0).unwrap();
+                let view = ViewKind::from_name(name)
+                    .filter(|v| {
+                        matches!(v, ViewKind::Week | ViewKind::WorkWeek | ViewKind::Days(_))
+                    })
+                    .ok_or(format!(
+                        "“{name}” is not a week view (fullweek, workweek, Ndays)"
+                    ))?;
+                let in_week = {
+                    let mut s = self.state.borrow_mut();
+                    s.week_view = view;
+                    matches!(
+                        s.view,
+                        ViewKind::Week | ViewKind::WorkWeek | ViewKind::Days(_)
+                    )
+                };
+                if in_week {
+                    self.set_view(view);
+                }
+                self.toast(&format!("The week view shows {}", view.name()));
+            }
             "goto" => {
                 let today = self.today_date();
                 let text = p.arg(0).unwrap();

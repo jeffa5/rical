@@ -1,7 +1,7 @@
 //! Human-readable text for dates, times and occurrences.
 
 use adw::prelude::*;
-use chrono::{Datelike, Days, NaiveDate};
+use chrono::{Datelike, NaiveDate};
 use chrono_tz::Tz;
 use rical_core::{Occurrence, Rgb, When};
 
@@ -70,26 +70,30 @@ pub fn todo_mark(o: &Occurrence) -> &'static str {
 
 /// Header title and subtitle for the current view.
 pub fn view_title(view: ViewKind, date: NaiveDate) -> (String, String) {
+    let this_year = chrono::Utc::now().year();
     match view {
         ViewKind::Day => (
             date.format("%A %-d %B").to_string(),
             date.format("%Y · week %V").to_string(),
         ),
-        ViewKind::Week => {
-            let start = layout::week_start(date);
-            let end = start + Days::new(6);
-            let title = if start.month() == end.month() {
-                format!("{} – {}", start.format("%-d"), end.format("%-d %B %Y"))
-            } else if start.year() == end.year() {
-                format!("{} – {}", start.format("%-d %b"), end.format("%-d %b %Y"))
+        ViewKind::Week | ViewKind::WorkWeek | ViewKind::Days(_) => {
+            let days = layout::visible_days(view, date);
+            let (start, end) = (days[0], *days.last().unwrap());
+            // short enough for narrow windows: "19 – 25 Oct"
+            let mut title = if start.month() == end.month() {
+                format!("{} – {}", start.format("%-d"), end.format("%-d %b"))
             } else {
-                format!(
-                    "{} – {}",
-                    start.format("%-d %b %Y"),
-                    end.format("%-d %b %Y")
-                )
+                format!("{} – {}", start.format("%-d %b"), end.format("%-d %b"))
             };
-            (title, format!("Week {}", date.format("%V")))
+            if end.year() != this_year || start.year() != end.year() {
+                title = format!("{title} {}", end.year());
+            }
+            let sub = match view {
+                ViewKind::Days(n) => format!("{n} days · week {}", start.format("%V")),
+                ViewKind::WorkWeek => format!("Work week {}, {}", start.format("%V"), start.year()),
+                _ => format!("Week {}, {}", start.format("%V"), start.year()),
+            };
+            (title, sub)
         }
         ViewKind::Month => (date.format("%B %Y").to_string(), String::new()),
         ViewKind::Agenda => (

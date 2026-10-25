@@ -10,33 +10,68 @@ use rical_core::{Occurrence, when::resolve_local};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewKind {
     Day,
+    /// Monday to Sunday.
     Week,
+    /// Monday to Friday.
+    WorkWeek,
+    /// This many days from the focused day.
+    Days(u8),
     Month,
     Agenda,
     Tasks,
 }
 
 impl ViewKind {
-    pub const ALL: [ViewKind; 5] = [
-        Self::Day,
-        Self::Week,
-        Self::Month,
-        Self::Agenda,
-        Self::Tasks,
-    ];
+    /// The name `:view` takes; "week" means whichever week view is
+    /// configured, so the full week is "fullweek".
+    pub fn name(self) -> String {
+        match self {
+            Self::Day => "day".into(),
+            Self::Week => "fullweek".into(),
+            Self::WorkWeek => "workweek".into(),
+            Self::Days(n) => format!("{n}days"),
+            Self::Month => "month".into(),
+            Self::Agenda => "agenda".into(),
+            Self::Tasks => "tasks".into(),
+        }
+    }
 
-    pub fn name(self) -> &'static str {
+    /// Parse a view name; "week" is left to the caller. Days run from 2 to 14.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "day" => Self::Day,
+            "fullweek" => Self::Week,
+            "workweek" => Self::WorkWeek,
+            "month" => Self::Month,
+            "agenda" => Self::Agenda,
+            "tasks" => Self::Tasks,
+            other => {
+                let n: u8 = other.strip_suffix("days")?.parse().ok()?;
+                if !(2..=14).contains(&n) {
+                    return None;
+                }
+                Self::Days(n)
+            }
+        })
+    }
+
+    /// Which view switcher button stands for this view.
+    pub fn toggle_name(self) -> &'static str {
         match self {
             Self::Day => "day",
-            Self::Week => "week",
+            Self::Week | Self::WorkWeek | Self::Days(_) => "week",
             Self::Month => "month",
             Self::Agenda => "agenda",
             Self::Tasks => "tasks",
         }
     }
 
-    pub fn from_name(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|v| v.name() == name)
+    /// Shown in the time grid.
+    pub fn is_grid(self) -> bool {
+        matches!(
+            self,
+            Self::Day | Self::Week | Self::WorkWeek | Self::Days(_)
+        )
     }
 }
 
@@ -52,6 +87,8 @@ pub fn visible_days(view: ViewKind, date: NaiveDate) -> Vec<NaiveDate> {
     let (first, n) = match view {
         ViewKind::Day => (date, 1),
         ViewKind::Week => (week_start(date), 7),
+        ViewKind::WorkWeek => (week_start(date), 5),
+        ViewKind::Days(n) => (date, n as u64),
         ViewKind::Month => (week_start(date.with_day(1).unwrap()), 42),
         ViewKind::Agenda => (date, AGENDA_DAYS),
         // tasks are not by date; the focused day still matters for "today"
@@ -71,7 +108,8 @@ pub fn step(view: ViewKind, date: NaiveDate, forward: bool) -> NaiveDate {
     };
     match view {
         ViewKind::Day => shift(date, 1),
-        ViewKind::Week => shift(date, 7),
+        ViewKind::Week | ViewKind::WorkWeek => shift(date, 7),
+        ViewKind::Days(n) => shift(date, n as u64),
         ViewKind::Agenda => shift(date, AGENDA_DAYS),
         ViewKind::Tasks => date,
         ViewKind::Month => {
@@ -333,6 +371,31 @@ mod tests {
 
     fn date(s: &str) -> NaiveDate {
         NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+    }
+
+    #[test]
+    fn work_week_and_days() {
+        let d = date("2025-10-23"); // Thursday
+        let ww = visible_days(ViewKind::WorkWeek, d);
+        assert_eq!((ww[0], ww.len()), (date("2025-10-20"), 5));
+        let three = visible_days(ViewKind::Days(3), d);
+        assert_eq!(three, [d, date("2025-10-24"), date("2025-10-25")]);
+        assert_eq!(step(ViewKind::Days(3), d, true), date("2025-10-26"));
+        assert_eq!(step(ViewKind::WorkWeek, d, false), date("2025-10-16"));
+
+        for v in [
+            ViewKind::Day,
+            ViewKind::Week,
+            ViewKind::WorkWeek,
+            ViewKind::Days(4),
+            ViewKind::Tasks,
+        ] {
+            assert_eq!(ViewKind::from_name(&v.name()), Some(v));
+        }
+        assert_eq!(ViewKind::from_name("1days"), None);
+        assert_eq!(ViewKind::from_name("15days"), None);
+        assert_eq!(ViewKind::from_name("week"), None, "callers resolve week");
+        assert!(ViewKind::Days(3).is_grid() && !ViewKind::Month.is_grid());
     }
 
     #[test]

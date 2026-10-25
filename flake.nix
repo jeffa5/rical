@@ -84,6 +84,12 @@
           example = "personal";
           description = "Calendar (folder name) new events go in by default.";
         };
+        week = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          example = "workweek";
+          description = "What the week view shows: fullweek, workweek or Ndays (e.g. 3days).";
+        };
         remind = lib.mkOption {
           type = lib.types.nullOr lib.types.str;
           default = null;
@@ -111,7 +117,8 @@
               wrapProgram $out/bin/rical-gtk \
                 ${lib.optionalString (cfg.vdir != null) "--set-default RICAL_VDIR ${lib.escapeShellArg (builtins.replaceStrings ["~/"] ["${config.home.homeDirectory}/"] cfg.vdir)}"} \
                 ${lib.optionalString (cfg.calendar != null) "--set-default RICAL_CALENDAR ${lib.escapeShellArg cfg.calendar}"} \
-                ${lib.optionalString (cfg.remind != null) "--set-default RICAL_REMIND ${lib.escapeShellArg cfg.remind}"}
+                ${lib.optionalString (cfg.remind != null) "--set-default RICAL_REMIND ${lib.escapeShellArg cfg.remind}"} \
+                ${lib.optionalString (cfg.week != null) "--set-default RICAL_WEEK ${lib.escapeShellArg cfg.week}"}
             '';
           })
         ];

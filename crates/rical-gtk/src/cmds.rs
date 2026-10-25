@@ -17,7 +17,7 @@ pub const ALL: Context = GRID.or(MONTH).or(AGENDA).or(TASKS);
 
 pub fn context(view: ViewKind) -> Context {
     match view {
-        ViewKind::Day | ViewKind::Week => GRID,
+        ViewKind::Day | ViewKind::Week | ViewKind::WorkWeek | ViewKind::Days(_) => GRID,
         ViewKind::Month => MONTH,
         ViewKind::Agenda => AGENDA,
         ViewKind::Tasks => TASKS,
@@ -27,7 +27,7 @@ pub fn context(view: ViewKind) -> Context {
 /// The binds.conf section for a view.
 pub fn section(view: ViewKind) -> &'static str {
     match view {
-        ViewKind::Day | ViewKind::Week => "grid",
+        ViewKind::Day | ViewKind::Week | ViewKind::WorkWeek | ViewKind::Days(_) => "grid",
         ViewKind::Month => "month",
         ViewKind::Agenda => "agenda",
         ViewKind::Tasks => "tasks",
@@ -63,7 +63,7 @@ const fn spec(name: &'static str, help: &'static str) -> Spec {
     }
 }
 
-const VIEWS: Kind = Kind::Choice(&["day", "week", "month", "agenda", "tasks"]);
+const VIEWS: Kind = Kind::Text("view");
 const DATE: Kind = Kind::Text("date");
 const SHIFT: Kind = Kind::Text("shift");
 const SCOPE: Kind = Kind::Choice(&["this", "all"]);
@@ -80,7 +80,17 @@ pub static SPECS: &[Spec] = &[
     },
     Spec {
         args: &[arg("view", VIEWS)],
-        ..spec("view", "Switch to the day, week, month or agenda view")
+        ..spec(
+            "view",
+            "Switch view: day, week, workweek, fullweek, Ndays (2-14), month, agenda, tasks",
+        )
+    },
+    Spec {
+        args: &[arg("style", Kind::Text("week"))],
+        ..spec(
+            "week",
+            "Choose what the week view shows: fullweek, workweek or Ndays",
+        )
     },
     Spec {
         aliases: &["go"],
@@ -313,6 +323,10 @@ impl Values for StateValues<'_> {
             "shift" => &["+15m", "-15m", "+1h", "-1h", "+1d", "-1d", "+1w", "-1w"],
             "at" => &["09:00", "today", "tomorrow", "tomorrow 09:00"],
             "for" => &["15m", "30m", "1h", "2h", "1d"],
+            "view" => &[
+                "day", "week", "workweek", "fullweek", "3days", "4days", "month", "agenda", "tasks",
+            ],
+            "week" => &["fullweek", "workweek", "3days", "4days", "5days"],
             "remind" => &["none", "5m", "10m", "15m", "30m", "1h"],
             _ => &[],
         };

@@ -37,9 +37,15 @@ struct Args {
     #[clap(long)]
     date: Option<NaiveDate>,
 
-    /// View to open: day, week, month or agenda.
+    /// View to open: day, week, workweek, fullweek, Ndays (e.g. 3days),
+    /// month, agenda or tasks.
     #[clap(long, default_value = "week")]
     view: String,
+
+    /// What the week view (w, the Week button) shows: fullweek, workweek or
+    /// Ndays, e.g. 3days.
+    #[clap(long, env = "RICAL_WEEK", default_value = "fullweek")]
+    week: String,
 
     /// Calendar (folder name) for new events; default is the one with the
     /// most items.
@@ -78,13 +84,31 @@ fn main() -> glib::ExitCode {
     let date = args
         .date
         .unwrap_or_else(|| Utc::now().with_timezone(&local).date_naive());
-    let Some(view) = layout::ViewKind::from_name(&args.view) else {
+    let Some(week_view) = layout::ViewKind::from_name(&args.week).filter(|v| {
+        matches!(
+            v,
+            layout::ViewKind::Week | layout::ViewKind::WorkWeek | layout::ViewKind::Days(_)
+        )
+    }) else {
+        eprintln!(
+            "rical-gtk: --week: {:?} is not fullweek, workweek or Ndays",
+            args.week
+        );
+        return glib::ExitCode::FAILURE;
+    };
+    let view = if args.view == "week" {
+        Some(week_view)
+    } else {
+        layout::ViewKind::from_name(&args.view)
+    };
+    let Some(view) = view else {
         eprintln!("rical-gtk: unknown view {:?}", args.view);
         return glib::ExitCode::FAILURE;
     };
 
     let mut state = state::State::new(vdir, local, date);
     state.view = view;
+    state.week_view = week_view;
     state.last_calendar = args.calendar;
     state.notifications = !args.no_notifications;
     if let Some(text) = &args.remind {

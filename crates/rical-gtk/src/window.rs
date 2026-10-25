@@ -42,7 +42,8 @@ pub struct Window {
     title: adw::WindowTitle,
     split: adw::OverlaySplitView,
     views: gtk::Stack,
-    toggle: adw::ToggleGroup,
+    /// View switchers: in the header, and in the bottom bar on narrow windows.
+    toggles: [adw::ToggleGroup; 2],
     mini: gtk::Calendar,
     calendar_list: gtk::ListBox,
     grid: Rc<TimeGrid>,
@@ -159,22 +160,11 @@ impl Window {
 
         let title = adw::WindowTitle::new("", "");
 
-        let toggle = adw::ToggleGroup::builder().css_classes(["round"]).build();
-        for (view, label, key) in [
-            (ViewKind::Day, "Day", "d"),
-            (ViewKind::Week, "Week", "w"),
-            (ViewKind::Month, "Month", "m"),
-            (ViewKind::Agenda, "Agenda", "a"),
-            (ViewKind::Tasks, "Tasks", "T"),
-        ] {
-            toggle.add(
-                adw::Toggle::builder()
-                    .name(view.name())
-                    .label(label)
-                    .tooltip(format!("{label} view ({key})"))
-                    .build(),
-            );
-        }
+        // the view switcher: in the header, or on narrow windows a bottom bar
+        let toggle = view_toggles();
+        let toggle_bottom = view_toggles();
+        let bottom_bar = gtk::ActionBar::builder().revealed(false).build();
+        bottom_bar.set_center_widget(Some(&toggle_bottom));
 
         let sidebar_button = gtk::ToggleButton::builder()
             .icon_name("sidebar-show-symbolic")
@@ -187,6 +177,14 @@ impl Window {
             .tooltip_text("Go to today (t)")
             .action_name("win.run")
             .action_target(&"today".to_variant())
+            .build();
+        // an icon in its place on narrow windows
+        let today_icon = gtk::Button::builder()
+            .icon_name("x-office-calendar-symbolic")
+            .tooltip_text("Go to today (t)")
+            .action_name("win.run")
+            .action_target(&"today".to_variant())
+            .visible(false)
             .build();
         let prev = gtk::Button::builder()
             .icon_name("go-previous-symbolic")
@@ -218,20 +216,21 @@ impl Window {
         let header = adw::HeaderBar::builder().title_widget(&title).build();
         header.pack_start(&sidebar_button);
         header.pack_start(&today);
+        header.pack_start(&today_icon);
         header.pack_start(&nav);
-        header.pack_end(
-            &gtk::Button::builder()
-                .icon_name("list-add-symbolic")
-                .tooltip_text("New event (c)")
-                .action_name("win.run")
-                .action_target(&"new".to_variant())
-                .build(),
-        );
+        let add = gtk::Button::builder()
+            .icon_name("list-add-symbolic")
+            .tooltip_text("New event (c)")
+            .action_name("win.run")
+            .action_target(&"new".to_variant())
+            .build();
+        header.pack_end(&add);
         header.pack_end(&menu_button);
         header.pack_end(&toggle);
 
         let content = adw::ToolbarView::new();
         content.add_top_bar(&header);
+        content.add_bottom_bar(&bottom_bar);
         let toasts = adw::ToastOverlay::new();
         toasts.set_child(Some(&views));
         content.set_content(Some(&toasts));
@@ -292,14 +291,28 @@ impl Window {
             .content(&split)
             .build();
 
-        // collapse the sidebar on narrow windows
-        let breakpoint = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
+        // narrower: the sidebar overlays the calendar instead of taking room
+        let medium = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
             adw::BreakpointConditionLengthType::MaxWidth,
-            800.0,
+            1100.0,
             adw::LengthUnit::Sp,
         ));
-        breakpoint.add_setter(&split, "collapsed", Some(&true.to_value()));
-        window.add_breakpoint(breakpoint);
+        medium.add_setter(&split, "collapsed", Some(&true.to_value()));
+        window.add_breakpoint(medium);
+        // narrowest: the view switcher moves to a bottom bar so the title
+        // has room (the last matching breakpoint applies)
+        let narrow = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
+            adw::BreakpointConditionLengthType::MaxWidth,
+            860.0,
+            adw::LengthUnit::Sp,
+        ));
+        narrow.add_setter(&split, "collapsed", Some(&true.to_value()));
+        narrow.add_setter(&toggle, "visible", Some(&false.to_value()));
+        narrow.add_setter(&bottom_bar, "revealed", Some(&true.to_value()));
+        narrow.add_setter(&today, "visible", Some(&false.to_value()));
+        narrow.add_setter(&today_icon, "visible", Some(&true.to_value()));
+        narrow.add_setter(&add, "visible", Some(&false.to_value()));
+        window.add_breakpoint(narrow);
 
         Self {
             window,
@@ -307,7 +320,7 @@ impl Window {
             title,
             split,
             views,
-            toggle,
+            toggles: [toggle, toggle_bottom],
             mini,
             calendar_list,
             grid,
@@ -331,16 +344,21 @@ impl Window {
     }
 
     fn setup_signals(self: &Rc<Self>) {
-        let weak = Rc::downgrade(self);
-        self.toggle.connect_active_name_notify(move |t| {
-            let Some(w) = weak.upgrade() else { return };
-            if w.syncing.get() {
-                return;
-            }
-            if let Some(view) = t.active_name().and_then(|n| ViewKind::from_name(&n)) {
-                w.set_view(view);
-            }
-        });
+        for toggle in &self.toggles {
+            let weak = Rc::downgrade(self);
+            toggle.connect_active_name_notify(move |t| {
+                let Some(w) = weak.upgrade() else { return };
+                if w.syncing.get() {
+                    return;
+                }
+                let view = t
+                    .active_name()
+                    .and_then(|n| w.state.borrow().view_named(&n));
+                if let Some(view) = view {
+                    w.set_view(view);
+                }
+            });
+        }
 
         let weak = Rc::downgrade(self);
         self.mini.connect_day_selected(move |cal| {
@@ -403,7 +421,7 @@ impl Window {
             s.selected = None;
         }
         self.refresh();
-        if matches!(self.state.borrow().view, ViewKind::Day | ViewKind::Week) {
+        if self.state.borrow().view.is_grid() {
             self.grid.scroll_to_now_or_morning();
         }
     }
@@ -451,7 +469,9 @@ impl Window {
     fn show_details(&self) {
         let view = self.state.borrow().view;
         match view {
-            ViewKind::Day | ViewKind::Week => self.grid.show_selected_details(),
+            ViewKind::Day | ViewKind::Week | ViewKind::WorkWeek | ViewKind::Days(_) => {
+                self.grid.show_selected_details()
+            }
             ViewKind::Month => self.month.show_selected_details(),
             ViewKind::Agenda => self.agenda.show_selected_details(),
             ViewKind::Tasks => {}
@@ -469,7 +489,7 @@ impl Window {
             self.tasks.clone(),
         );
         glib::idle_add_local_once(move || match view {
-            ViewKind::Day | ViewKind::Week => grid.focus(),
+            ViewKind::Day | ViewKind::Week | ViewKind::WorkWeek | ViewKind::Days(_) => grid.focus(),
             ViewKind::Month => month.focus(),
             ViewKind::Agenda => agenda.focus(),
             ViewKind::Tasks => tasks.focus(),
@@ -565,7 +585,9 @@ impl Window {
         let (title, subtitle) = format::view_title(view, date);
         self.title.set_title(&title);
         self.title.set_subtitle(&subtitle);
-        self.toggle.set_active_name(Some(view.name()));
+        for toggle in &self.toggles {
+            toggle.set_active_name(Some(view.toggle_name()));
+        }
         if let Ok(dt) = glib::DateTime::from_local(
             date.year(),
             date.month() as i32,
@@ -579,7 +601,7 @@ impl Window {
         drop(state);
 
         match view {
-            ViewKind::Day | ViewKind::Week => {
+            ViewKind::Day | ViewKind::Week | ViewKind::WorkWeek | ViewKind::Days(_) => {
                 self.views.set_visible_child_name("grid");
                 self.grid.refresh();
             }
@@ -730,7 +752,7 @@ impl Window {
 
 /// The days the time grid shows, if it is the current view.
 fn state_days(state: &crate::state::State) -> Option<(chrono::NaiveDate, usize)> {
-    matches!(state.view, ViewKind::Day | ViewKind::Week).then(|| {
+    state.view.is_grid().then(|| {
         let days = state.visible_days();
         (days[0], days.len())
     })
@@ -798,4 +820,24 @@ fn calendar_info(cal: &rical_core::Calendar, state: &crate::state::State) -> gtk
     });
     grid.attach(&open, 1, rows.len() as i32, 1, 1);
     gtk::Popover::builder().child(&grid).build()
+}
+
+fn view_toggles() -> adw::ToggleGroup {
+    let toggle = adw::ToggleGroup::builder().css_classes(["round"]).build();
+    for (view, label, key) in [
+        (ViewKind::Day, "Day", "d"),
+        (ViewKind::Week, "Week", "w"),
+        (ViewKind::Month, "Month", "m"),
+        (ViewKind::Agenda, "Agenda", "a"),
+        (ViewKind::Tasks, "Tasks", "T"),
+    ] {
+        toggle.add(
+            adw::Toggle::builder()
+                .name(view.toggle_name())
+                .label(label)
+                .tooltip(format!("{label} view ({key})"))
+                .build(),
+        );
+    }
+    toggle
 }
