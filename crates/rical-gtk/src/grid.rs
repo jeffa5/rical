@@ -29,7 +29,7 @@ const LANE_HEIGHT: f64 = 24.0;
 /// The all-day row shows this many lanes before scrolling.
 const MAX_ALL_DAY_LANES: f64 = 4.5;
 /// Short events are drawn at least this long so their title fits.
-const MIN_EVENT_MINUTES: f64 = 22.0;
+const MIN_EVENT_MINUTES: f64 = 30.0;
 /// Drags snap to this many minutes.
 const SNAP_MINUTES: f64 = 15.0;
 
@@ -1102,10 +1102,11 @@ fn draw_block(
         if one_line {
             let l = draw::layout(area, &format!("{title}  {time}"), &style, tw, 1);
             text_color(cr, 1.0);
-            draw::show_layout(cr, &l, tx, y + 2.0);
-            circle(cr, y + 2.0 + draw::layout_height(&l) / 2.0);
+            let ty = y + ((h - draw::layout_height(&l)) / 2.0).max(0.0);
+            draw::show_layout(cr, &l, tx, ty);
+            circle(cr, ty + draw::layout_height(&l) / 2.0);
         } else {
-            let line_h = 15.0;
+            let line_h = draw::layout_height(&draw::layout(area, "X", &style, tw, 1));
             let lines = ((h - 4.0) / line_h) as i32;
             let max_title_lines = if narrow { lines } else { lines - 1 }.max(1);
             let l = draw::layout(area, &title, &style, tw, max_title_lines);
