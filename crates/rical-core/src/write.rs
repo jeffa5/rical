@@ -20,7 +20,7 @@ use crate::{
     occurrence::{Kind, Occurrence, unescape_text},
     rule::{Freq, Rule},
     vdir::Vdir,
-    when::When,
+    when::{When, resolve_local},
 };
 
 /// Which instances of a recurring series an edit applies to.
@@ -79,6 +79,10 @@ pub struct Draft {
     /// Me, written as the ORGANIZER when guests are added to an event
     /// that has none yet.
     pub organizer: Option<Guest>,
+    /// Start and end are in the zones they should be written in (chosen
+    /// in the editor), each its own; otherwise they are converted to the
+    /// item's existing zone, as a drag does.
+    pub exact_zones: bool,
 }
 
 /// Someone invited, or to invite.
@@ -100,6 +104,7 @@ impl Draft {
             repeat: Repeat::None,
             guests: None,
             organizer: None,
+            exact_zones: false,
         }
     }
 }
@@ -156,6 +161,7 @@ impl Vdir {
                     .collect(),
             ),
             organizer: None,
+            exact_zones: false,
         }
     }
 
@@ -182,7 +188,14 @@ impl Vdir {
         c.insert(Line::property("LAST-MODIFIED", &[], &now));
         c.insert(Line::new("SEQUENCE:0"));
         set_fields(&mut c, draft, true);
-        set_times(&mut c, draft.kind, &draft.start, &draft.end, None);
+        set_times(
+            &mut c,
+            draft.kind,
+            &draft.start,
+            &draft.end,
+            None,
+            draft.exact_zones,
+        );
         doc.push(c);
         self.add_timezones(&mut doc);
 
@@ -219,7 +232,14 @@ impl Vdir {
             }
             let c = doc.find_mut(&occ.uid, Some(&rid)).unwrap();
             set_fields(c, draft, false);
-            set_times(c, draft.kind, &draft.start, &draft.end, None);
+            set_times(
+                c,
+                draft.kind,
+                &draft.start,
+                &draft.end,
+                None,
+                draft.exact_zones,
+            );
             touch(c);
         } else if occ.recurring {
             let master = doc
@@ -239,14 +259,36 @@ impl Vdir {
                 None
             };
             let start = match shift {
+                // moved to another zone: the series keeps its wall-clock
+                // times there (09:00 Singapore becomes 09:00 London), plus
+                // however far this occurrence's wall time was changed
+                Some(_) if draft.exact_zones && zone_of(&master_start) != zone_of(&draft.start) => {
+                    let wall = naive(&draft.start) - naive(&occ.start.coerce_like(&master_start));
+                    let n = naive(&master_start) + wall;
+                    match draft.start {
+                        When::Zoned(dt) => When::Zoned(resolve_local(dt.timezone(), n)),
+                        _ => When::Floating(n),
+                    }
+                }
                 Some(shift) => master_start.add(shift),
                 None => draft
                     .start
                     .coerce_like(&master_start_kind(&master_start, &draft.start)),
             };
-            let end = start.add(draft.start.until(&draft.end));
+            let mut end = start.add(draft.start.until(&draft.end));
+            if draft.exact_zones && !end.is_date() {
+                // the end in its own zone (a flight lands somewhere else)
+                end = end.coerce_like(&draft.end);
+            }
             set_fields(master, draft, true);
-            set_times(master, draft.kind, &start, &end, Some(&master_start));
+            set_times(
+                master,
+                draft.kind,
+                &start,
+                &end,
+                Some(&master_start),
+                draft.exact_zones,
+            );
             touch(master);
             if draft.repeat == Repeat::None {
                 // no longer a series: drop its exceptions
@@ -261,7 +303,14 @@ impl Vdir {
                 .context("item not found in file")?;
             let original = c.property("DTSTART").and_then(Line::when);
             set_fields(c, draft, true);
-            set_times(c, draft.kind, &draft.start, &draft.end, original.as_ref());
+            set_times(
+                c,
+                draft.kind,
+                &draft.start,
+                &draft.end,
+                original.as_ref(),
+                draft.exact_zones,
+            );
             touch(c);
         }
         self.add_timezones(&mut doc);
@@ -545,12 +594,40 @@ fn set_guests(c: &mut Component, guests: &[Guest], organizer: Option<&Guest>) {
 
 /// Write start and end, keeping the original value form (TZID, UTC or
 /// floating) unless switching between all-day and timed.
-fn set_times(c: &mut Component, kind: Kind, start: &When, end: &When, original: Option<&When>) {
+/// The zone of a timed value (None for floating or a date).
+fn zone_of(w: &When) -> Option<Tz> {
+    match w {
+        When::Zoned(dt) => Some(dt.timezone()),
+        _ => None,
+    }
+}
+
+/// The wall-clock time of a value in its own zone.
+fn naive(w: &When) -> chrono::NaiveDateTime {
+    match w {
+        When::Date(d) => d.and_time(chrono::NaiveTime::MIN),
+        When::Floating(n) => *n,
+        When::Zoned(dt) => dt.naive_local(),
+    }
+}
+
+/// With `exact`, timed values are written as given, each in its own zone
+/// (the editor chose them); otherwise they take the original's form, so a
+/// drag keeps an event's TZID.
+fn set_times(
+    c: &mut Component,
+    kind: Kind,
+    start: &When,
+    end: &When,
+    original: Option<&When>,
+    exact: bool,
+) {
     let original = original
         .copied()
         .or_else(|| c.property("DTSTART").and_then(Line::when))
         .or_else(|| c.property("DUE").and_then(Line::when));
     let form = |w: &When| match original {
+        _ if exact && !w.is_date() => *w,
         Some(o) if o.is_date() == w.is_date() => w.coerce_like(&o),
         _ => *w,
     };

@@ -67,7 +67,7 @@ pub struct State {
     colors: RefCell<(Option<u64>, Vec<Rgb>)>,
     /// First day of the N-day view; see `visible_days`.
     days_from: Cell<NaiveDate>,
-    /// My addresses, from `--me`; guessed from the vdir when empty.
+    /// My addresses, from the `me` setting; guessed from the vdir when empty.
     pub me: Vec<String>,
     guessed_me: RefCell<(Option<u64>, Vec<String>)>,
     /// A folder of vCards to suggest guests from.

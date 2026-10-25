@@ -9,7 +9,9 @@ use chrono::{Days, TimeDelta};
 use gtk::glib;
 use rical_core::{Kind, When, write::Draft};
 
-use crate::{format, guests::GuestsEditor, repeat::RepeatEditor, state::SharedState};
+use crate::{
+    format, guests::GuestsEditor, repeat::RepeatEditor, state::SharedState, zonepick::ZonePicker,
+};
 
 pub struct Options {
     pub title: &'static str,
@@ -78,14 +80,49 @@ pub fn open(
         ),
         e => e,
     };
+    // the zones the times are typed in: the event's own, mine for new ones
+    let zones = Rc::new(ZonePicker::new(local, &draft));
     let starts = adw::EntryRow::builder()
         .title("Starts")
-        .text(format::input(&draft.start, local))
+        .text(format::input(&draft.start, zones.start_tz()))
         .build();
     let ends = adw::EntryRow::builder()
         .title("Ends  (time, date or +duration)")
-        .text(format::input(&shown_end(&draft), local))
+        .text(format::input(&shown_end(&draft), zones.end_tz()))
         .build();
+    zones.set_visible(!draft.start.is_date());
+    // what the times are for me, when typed in another zone
+    let hints: Rc<dyn Fn()> = {
+        let (zones, starts, ends, all_day) =
+            (zones.clone(), starts.clone(), ends.clone(), all_day.clone());
+        let base = draft.start;
+        Rc::new(move || {
+            let hint = |w: Option<When>| match w {
+                Some(When::Zoned(dt)) if dt.timezone() != local => {
+                    format!(
+                        "  ·  {} for you",
+                        dt.with_timezone(&local).format("%H:%M %a")
+                    )
+                }
+                _ => String::new(),
+            };
+            if all_day.is_active() {
+                starts.set_title("Starts");
+                ends.set_title("Ends");
+                return;
+            }
+            let start = zones.parse_start(&starts.text(), &base);
+            starts.set_title(&format!("Starts{}", hint(start)));
+            let end = start.and_then(|s| zones.parse_end(&ends.text(), &s));
+            ends.set_title(&format!("Ends  (time, date or +duration){}", hint(end)));
+        })
+    };
+    hints();
+    for row in [&starts, &ends] {
+        let h = hints.clone();
+        row.connect_changed(move |_| h());
+    }
+    zones.on_change(hints.clone());
 
     let repeat = RepeatEditor::new(&draft.repeat);
 
@@ -113,6 +150,8 @@ pub fn open(
     when.add(&all_day);
     when.add(&starts);
     when.add(&ends);
+    when.add(&zones.start);
+    when.add(&zones.end);
     for row in repeat.rows() {
         when.add(&row);
     }
@@ -180,27 +219,32 @@ pub fn open(
 
     // switching all-day converts the fields between dates and times
     {
-        let (starts, ends) = (starts.clone(), ends.clone());
+        let (starts, ends, zones, hints) =
+            (starts.clone(), ends.clone(), zones.clone(), hints.clone());
         all_day.connect_active_notify(move |sw| {
-            let base = When::Date(chrono::Utc::now().with_timezone(&local).date_naive());
+            // times are in the chosen zone; all-day items have none
+            let tz = zones.start_tz();
+            zones.set_visible(!sw.is_active());
+            let base = When::Date(chrono::Utc::now().with_timezone(&tz).date_naive());
             let convert = |row: &adw::EntryRow, base: &When| {
-                let w = format::parse_input(&row.text(), !sw.is_active(), base, local)?;
+                let w = format::parse_input(&row.text(), !sw.is_active(), base, tz)?;
                 let w = if sw.is_active() {
-                    When::Date(w.date(local))
+                    When::Date(w.date(tz))
                 } else {
-                    let ndt = w.date(local).and_hms_opt(9, 0, 0).unwrap();
-                    When::Zoned(rical_core::when::resolve_local(local, ndt))
+                    let ndt = w.date(tz).and_hms_opt(9, 0, 0).unwrap();
+                    When::Zoned(rical_core::when::resolve_local(tz, ndt))
                 };
-                row.set_text(&format::input(&w, local));
+                row.set_text(&format::input(&w, tz));
                 Some(w)
             };
             if let Some(s) = convert(&starts, &base) {
                 if sw.is_active() {
                     convert(&ends, &s);
                 } else {
-                    ends.set_text(&format::input(&s.add(TimeDelta::hours(1)), local));
+                    ends.set_text(&format::input(&s.add(TimeDelta::hours(1)), tz));
                 }
             }
+            hints();
         });
     }
 
@@ -241,18 +285,28 @@ pub fn open(
             notes.clone(),
         );
         let (guests, state, invitation) = (guests.clone(), state.clone(), options.invitation);
+        let zones = zones.clone();
         move || {
             let is_all_day = all_day.is_active();
             starts.remove_css_class("error");
             ends.remove_css_class("error");
-            let Some(start) =
-                format::parse_input(&starts.text(), is_all_day, &original.start, local)
-            else {
+            // times are read in their zones; all-day ones are plain dates
+            let start = if is_all_day {
+                format::parse_input(&starts.text(), true, &original.start, local)
+            } else {
+                zones.parse_start(&starts.text(), &original.start)
+            };
+            let Some(start) = start else {
                 starts.add_css_class("error");
                 starts.grab_focus();
                 return;
             };
-            let end = match format::parse_input(&ends.text(), is_all_day, &start, local) {
+            let end = if is_all_day {
+                format::parse_input(&ends.text(), true, &start, local)
+            } else {
+                zones.parse_end(&ends.text(), &start)
+            };
+            let end = match end {
                 // shown inclusive, stored exclusive
                 Some(When::Date(d)) => d.checked_add_days(Days::new(1)).map(When::Date),
                 other => other,
@@ -304,6 +358,8 @@ pub fn open(
                 start,
                 end,
                 repeat: rule,
+                // the zones chosen here are the ones to write
+                exact_zones: !is_all_day,
             };
             dialog.close();
             on_save(draft, calendar);

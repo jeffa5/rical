@@ -771,3 +771,122 @@ fn editing_repeat_rules() {
         "Singapore dates of 18:00 London"
     );
 }
+
+/// An event at 09:00–10:00 Singapore time on 2026-12-14, weekly or not.
+fn singapore_event(repeat: bool) -> String {
+    format!(
+        "
+        BEGIN:VEVENT
+        UID:catch-up
+        DTSTAMP:20261001T000000Z
+        DTSTART;TZID=Asia/Singapore:20261214T090000
+        DTEND;TZID=Asia/Singapore:20261214T100000
+        {}SUMMARY:Catch-up
+        END:VEVENT
+        ",
+        if repeat { "RRULE:FREQ=WEEKLY\n" } else { "" }
+    )
+}
+
+fn zoned(s: &str, tz: &str) -> When {
+    When::parse(s, Some(tz)).unwrap()
+}
+
+#[test]
+fn editor_zones_are_written_as_chosen() {
+    // planning a UK trip from Singapore: 09:00 London time
+    let (_dir, mut vdir) = setup(&[("work/meeting.ics", &format!("{LONDON_TZ}{MEETING}"))]);
+    let mut draft = Draft::new(
+        zoned("20261221T090000", "Europe/London"),
+        zoned("20261221T100000", "Europe/London"),
+    );
+    draft.summary = "Coffee in London".into();
+    draft.exact_zones = true;
+    let change = vdir.create("home", &draft).unwrap();
+    let text = fs::read_to_string(&change.path).unwrap();
+    assert!(text.contains("DTSTART;TZID=Europe/London:20261221T090000\r\n"));
+    assert!(text.contains("DTEND;TZID=Europe/London:20261221T100000\r\n"));
+    // its VTIMEZONE comes along from the other file
+    assert!(text.contains("TZID:Europe/London\r\n"));
+    // seen from Singapore it is 17:00 (London is on GMT in December)
+    let occ = query(&vdir, range("2026-12-21 00:00", "2026-12-22 00:00"));
+    let local = occ[0].start.to_tz(SINGAPORE);
+    assert_eq!(local.format("%H:%M").to_string(), "17:00");
+}
+
+#[test]
+fn changing_an_events_zone_keeps_its_wall_time() {
+    let (dir, mut vdir) = setup(&[("home/catch-up.ics", &singapore_event(false))]);
+    let occ = query(&vdir, range("2026-12-14 00:00", "2026-12-15 00:00"));
+    let mut draft = vdir.draft(&occ[0]);
+    draft.start = zoned("20261214T090000", "Europe/London");
+    draft.end = zoned("20261214T100000", "Europe/London");
+    draft.exact_zones = true;
+    vdir.update(&occ[0], Scope::All, &draft, None).unwrap();
+    let text = fs::read_to_string(dir.path().join("home/catch-up.ics")).unwrap();
+    assert!(
+        text.contains("DTSTART;TZID=Europe/London:20261214T090000\r\n"),
+        "{text}"
+    );
+    assert!(text.contains("DTEND;TZID=Europe/London:20261214T100000\r\n"));
+}
+
+#[test]
+fn a_flight_ends_in_another_zone() {
+    // leaves Singapore 23:00, lands in London 05:30 the next morning
+    let (dir, mut vdir) = setup(&[("home/catch-up.ics", &singapore_event(false))]);
+    let occ = query(&vdir, range("2026-12-14 00:00", "2026-12-15 00:00"));
+    let mut draft = vdir.draft(&occ[0]);
+    draft.start = zoned("20261219T230000", "Asia/Singapore");
+    draft.end = zoned("20261220T053000", "Europe/London");
+    draft.exact_zones = true;
+    vdir.update(&occ[0], Scope::All, &draft, None).unwrap();
+    let text = fs::read_to_string(dir.path().join("home/catch-up.ics")).unwrap();
+    assert!(text.contains("DTSTART;TZID=Asia/Singapore:20261219T230000\r\n"));
+    assert!(
+        text.contains("DTEND;TZID=Europe/London:20261220T053000\r\n"),
+        "{text}"
+    );
+    let occ = query(&vdir, range("2026-12-19 00:00", "2026-12-21 00:00"));
+    assert_eq!(occ[0].duration(), TimeDelta::minutes(14 * 60 + 30));
+}
+
+#[test]
+fn a_series_moved_to_another_zone_keeps_its_wall_times() {
+    let (dir, mut vdir) = setup(&[("home/catch-up.ics", &singapore_event(true))]);
+    // edit the third week's occurrence, moving the series to London
+    let occ = query(&vdir, range("2026-12-28 00:00", "2026-12-29 00:00"));
+    assert_eq!(occ.len(), 1);
+    let mut draft = vdir.draft(&occ[0]);
+    draft.start = zoned("20261228T090000", "Europe/London");
+    draft.end = zoned("20261228T100000", "Europe/London");
+    draft.exact_zones = true;
+    vdir.update(&occ[0], Scope::All, &draft, None).unwrap();
+    let text = fs::read_to_string(dir.path().join("home/catch-up.ics")).unwrap();
+    // the series starts where it did, at 09:00 London time
+    assert!(
+        text.contains("DTSTART;TZID=Europe/London:20261214T090000\r\n"),
+        "{text}"
+    );
+    let occ = query(&vdir, range("2026-12-28 00:00", "2026-12-29 00:00"));
+    assert_eq!(
+        occ[0].start.to_tz(SINGAPORE).format("%H:%M").to_string(),
+        "17:00"
+    );
+}
+
+#[test]
+fn a_drag_keeps_the_events_zone() {
+    // moves (no exact zones) still convert into the event's own zone
+    let (dir, mut vdir) = setup(&[("home/catch-up.ics", &singapore_event(false))]);
+    let occ = query(&vdir, range("2026-12-14 00:00", "2026-12-15 00:00"));
+    let mut draft = vdir.draft(&occ[0]);
+    draft.start = zoned("20261214T020000", "UTC");
+    draft.end = zoned("20261214T030000", "UTC");
+    vdir.update(&occ[0], Scope::All, &draft, None).unwrap();
+    let text = fs::read_to_string(dir.path().join("home/catch-up.ics")).unwrap();
+    assert!(
+        text.contains("DTSTART;TZID=Asia/Singapore:20261214T100000\r\n"),
+        "{text}"
+    );
+}

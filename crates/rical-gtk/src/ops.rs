@@ -226,7 +226,10 @@ impl Window {
             }
         }
         if !had && !guests.is_empty() && draft.organizer.is_none() {
-            return Err("your address is not known: start rical with --me you@example.com".into());
+            return Err(
+                "your address is not known: set me = you@example.com in ~/.config/rical/config"
+                    .into(),
+            );
         }
         let start = draft.start;
         if self.perform("change the guests", |v| {

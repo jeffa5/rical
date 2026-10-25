@@ -151,8 +151,8 @@ impl GuestsEditor {
         self.group.remove_css_class("error");
         self.group.set_description(Some(&match sender {
             Some(s) => format!("Invitations go out from your server as {s} when this syncs."),
-            None => "Your address is not known: start rical with --me you@example.com \
-                     (or set me in the config) to invite people."
+            None => "Your address is not known: set `me = you@example.com` in \
+                     ~/.config/rical/config to invite people."
                 .to_owned(),
         }));
     }

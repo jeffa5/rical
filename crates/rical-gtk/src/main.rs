@@ -30,6 +30,7 @@ mod sidetasks;
 mod state;
 mod tasks;
 mod window;
+mod zonepick;
 mod zones;
 
 const APP_ID: &str = "net.jeffas.Rical";
