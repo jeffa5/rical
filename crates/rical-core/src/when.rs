@@ -6,9 +6,9 @@
 
 use std::{fmt, str::FromStr};
 
+use crate::compact::Prop as Property;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, TimeZone as _, Utc};
 use chrono_tz::Tz;
-use icalendar::Property;
 use log::warn;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -53,20 +53,26 @@ impl When {
 
     /// Parse the (first) value of a property, honouring its `TZID`.
     pub fn from_property(prop: &Property) -> Option<Self> {
-        Self::list_from_property(prop).into_iter().next()
+        let first = prop.value().split(',').next()?;
+        let start = first.split('/').next().unwrap_or(first);
+        let when = Self::parse(start, prop.param("TZID"));
+        if when.is_none() {
+            warn!("invalid {} value {first:?}", prop.name);
+        }
+        when
     }
 
     /// Parse every comma-separated value of a property such as `EXDATE` or
     /// `RDATE`. For `PERIOD` values only the start is kept.
     pub fn list_from_property(prop: &Property) -> Vec<Self> {
-        let tzid = prop.params().get("TZID").map(|p| p.value());
+        let tzid = prop.param("TZID");
         prop.value()
             .split(',')
             .filter_map(|v| {
                 let start = v.split('/').next().unwrap_or(v);
                 let when = Self::parse(start, tzid);
                 if when.is_none() {
-                    warn!("invalid {} value {v:?}", prop.key());
+                    warn!("invalid {} value {v:?}", prop.name);
                 }
                 when
             })

@@ -2,7 +2,7 @@ use std::io::Write;
 
 use comfy_table::{Table, presets::NOTHING};
 
-use rical_core::{AnyComponent, time::date_perhaps_time_to_datetime_utc};
+use rical_core::{AnyComponent, time::when_to_utc};
 
 pub struct TableOptions {
     pub verbose: bool,
@@ -41,7 +41,7 @@ impl TableWriter {
             };
             let row = if self.options.verbose {
                 vec![
-                    component.component_kind(),
+                    component.component_kind().to_owned(),
                     component.get_uid().unwrap().to_owned(),
                     component
                         .get_created()
@@ -64,10 +64,10 @@ impl TableWriter {
                 ]
             } else {
                 vec![
-                    component.component_kind(),
-                    component.get_start().map_or(String::new(), |d| {
-                        date_perhaps_time_to_datetime_utc(d).to_string()
-                    }),
+                    component.component_kind().to_owned(),
+                    component
+                        .get_start()
+                        .map_or(String::new(), |d| when_to_utc(d).to_string()),
                     status,
                     component.get_summary().unwrap_or_default().to_owned(),
                     component

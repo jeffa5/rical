@@ -19,7 +19,6 @@ use serde::Serialize;
 
 use crate::{
     component::AnyComponent,
-    ics::read_ics_to_calendar,
     occurrence::{self, Kind, Occurrence},
 };
 
@@ -143,8 +142,14 @@ pub struct Vdir {
     pub calendars: Vec<Calendar>,
     /// Every folder scanned (the root and those under it), for watching.
     pub dirs: Vec<PathBuf>,
-    /// Parsed components of each item, by path.
-    items: BTreeMap<PathBuf, Vec<AnyComponent>>,
+    /// Parsed components of each item (without VTIMEZONEs) with the index of
+    /// its calendar, so queries never compare paths; keyed by the path's raw
+    /// text, which orders by plain byte comparison (paths compare piece by
+    /// piece, slowly).
+    items: BTreeMap<std::ffi::OsString, (usize, Vec<AnyComponent>)>,
+    /// The TZIDs each item has a VTIMEZONE for, to copy one into a file
+    /// being written; read from the file when needed.
+    timezones: BTreeMap<std::ffi::OsString, Vec<String>>,
 }
 
 impl fmt::Debug for Vdir {
@@ -196,15 +201,28 @@ impl Vdir {
             calendars,
             dirs,
             items: BTreeMap::new(),
+            timezones: BTreeMap::new(),
         };
-        for calendar in &vdir.calendars {
+        for (index, calendar) in vdir.calendars.iter().enumerate() {
             for path in calendar.item_paths()? {
-                if let Some(components) = read_item(&path) {
-                    vdir.items.insert(path, components);
+                if let Some((components, tzids)) = read_item_without_timezones(&path) {
+                    if !tzids.is_empty() {
+                        vdir.timezones.insert(path.clone().into_os_string(), tzids);
+                    }
+                    vdir.items
+                        .insert(path.into_os_string(), (index, components));
                 }
             }
         }
         Ok(vdir)
+    }
+
+    /// An item with a VTIMEZONE for `tzid`, if any.
+    pub fn timezone_file(&self, tzid: &str) -> Option<&Path> {
+        self.timezones
+            .iter()
+            .find(|(_, ids)| ids.iter().any(|i| i == tzid))
+            .map(|(p, _)| Path::new(p))
     }
 
     pub fn calendar(&self, id: &str) -> Option<&Calendar> {
@@ -220,16 +238,14 @@ impl Vdir {
 
     /// The parsed components of one item.
     pub fn get(&self, path: &Path) -> Option<&[AnyComponent]> {
-        self.items.get(path).map(Vec::as_slice)
+        self.items.get(path.as_os_str()).map(|(_, c)| c.as_slice())
     }
 
     /// Every loaded component, with the calendar it belongs to.
     pub fn components(&self) -> impl Iterator<Item = (&Calendar, &AnyComponent)> {
-        self.items.iter().flat_map(|(path, components)| {
-            let calendar = self.calendar_for_path(path);
-            components
-                .iter()
-                .filter_map(move |c| calendar.map(|cal| (cal, c)))
+        self.items.values().flat_map(|(index, components)| {
+            let calendar = &self.calendars[*index];
+            components.iter().map(move |c| (calendar, c))
         })
     }
 
@@ -315,15 +331,35 @@ impl Vdir {
     /// Re-read one item after it changed on disk. A missing or unparseable
     /// file is dropped. Returns whether anything changed.
     pub fn reload(&mut self, path: &Path) -> bool {
-        if self.calendar_for_path(path).is_none() || path.extension().is_none_or(|e| e != "ics") {
+        let Some(index) = self
+            .calendars
+            .iter()
+            .position(|c| path.parent() == Some(c.path.as_path()))
+        else {
+            return false;
+        };
+        if path.extension().is_none_or(|e| e != "ics") {
             return false;
         }
-        match path.is_file().then(|| read_item(path)).flatten() {
-            Some(components) => {
-                self.items.insert(path.to_owned(), components);
+        match path
+            .is_file()
+            .then(|| read_item_without_timezones(path))
+            .flatten()
+        {
+            Some((components, tzids)) => {
+                if tzids.is_empty() {
+                    self.timezones.remove(path.as_os_str());
+                } else {
+                    self.timezones.insert(path.as_os_str().to_owned(), tzids);
+                }
+                self.items
+                    .insert(path.as_os_str().to_owned(), (index, components));
                 true
             }
-            None => self.items.remove(path).is_some(),
+            None => {
+                self.timezones.remove(path.as_os_str());
+                self.items.remove(path.as_os_str()).is_some()
+            }
         }
     }
 
@@ -342,11 +378,11 @@ impl Vdir {
         local: Tz,
     ) -> Vec<Occurrence> {
         let mut out = Vec::new();
-        for calendar in &self.calendars {
+        for (index, calendar) in self.calendars.iter().enumerate() {
             let components = self
                 .items
-                .iter()
-                .filter(|(p, _)| p.parent() == Some(calendar.path.as_path()))
+                .values()
+                .filter(|(i, _)| *i == index)
                 .flat_map(|(_, c)| c);
             out.extend(
                 occurrence::expand(&calendar.id, components, range, local)
@@ -362,13 +398,27 @@ impl Vdir {
 }
 
 fn read_item(path: &Path) -> Option<Vec<AnyComponent>> {
-    match read_ics_to_calendar(path) {
-        Ok(cal) => Some(
-            cal.components
-                .into_iter()
-                .map(|c| AnyComponent::new(path.to_owned(), c))
-                .collect(),
-        ),
+    read_item_without_timezones(path).map(|(c, _)| c)
+}
+
+/// The components of an item, skipping its VTIMEZONEs (not parsed at all),
+/// and the TZIDs those defined.
+fn read_item_without_timezones(path: &Path) -> Option<(Vec<AnyComponent>, Vec<String>)> {
+    let parsed = std::fs::read_to_string(path)
+        .map_err(anyhow::Error::from)
+        .and_then(|text| crate::compact::parse(&text));
+    match parsed {
+        Ok((components, tzids)) => {
+            // one copy of the path for all of a file's components
+            let shared: std::sync::Arc<Path> = path.into();
+            Some((
+                components
+                    .into_iter()
+                    .map(|c| AnyComponent::new(shared.clone(), c))
+                    .collect(),
+                tzids,
+            ))
+        }
         Err(e) => {
             warn!("skipping {path:?}: {e}");
             None

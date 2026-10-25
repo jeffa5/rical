@@ -1,8 +1,8 @@
-use std::{ops::Range, path::PathBuf};
+use std::{ops::Range, path::Path, sync::Arc};
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use chrono_tz::Tz;
-use rical_core::{AnyComponent, Kind, Occurrence, When, ics::parse_calendar, occurrence::expand};
+use rical_core::{AnyComponent, Kind, Occurrence, When, occurrence::expand};
 
 const LONDON: Tz = Tz::Europe__London;
 
@@ -14,11 +14,11 @@ fn components(body: &str) -> Vec<AnyComponent> {
             .map(|l| format!("{}\r\n", l.trim_start()))
             .collect::<String>()
     );
-    parse_calendar(&ics)
+    rical_core::compact::parse(&ics)
         .unwrap()
-        .components
+        .0
         .into_iter()
-        .map(|c| AnyComponent::new(PathBuf::from("test.ics"), c))
+        .map(|c| AnyComponent::new(Arc::<Path>::from(Path::new("test.ics")), c))
         .collect()
 }
 

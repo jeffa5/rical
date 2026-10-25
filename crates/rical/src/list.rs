@@ -11,7 +11,12 @@ use crate::{
 impl Formatable for AnyComponent {
     fn keys(&self) -> Vec<String> {
         let mut keys = vec!["path".to_owned()];
-        keys.extend(self.properties().keys().cloned());
+        let names = self
+            .all_props()
+            .iter()
+            .map(|p| p.name.to_string())
+            .collect::<std::collections::BTreeSet<_>>();
+        keys.extend(names);
         keys
     }
 }

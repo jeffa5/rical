@@ -96,7 +96,7 @@ fn find_item(vdir: &Vdir, id: &str) -> anyhow::Result<(PathBuf, String, Kind)> {
         .components()
         .filter_map(|(_, c)| {
             let uid = c.get_uid()?;
-            let kind = Kind::from_component_kind(&c.component_kind())?;
+            let kind = Kind::from_component_kind(c.component_kind())?;
             uid.starts_with(id)
                 .then(|| (c.path().to_owned(), uid.to_owned(), kind))
         })

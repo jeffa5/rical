@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use rical_core::{AnyComponent, time::date_perhaps_time_to_datetime_utc};
+use rical_core::{AnyComponent, time::when_to_utc};
 use serde::Serialize;
 
 use crate::format::Formatable;
@@ -37,7 +37,7 @@ impl From<AnyComponent> for PrettyComponent {
     fn from(value: AnyComponent) -> Self {
         Self {
             path: value.path().to_owned(),
-            kind: pretty_kind(value.component_kind()),
+            kind: pretty_kind(value.component_kind().to_owned()),
             short_id: None,
             properties: PrettyProperties::from(value),
         }
@@ -77,19 +77,18 @@ impl From<AnyComponent> for PrettyProperties {
                 .or_else(|| value.get_timestamp())
                 .map(|t| t.to_string())
                 .unwrap_or_default(),
-            start: value.get_start().map_or(String::new(), |d| {
-                date_perhaps_time_to_datetime_utc(d).to_string()
-            }),
-            end: value.get_end().map_or(String::new(), |d| {
-                date_perhaps_time_to_datetime_utc(d).to_string()
-            }),
+            start: value
+                .get_start()
+                .map_or(String::new(), |d| when_to_utc(d).to_string()),
+            end: value
+                .get_end()
+                .map_or(String::new(), |d| when_to_utc(d).to_string()),
             duration: value
                 .get_end()
                 .and_then(|end| {
-                    value.get_start().map(|start| {
-                        date_perhaps_time_to_datetime_utc(end)
-                            - date_perhaps_time_to_datetime_utc(start)
-                    })
+                    value
+                        .get_start()
+                        .map(|start| when_to_utc(end) - when_to_utc(start))
                 })
                 .map(time_delta_to_string)
                 .unwrap_or_default(),

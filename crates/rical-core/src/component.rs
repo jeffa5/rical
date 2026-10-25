@@ -1,37 +1,24 @@
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
-};
+use std::{collections::BTreeMap, path::Path, sync::Arc};
 
-use icalendar::{CalendarComponent, Component, Property};
+use chrono::{DateTime, Utc};
 use serde::{Serialize, ser::SerializeStruct};
 
-/// A component of an item (an event, todo, ...) and the file it is in.
-///
-/// It offers the read side of icalendar's `Component` trait as methods of
-/// its own rather than implementing the trait, whose signatures name the
-/// crate's catch-all `Other` type that it does not export.
+use crate::{
+    compact::{Component, Prop},
+    when::When,
+};
+
+/// A component of an item (an event, todo, ...) and the file it is in, in
+/// the compact parsed form kept in memory (see [`crate::compact`]).
 #[derive(Debug, Clone)]
 pub struct AnyComponent {
-    path: PathBuf,
-    component: CalendarComponent,
-}
-
-/// Run `$f` on the component inside whichever variant it is.
-macro_rules! inner {
-    ($self:expr, $c:ident => $f:expr) => {
-        match &$self.component {
-            CalendarComponent::Todo($c) => $f,
-            CalendarComponent::Event($c) => $f,
-            CalendarComponent::Venue($c) => $f,
-            CalendarComponent::Other($c) => $f,
-            _ => unreachable!("icalendar added a component kind"),
-        }
-    };
+    /// Shared by the components of one file.
+    path: Arc<Path>,
+    component: Component,
 }
 
 impl AnyComponent {
-    pub fn new(path: PathBuf, component: CalendarComponent) -> Self {
+    pub fn new(path: Arc<Path>, component: Component) -> Self {
         Self { path, component }
     }
 
@@ -39,33 +26,34 @@ impl AnyComponent {
         &self.path
     }
 
-    pub fn component(&self) -> &CalendarComponent {
-        &self.component
-    }
-
     /// "VEVENT", "VTODO", ...
-    pub fn component_kind(&self) -> String {
-        inner!(self, c => c.component_kind())
+    pub fn component_kind(&self) -> &str {
+        &self.component.kind
     }
 
-    /// Properties that occur once, by name.
-    pub fn properties(&self) -> &BTreeMap<String, Property> {
-        inner!(self, c => c.properties())
+    /// The first property called `name` (upper case).
+    pub fn prop(&self, name: &str) -> Option<&Prop> {
+        self.component.prop(name)
     }
 
-    /// Properties that may repeat (ATTENDEE, EXDATE, ...), by name.
-    pub fn multi_properties(&self) -> &BTreeMap<String, Vec<Property>> {
-        inner!(self, c => c.multi_properties())
+    /// Every property called `name`, in order (ATTENDEE, EXDATE, ...).
+    pub fn props<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a Prop> {
+        self.component.props(name)
+    }
+
+    /// All its properties, in file order.
+    pub fn all_props(&self) -> &[Prop] {
+        self.component.all_props()
     }
 
     /// Nested components, such as VALARMs.
-    pub fn components(&self) -> &[impl Component] {
-        inner!(self, c => c.components())
+    pub fn components(&self) -> &[Component] {
+        self.component.children()
     }
 
-    /// The value of a property that occurs once.
-    pub fn property_value(&self, key: &str) -> Option<&str> {
-        self.properties().get(key).map(Property::value)
+    /// The value of the first property called `name`.
+    pub fn property_value(&self, name: &str) -> Option<&str> {
+        self.component.value(name)
     }
 
     pub fn get_uid(&self) -> Option<&str> {
@@ -77,23 +65,29 @@ impl AnyComponent {
     }
 
     /// DTSTART.
-    pub fn get_start(&self) -> Option<icalendar::DatePerhapsTime> {
-        inner!(self, c => c.get_start())
+    pub fn get_start(&self) -> Option<When> {
+        self.prop("DTSTART").and_then(When::from_property)
     }
 
     /// DTEND.
-    pub fn get_end(&self) -> Option<icalendar::DatePerhapsTime> {
-        inner!(self, c => c.get_end())
+    pub fn get_end(&self) -> Option<When> {
+        self.prop("DTEND").and_then(When::from_property)
     }
 
     /// CREATED.
-    pub fn get_created(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        inner!(self, c => c.get_created())
+    pub fn get_created(&self) -> Option<DateTime<Utc>> {
+        self.utc("CREATED")
     }
 
     /// DTSTAMP.
-    pub fn get_timestamp(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        inner!(self, c => c.get_timestamp())
+    pub fn get_timestamp(&self) -> Option<DateTime<Utc>> {
+        self.utc("DTSTAMP")
+    }
+
+    fn utc(&self, name: &str) -> Option<DateTime<Utc>> {
+        self.prop(name)
+            .and_then(When::from_property)
+            .map(|w| w.to_utc(chrono_tz::Tz::UTC))
     }
 }
 
@@ -103,12 +97,13 @@ impl Serialize for AnyComponent {
         S: serde::Serializer,
     {
         let mut s = serializer.serialize_struct("AnyComponent", 3)?;
-        s.serialize_field("path", &self.path)?;
-        s.serialize_field("kind", &self.component_kind())?;
+        s.serialize_field("path", &*self.path)?;
+        s.serialize_field("kind", self.component_kind())?;
+        // as before: one value per name (the last, as a map keeps it)
         let props = self
-            .properties()
+            .all_props()
             .iter()
-            .map(|(k, v)| (k, v.value()))
+            .map(|p| (&*p.name, p.value()))
             .collect::<BTreeMap<_, _>>();
         s.serialize_field("properties", &props)?;
         s.end()

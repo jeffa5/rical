@@ -2,10 +2,13 @@ use std::{collections::BTreeMap, path::PathBuf, str::FromStr};
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 
-use crate::{
-    component::AnyComponent, files::paths_to_files, ics::read_ics_to_calendar, short_id,
-    time::date_perhaps_time_to_datetime_utc,
-};
+use crate::{component::AnyComponent, files::paths_to_files, short_id};
+
+/// An instant to compare by: zoned values as they are, floating times and
+/// dates as UTC.
+fn utc(w: crate::When) -> DateTime<Utc> {
+    w.to_utc(chrono_tz::Tz::UTC)
+}
 
 #[derive(Debug, Clone)]
 pub enum ListKind {
@@ -70,9 +73,13 @@ pub fn list(query: &ListQuery) -> Listing {
 
     let components = paths
         .into_iter()
-        .filter_map(|p| read_ics_to_calendar(&p).ok().map(|c| (p, c)))
-        .flat_map(|(p, cal)| {
-            cal.components
+        .filter_map(|p| {
+            let text = std::fs::read_to_string(&p).ok()?;
+            let (components, _) = crate::compact::parse(&text).ok()?;
+            Some((std::sync::Arc::<std::path::Path>::from(p), components))
+        })
+        .flat_map(|(p, components)| {
+            components
                 .into_iter()
                 .map(|c| AnyComponent::new(p.clone(), c))
                 .filter(|c| {
@@ -81,20 +88,16 @@ pub fn list(query: &ListQuery) -> Listing {
                         .as_ref()
                         .is_none_or(|sid| c.get_uid().is_some_and(|uid| uid.starts_with(sid)))
                 })
-                .filter(|c| query.kinds.iter().any(|k| k.matches(&c.component_kind())))
+                .filter(|c| query.kinds.iter().any(|k| k.matches(c.component_kind())))
                 .filter(|c| {
                     query.from.is_none_or(|from| {
-                        c.get_start().is_some_and(|ndt| {
-                            date_perhaps_time_to_datetime_utc(ndt) >= from.and_utc()
-                        })
+                        c.get_start().is_some_and(|ndt| utc(ndt) >= from.and_utc())
                     })
                 })
                 .filter(|c| {
-                    query.to.is_none_or(|to| {
-                        c.get_end().is_some_and(|ndt| {
-                            date_perhaps_time_to_datetime_utc(ndt) <= to.and_utc()
-                        })
-                    })
+                    query
+                        .to
+                        .is_none_or(|to| c.get_end().is_some_and(|ndt| utc(ndt) <= to.and_utc()))
                 })
                 .collect::<Vec<_>>()
         })
@@ -108,12 +111,10 @@ pub fn list(query: &ListQuery) -> Listing {
 
     let mut components = components.into_iter().take(query.limit).collect::<Vec<_>>();
     components.sort_by_key(|e| {
-        e.get_start()
-            .map(date_perhaps_time_to_datetime_utc)
-            .unwrap_or_else(|| {
-                e.get_created()
-                    .unwrap_or_else(|| e.get_timestamp().unwrap_or(DateTime::<Utc>::MIN_UTC))
-            })
+        e.get_start().map(utc).unwrap_or_else(|| {
+            e.get_created()
+                .unwrap_or_else(|| e.get_timestamp().unwrap_or(DateTime::<Utc>::MIN_UTC))
+        })
     });
 
     Listing {

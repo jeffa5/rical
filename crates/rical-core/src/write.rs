@@ -497,10 +497,8 @@ impl Vdir {
     }
 
     fn find_timezone(&self, tzid: &str) -> Option<Component> {
-        let path = self.components().find_map(|(_, c)| {
-            (c.component_kind() == "VTIMEZONE" && c.property_value("TZID") == Some(tzid))
-                .then(|| c.path().to_owned())
-        })?;
+        // VTIMEZONEs are not kept in memory: read one from a file with it
+        let path = self.timezone_file(tzid)?;
         let doc = Document::parse(&fs::read_to_string(path).ok()?).ok()?;
         doc.timezone(tzid).cloned()
     }

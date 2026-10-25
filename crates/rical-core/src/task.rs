@@ -84,7 +84,7 @@ impl Vdir {
                 c.component_kind() == "VTODO" && c.property_value("RECURRENCE-ID").is_none()
             })
             .map(|(cal, c)| {
-                let when = |name| c.properties().get(name).and_then(When::from_property);
+                let when = |name| c.prop(name).and_then(When::from_property);
                 Task {
                     calendar: cal.id.clone(),
                     path: c.path().to_owned(),

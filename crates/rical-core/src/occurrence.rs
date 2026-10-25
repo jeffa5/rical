@@ -4,7 +4,6 @@ use std::{collections::BTreeMap, ops::Range, path::PathBuf, str::FromStr};
 
 use chrono::{DateTime, NaiveTime, TimeDelta, TimeZone as _, Utc};
 use chrono_tz::Tz;
-use icalendar::Component as _;
 use log::warn;
 use serde::Serialize;
 
@@ -90,11 +89,10 @@ pub struct Person {
 }
 
 impl Person {
-    fn from_property(prop: &icalendar::Property) -> Self {
+    fn from_property(prop: &crate::compact::Prop) -> Self {
         let param = |k: &str| {
-            prop.params()
-                .get(k)
-                .map(|p| p.value().trim_matches('"').to_owned())
+            prop.param(k)
+                .map(|v| v.trim_matches('"').to_owned())
                 .filter(|v| !v.is_empty())
         };
         let upper = |k: &str| param(k).map(|v| v.to_ascii_uppercase());
@@ -131,66 +129,27 @@ impl Person {
 /// The UID of the component's parent (RELATED-TO with RELTYPE=PARENT, the
 /// default): a subtask's task.
 pub fn parent_of(component: &AnyComponent) -> Option<String> {
-    let single = component.properties().get("RELATED-TO").into_iter();
-    let multi = component
-        .multi_properties()
-        .get("RELATED-TO")
-        .into_iter()
-        .flatten();
-    let mut any = false;
-    let parent = single
-        .chain(multi)
-        .inspect(|_| any = true)
+    component
+        .props("RELATED-TO")
         .find(|p| {
-            p.params()
-                .get("RELTYPE")
-                .is_none_or(|r| r.value().eq_ignore_ascii_case("PARENT"))
-        })
-        .map(|p| p.value().trim().to_owned());
-    match parent {
-        Some(uid) => Some(uid).filter(|u| !u.is_empty()),
-        // the icalendar crate keeps only the last RELATED-TO (it does not
-        // list it as repeatable), so a parent link before a sibling or
-        // child one is lost: read this item's own lines instead
-        None if any => parent_from_file(component),
-        None => None,
-    }
-}
-
-/// The parent link of `component`, read from its file's lines.
-fn parent_from_file(component: &AnyComponent) -> Option<String> {
-    let text = std::fs::read_to_string(component.path()).ok()?;
-    let doc = crate::doc::Document::parse(&text).ok()?;
-    let uid = component.get_uid()?;
-    let item = doc.items().find(|c| c.uid() == Some(uid))?;
-    item.properties("RELATED-TO")
-        .find(|l| {
-            l.param("RELTYPE")
+            p.param("RELTYPE")
                 .is_none_or(|r| r.eq_ignore_ascii_case("PARENT"))
         })
-        .map(|l| l.value().trim().to_owned())
-        .filter(|u| !u.is_empty())
+        .map(|p| p.value().trim().to_owned())
+        .filter(|uid| !uid.is_empty())
 }
 
 /// Whether the server sent this component's invitations: CalDAV servers
 /// that schedule (Nextcloud, for one) mark each guest with SCHEDULE-STATUS.
 pub fn server_scheduled(component: &AnyComponent) -> bool {
-    let single = component.properties().get("ATTENDEE").into_iter();
-    let multi = component
-        .multi_properties()
-        .get("ATTENDEE")
-        .into_iter()
-        .flatten();
-    single
-        .chain(multi)
-        .any(|p| p.params().contains_key("SCHEDULE-STATUS"))
+    component
+        .props("ATTENDEE")
+        .any(|p| p.param("SCHEDULE-STATUS").is_some())
 }
 
 /// The people of `name` (ATTENDEE, ORGANIZER) on a component.
 pub fn people(component: &AnyComponent, name: &str) -> Vec<Person> {
-    let single = component.properties().get(name).into_iter();
-    let multi = component.multi_properties().get(name).into_iter().flatten();
-    single.chain(multi).map(Person::from_property).collect()
+    component.props(name).map(Person::from_property).collect()
 }
 
 /// When an alarm goes off.
@@ -209,18 +168,16 @@ fn alarms(component: &AnyComponent) -> Vec<Trigger> {
     component
         .components()
         .iter()
-        .filter(|c| c.component_kind() == "VALARM")
+        .filter(|c| c.kind == "VALARM")
         .filter(|c| {
             !matches!(
-                c.property_value("ACTION")
-                    .map(str::to_ascii_uppercase)
-                    .as_deref(),
+                c.value("ACTION").map(str::to_ascii_uppercase).as_deref(),
                 Some("EMAIL" | "NONE")
             )
         })
         .filter_map(|c| {
-            let prop = c.properties().get("TRIGGER")?;
-            let param = |k: &str| prop.params().get(k).map(|p| p.value().to_ascii_uppercase());
+            let prop = c.prop("TRIGGER")?;
+            let param = |k: &str| prop.param(k).map(str::to_ascii_uppercase);
             if param("VALUE").as_deref() == Some("DATE-TIME") {
                 return When::parse(prop.value(), None)
                     .map(|w| Trigger::Absolute(w.to_utc(Tz::UTC)));
@@ -266,13 +223,8 @@ struct Fields<'a> {
 
 impl<'a> Fields<'a> {
     fn new(component: &'a AnyComponent) -> Option<Self> {
-        let kind = Kind::from_component_kind(&component.component_kind())?;
-        let prop = |name| {
-            component
-                .properties()
-                .get(name)
-                .and_then(When::from_property)
-        };
+        let kind = Kind::from_component_kind(component.component_kind())?;
+        let prop = |name| component.prop(name).and_then(When::from_property);
 
         let dtstart = prop("DTSTART");
         let (start, end) = match kind {
@@ -318,31 +270,21 @@ impl<'a> Fields<'a> {
     }
 
     fn recurrence_id(&self) -> Option<(When, bool)> {
-        let prop = self.component.properties().get("RECURRENCE-ID")?;
+        let prop = self.component.prop("RECURRENCE-ID")?;
         let when = When::from_property(prop)?;
         let this_and_future = prop
-            .params()
-            .get("RANGE")
-            .is_some_and(|r| r.value().eq_ignore_ascii_case("THISANDFUTURE"));
+            .param("RANGE")
+            .is_some_and(|r| r.eq_ignore_ascii_case("THISANDFUTURE"));
         Some((when, this_and_future))
     }
 
     fn is_recurring(&self) -> bool {
-        let props = self.component.properties();
-        let multi = self.component.multi_properties();
-        props.contains_key("RRULE") || props.contains_key("RDATE") || multi.contains_key("RDATE")
+        self.component.prop("RRULE").is_some() || self.component.prop("RDATE").is_some()
     }
 
     fn whens(&self, name: &str) -> Vec<When> {
-        let single = self.component.properties().get(name).into_iter();
-        let multi = self
-            .component
-            .multi_properties()
-            .get(name)
-            .into_iter()
-            .flatten();
-        single
-            .chain(multi)
+        self.component
+            .props(name)
             .flat_map(When::list_from_property)
             .map(|w| w.coerce_like(&self.start))
             .collect()
@@ -374,14 +316,13 @@ impl<'a> Fields<'a> {
             organizer: people(self.component, "ORGANIZER").into_iter().next(),
             attendees: people(self.component, "ATTENDEE"),
             parent: parent_of(self.component),
-            due: self
-                .component
-                .properties()
-                .get("DUE")
-                .and_then(When::from_property),
+            due: self.component.prop("DUE").and_then(When::from_property),
         }
     }
 }
+
+/// A repeating series, found by its file and UID.
+type SeriesKey<'a> = (&'a std::ffi::OsStr, String);
 
 /// Expand the components of one calendar into occurrences overlapping
 /// `range`, as seen by a viewer in `local`.
@@ -394,16 +335,17 @@ pub fn expand<'a>(
     range: &Range<DateTime<Utc>>,
     local: Tz,
 ) -> Vec<Occurrence> {
-    let mut series: BTreeMap<String, (Option<Fields>, Vec<Fields>)> = BTreeMap::new();
+    let mut series: BTreeMap<SeriesKey, (Option<Fields>, Vec<Fields>)> = BTreeMap::new();
     for component in components {
         let Some(fields) = Fields::new(component) else {
             continue;
         };
-        // components without a UID cannot be linked, so keep them apart
+        // by file and UID; components without a UID cannot be linked, so
+        // keep them apart
         let key = if fields.uid.is_empty() {
-            format!("{:?}#{}", component.path(), series.len())
+            (component.path().as_os_str(), format!("#{}", series.len()))
         } else {
-            format!("{:?}#{}", component.path(), fields.uid)
+            (component.path().as_os_str(), fields.uid.clone())
         };
         let entry = series.entry(key).or_default();
         if fields.recurrence_id().is_some() {
