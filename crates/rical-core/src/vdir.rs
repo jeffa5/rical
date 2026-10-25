@@ -238,6 +238,48 @@ impl Vdir {
     /// attendees. Invitations land in the invitee's calendar, so this finds
     /// each account's address without being told.
     pub fn owner_addresses(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for email in self.owners().into_values() {
+            if !out.contains(&email) {
+                out.push(email);
+            }
+        }
+        out
+    }
+
+    /// Per calendar id, the address its server sends invitations as: the
+    /// organiser of the events it scheduled (marked SCHEDULE-STATUS).
+    /// Organising as anyone else, the server would send nothing.
+    pub fn senders(&self) -> BTreeMap<String, String> {
+        let mut counts: BTreeMap<&str, BTreeMap<String, usize>> = BTreeMap::new();
+        for (calendar, component) in self.components() {
+            if !occurrence::server_scheduled(component) {
+                continue;
+            }
+            if let Some(email) = occurrence::people(component, "ORGANIZER")
+                .into_iter()
+                .next()
+                .and_then(|p| p.email)
+            {
+                *counts
+                    .entry(&calendar.id)
+                    .or_default()
+                    .entry(email.to_lowercase())
+                    .or_default() += 1;
+            }
+        }
+        counts
+            .into_iter()
+            .filter_map(|(cal, c)| {
+                let (email, _) = c.into_iter().max_by_key(|(_, n)| *n)?;
+                Some((cal.to_owned(), email))
+            })
+            .collect()
+    }
+
+    /// The owner's address per calendar id, where it can be told; see
+    /// [`Vdir::owner_addresses`].
+    pub fn owners(&self) -> BTreeMap<String, String> {
         let mut by_calendar: BTreeMap<&str, (usize, BTreeMap<String, usize>)> = BTreeMap::new();
         for (calendar, component) in self.components() {
             let attendees = occurrence::people(component, "ATTENDEE");
@@ -257,15 +299,14 @@ impl Vdir {
                 *counts.entry(e).or_default() += 1;
             }
         }
-        let mut out: Vec<String> = Vec::new();
-        for (items, counts) in by_calendar.into_values() {
+        let mut out = BTreeMap::new();
+        for (calendar, (items, counts)) in by_calendar {
             let top = counts.into_iter().max_by_key(|(_, n)| *n);
             if let Some((email, n)) = top
                 && items >= 2
                 && n * 2 >= items
-                && !out.contains(&email)
             {
-                out.push(email);
+                out.insert(calendar.to_owned(), email);
             }
         }
         out

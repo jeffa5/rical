@@ -126,6 +126,20 @@ impl Person {
     }
 }
 
+/// Whether the server sent this component's invitations: CalDAV servers
+/// that schedule (Nextcloud, for one) mark each guest with SCHEDULE-STATUS.
+pub fn server_scheduled(component: &AnyComponent) -> bool {
+    let single = component.properties().get("ATTENDEE").into_iter();
+    let multi = component
+        .multi_properties()
+        .get("ATTENDEE")
+        .into_iter()
+        .flatten();
+    single
+        .chain(multi)
+        .any(|p| p.params().contains_key("SCHEDULE-STATUS"))
+}
+
 /// The people of `name` (ATTENDEE, ORGANIZER) on a component.
 pub fn people(component: &AnyComponent, name: &str) -> Vec<Person> {
     let single = component.properties().get(name).into_iter();

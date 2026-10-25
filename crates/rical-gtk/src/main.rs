@@ -16,6 +16,7 @@ mod draw;
 mod editor;
 mod format;
 mod grid;
+mod guests;
 mod help;
 mod layout;
 mod listhead;
@@ -75,6 +76,11 @@ struct Args {
     /// apart; default is a guess from who is on most invitations.
     #[clap(long, env = "RICAL_ME", value_delimiter = ',')]
     me: Vec<String>,
+
+    /// A folder of vCards (e.g. a vdirsyncer address book) to suggest
+    /// guests from, as well as people on past events.
+    #[clap(long, env = "RICAL_CONTACTS")]
+    contacts: Option<PathBuf>,
 }
 
 fn main() -> glib::ExitCode {
@@ -123,6 +129,7 @@ fn main() -> glib::ExitCode {
     state.last_calendar = args.calendar;
     state.notifications = !args.no_notifications;
     state.me = args.me;
+    state.contacts = args.contacts;
     if let Some(text) = &args.remind {
         match rical_core::input::parse_shift(text) {
             Some(d) if d > chrono::TimeDelta::zero() => state.default_reminder = Some(d),

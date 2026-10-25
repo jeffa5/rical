@@ -91,6 +91,14 @@ pub trait Values {
         let _ = key;
         Vec::new()
     }
+    /// Values of a dynamic kind with a description each, which completion
+    /// also matches (by the start of any word): an address and its name.
+    fn described(&self, key: &str) -> Vec<(String, String)> {
+        self.values(key)
+            .into_iter()
+            .map(|v| (v, String::new()))
+            .collect()
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -359,6 +367,21 @@ fn complete_args(
         usage: String::new(),
     };
     let of_kind = |kind: &Kind, help: &str| -> Vec<Candidate> {
+        if let Kind::Dynamic(key) = kind {
+            let lower = current.to_lowercase();
+            return values
+                .described(key)
+                .into_iter()
+                .filter(|(v, d)| {
+                    starts_with_smart(v, current)
+                        || (!lower.is_empty()
+                            && d.to_lowercase()
+                                .split_whitespace()
+                                .any(|w| w.starts_with(&lower)))
+                })
+                .map(|(v, d)| candidate(v, if d.is_empty() { help } else { &d }))
+                .collect();
+        }
         let all = match kind {
             Kind::Choice(c) => c.iter().map(|s| s.to_string()).collect(),
             Kind::Dynamic(key) => values.values(key),

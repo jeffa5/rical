@@ -9,7 +9,7 @@ use chrono::{Days, TimeDelta};
 use gtk::glib;
 use rical_core::{Kind, When, write::Draft};
 
-use crate::{format, repeat::RepeatEditor, state::SharedState};
+use crate::{format, guests::GuestsEditor, repeat::RepeatEditor, state::SharedState};
 
 pub struct Options {
     pub title: &'static str,
@@ -17,6 +17,8 @@ pub struct Options {
     pub calendar: String,
     /// New items can choose between event and todo.
     pub is_new: bool,
+    /// Someone else's event: its guests are shown but not changed.
+    pub invitation: bool,
 }
 
 pub fn open(
@@ -116,6 +118,31 @@ pub fn open(
     }
     let more = adw::PreferencesGroup::new();
     more.add(&location);
+    let known = state.borrow().people();
+    let guests = GuestsEditor::new(
+        draft.guests.as_deref().unwrap_or_default(),
+        known,
+        !options.invitation,
+    );
+    // tasks have no guests
+    guests.group.set_visible(draft.kind == Kind::Event);
+    {
+        let g = guests.group.clone();
+        kind.connect_selected_notify(move |k| g.set_visible(k.selected() == 0));
+    }
+    // who the invitations go out as depends on the calendar's account
+    let sender_of = {
+        let (state, calendars) = (state.clone(), calendars.clone());
+        move |i: u32| {
+            let id = calendars.get(i as usize).map(|(id, _)| id.clone())?;
+            state.borrow().organizer_for(&id).map(|g| g.email)
+        }
+    };
+    guests.set_sender(sender_of(calendar.selected()).as_deref());
+    {
+        let g = guests.clone();
+        calendar.connect_selected_notify(move |c| g.set_sender(sender_of(c.selected()).as_deref()));
+    }
     let notes_group = adw::PreferencesGroup::builder().title("Notes").build();
     notes_group.add(
         &gtk::Frame::builder()
@@ -128,6 +155,7 @@ pub fn open(
     page.add(&what);
     page.add(&when);
     page.add(&more);
+    page.add(&guests.group);
     page.add(&notes_group);
 
     let dialog = adw::Dialog::builder()
@@ -212,6 +240,7 @@ pub fn open(
             location.clone(),
             notes.clone(),
         );
+        let (guests, state, invitation) = (guests.clone(), state.clone(), options.invitation);
         move || {
             let is_all_day = all_day.is_active();
             starts.remove_css_class("error");
@@ -243,12 +272,29 @@ pub fn open(
                 }
             };
             let buffer = notes.buffer();
+            let calendar = calendars
+                .get(calendar.selected() as usize)
+                .map(|(id, _)| id.clone())
+                .unwrap_or_default();
+            let kind = if kind.selected() == 1 {
+                Kind::Todo
+            } else {
+                original.kind
+            };
+            // guests, unless they are someone else's to change
+            let chosen = (kind == Kind::Event && !invitation).then(|| guests.value());
+            let organizer = state.borrow().organizer_for(&calendar);
+            let had_guests = original.guests.as_ref().is_some_and(|g| !g.is_empty());
+            if chosen.as_ref().is_some_and(|g| !g.is_empty()) && organizer.is_none() && !had_guests
+            {
+                guests.set_sender(None);
+                guests.group.add_css_class("error");
+                return;
+            }
             let draft = Draft {
-                kind: if kind.selected() == 1 {
-                    Kind::Todo
-                } else {
-                    original.kind
-                },
+                kind,
+                guests: chosen,
+                organizer,
                 summary: title.text().trim().to_owned(),
                 location: location.text().trim().to_owned(),
                 description: buffer
@@ -259,10 +305,6 @@ pub fn open(
                 end,
                 repeat: rule,
             };
-            let calendar = calendars
-                .get(calendar.selected() as usize)
-                .map(|(id, _)| id.clone())
-                .unwrap_or_default();
             dialog.close();
             on_save(draft, calendar);
         }

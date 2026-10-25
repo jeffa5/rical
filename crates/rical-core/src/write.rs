@@ -16,7 +16,7 @@ use chrono_tz::Tz;
 use icalendar::Component as _;
 
 use crate::{
-    doc::{self, Component, Document, Line},
+    doc::{self, Component, Document, Item, Line},
     occurrence::{Kind, Occurrence, unescape_text},
     rule::{Freq, Rule},
     vdir::Vdir,
@@ -74,6 +74,18 @@ pub struct Draft {
     pub start: When,
     pub end: When,
     pub repeat: Repeat,
+    /// The guests it should have; None leaves them as they are.
+    pub guests: Option<Vec<Guest>>,
+    /// Me, written as the ORGANIZER when guests are added to an event
+    /// that has none yet.
+    pub organizer: Option<Guest>,
+}
+
+/// Someone invited, or to invite.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Guest {
+    pub email: String,
+    pub name: Option<String>,
 }
 
 impl Draft {
@@ -86,6 +98,8 @@ impl Draft {
             start,
             end,
             repeat: Repeat::None,
+            guests: None,
+            organizer: None,
         }
     }
 }
@@ -128,6 +142,20 @@ impl Vdir {
             start: occ.start,
             end: occ.end,
             repeat: Repeat::from_rrule(rrule.as_deref()),
+            // the guests, not the organiser's own attendee line
+            guests: Some(
+                occ.attendees
+                    .iter()
+                    .filter(|a| occ.organizer.as_ref().is_none_or(|o| o.email != a.email))
+                    .filter_map(|a| {
+                        Some(Guest {
+                            email: a.email.clone()?,
+                            name: a.name.clone(),
+                        })
+                    })
+                    .collect(),
+            ),
+            organizer: None,
         }
     }
 
@@ -423,6 +451,9 @@ fn set_fields(c: &mut Component, draft: &Draft, repeat: bool) {
             c.set_text(name, value);
         }
     }
+    if let Some(guests) = &draft.guests {
+        set_guests(c, guests, draft.organizer.as_ref());
+    }
     if repeat {
         // UNTIL is written relative to the series' own start form
         let start = c
@@ -441,6 +472,74 @@ fn set_fields(c: &mut Component, draft: &Draft, repeat: bool) {
                 }
             }
         }
+    }
+}
+
+/// Make the ATTENDEEs `guests`, touching only what changes: those kept
+/// keep their lines (and replies), new ones are added as not yet answered,
+/// and `organizer` becomes the ORGANIZER if there is none. With no guests
+/// left it is no longer a meeting, so the organiser goes too.
+fn set_guests(c: &mut Component, guests: &[Guest], organizer: Option<&Guest>) {
+    fn email_of(l: &Line) -> String {
+        let v = l.value().trim();
+        v.get(..7)
+            .filter(|p| p.eq_ignore_ascii_case("mailto:"))
+            .map_or(v, |_| &v[7..])
+            .to_lowercase()
+    }
+    let org = c.property("ORGANIZER").map(email_of);
+    let wanted = guests
+        .iter()
+        .map(|g| g.email.to_lowercase())
+        .collect::<Vec<_>>();
+    if wanted.is_empty() {
+        if c.properties("ATTENDEE").any(|l| Some(email_of(l)) != org) {
+            c.remove("ATTENDEE");
+            c.remove("ORGANIZER");
+        }
+        return;
+    }
+    // guests no longer wanted (the organiser's own line stays)
+    c.items.retain(|i| match i {
+        Item::Line(l) if l.name() == "ATTENDEE" => {
+            let e = email_of(l);
+            Some(&e) == org.as_ref() || wanted.contains(&e)
+        }
+        _ => true,
+    });
+    if org.is_none()
+        && let Some(me) = organizer
+    {
+        let mut params = Vec::new();
+        if let Some(n) = &me.name {
+            params.push(("CN", n.as_str()));
+        }
+        c.insert(Line::property(
+            "ORGANIZER",
+            &params,
+            &format!("mailto:{}", me.email),
+        ));
+    }
+    let have = c.properties("ATTENDEE").map(email_of).collect::<Vec<_>>();
+    for g in guests {
+        if have.contains(&g.email.to_lowercase()) {
+            continue;
+        }
+        let mut params = Vec::new();
+        if let Some(n) = &g.name {
+            params.push(("CN", n.as_str()));
+        }
+        params.extend([
+            ("CUTYPE", "INDIVIDUAL"),
+            ("ROLE", "REQ-PARTICIPANT"),
+            ("PARTSTAT", "NEEDS-ACTION"),
+            ("RSVP", "TRUE"),
+        ]);
+        c.insert(Line::property(
+            "ATTENDEE",
+            &params,
+            &format!("mailto:{}", g.email),
+        ));
     }
 }
 
@@ -592,6 +691,50 @@ mod tests {
             Repeat::from_rrule(Some("FREQ=MONTHLY;BYDAY=1TU")),
             Repeat::Custom("FREQ=MONTHLY;BYDAY=1TU".into())
         );
+    }
+
+    #[test]
+    fn guests_change_only_what_they_must() {
+        let g = |e: &str| Guest {
+            email: e.into(),
+            name: None,
+        };
+        let me = Guest {
+            email: "me@example.com".into(),
+            name: Some("Me".into()),
+        };
+        let text = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:x\r\nSUMMARY:Lunch\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+        let mut doc = Document::parse(text).unwrap();
+        let c = doc.find_mut("x", None).unwrap();
+
+        // first guest: I become the organiser
+        set_guests(c, &[g("sam@example.com")], Some(&me));
+        let out = doc.write().replace("\r\n ", "");
+        assert!(out.contains("ORGANIZER;CN=Me:mailto:me@example.com"));
+        assert!(out.contains("PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:sam@example.com"));
+
+        // Sam replies; adding Jo keeps Sam's reply
+        let replied = out.replace(
+            "PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:sam",
+            "PARTSTAT=ACCEPTED:mailto:sam",
+        );
+        let mut doc = Document::parse(&replied).unwrap();
+        let c = doc.find_mut("x", None).unwrap();
+        set_guests(c, &[g("SAM@example.com"), g("jo@example.com")], Some(&me));
+        let out = doc.write().replace("\r\n ", "");
+        assert!(out.contains("PARTSTAT=ACCEPTED:mailto:sam@example.com"));
+        assert!(out.contains("mailto:jo@example.com"));
+        assert_eq!(out.matches("ORGANIZER").count(), 1);
+
+        // drop Sam, then everyone: no longer a meeting
+        let mut doc = Document::parse(&out).unwrap();
+        let c = doc.find_mut("x", None).unwrap();
+        set_guests(c, &[g("jo@example.com")], Some(&me));
+        assert!(!doc.write().replace("\r\n ", "").contains("sam@"));
+        let c = doc.find_mut("x", None).unwrap();
+        set_guests(c, &[], Some(&me));
+        let out = doc.write().replace("\r\n ", "");
+        assert!(!out.contains("ATTENDEE") && !out.contains("ORGANIZER"));
     }
 
     #[test]

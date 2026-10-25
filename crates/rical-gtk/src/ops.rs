@@ -11,7 +11,7 @@ use log::warn;
 use rical_core::{
     Kind, Occurrence, Task, Vdir, When,
     when::resolve_local,
-    write::{Change, Draft, Repeat, Scope},
+    write::{Change, Draft, Guest, Repeat, Scope},
 };
 
 use super::Window;
@@ -149,6 +149,7 @@ impl Window {
                 draft,
                 calendar,
                 is_new: true,
+                invitation: false,
             },
             move |draft, calendar| {
                 if let Some(w) = weak.upgrade() {
@@ -192,6 +193,48 @@ impl Window {
         };
         let start = When::Zoned(resolve_local(local, state.date.and_time(time)));
         (start, start.add(TimeDelta::hours(1)))
+    }
+
+    /// Add and remove guests of the selected event (all of a series).
+    pub(super) fn change_guests(
+        self: &Rc<Self>,
+        add: Vec<Guest>,
+        remove: &[String],
+    ) -> Result<(), String> {
+        let occ = self.current_item().ok_or("select an event first")?;
+        if occ.kind != rical_core::Kind::Event {
+            return Err("only events have guests".into());
+        }
+        let mut draft = {
+            let state = self.state.borrow();
+            if state.invitation(&occ).is_some() {
+                return Err("it is someone else's event".into());
+            }
+            let mut draft = state.vdir.draft(&occ);
+            draft.organizer = state.organizer_for(&occ.calendar);
+            draft
+        };
+        let guests = draft.guests.get_or_insert_with(Vec::new);
+        let had = !guests.is_empty();
+        guests.retain(|g| !remove.iter().any(|r| r.eq_ignore_ascii_case(&g.email)));
+        for g in add {
+            if !guests
+                .iter()
+                .any(|h| h.email.eq_ignore_ascii_case(&g.email))
+            {
+                guests.push(g);
+            }
+        }
+        if !had && !guests.is_empty() && draft.organizer.is_none() {
+            return Err("your address is not known: start rical with --me you@example.com".into());
+        }
+        let start = draft.start;
+        if self.perform("change the guests", |v| {
+            v.update(&occ, Scope::All, &draft, None)
+        }) {
+            self.reselect(&occ.uid, &start);
+        }
+        Ok(())
     }
 
     pub(super) fn edit_selected(self: &Rc<Self>) {
@@ -239,6 +282,7 @@ impl Window {
                 draft: original,
                 calendar: occ.calendar.clone(),
                 is_new: false,
+                invitation: self.state.borrow().invitation(&occ).is_some(),
             },
             on_save,
             Some(Box::new(move || {

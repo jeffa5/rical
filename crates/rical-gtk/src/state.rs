@@ -9,7 +9,11 @@ use std::{
 
 use chrono::{DateTime, NaiveDate, Utc};
 use chrono_tz::Tz;
-use rical_core::{Calendar, Kind, Occurrence, Rgb, Vdir, When, write::Change};
+use rical_core::{
+    Calendar, Kind, Occurrence, Rgb, Vdir, When,
+    people::Known,
+    write::{Change, Guest},
+};
 
 use crate::layout::{self, ViewKind};
 
@@ -66,6 +70,9 @@ pub struct State {
     /// My addresses, from `--me`; guessed from the vdir when empty.
     pub me: Vec<String>,
     guessed_me: RefCell<(Option<u64>, Vec<String>)>,
+    /// A folder of vCards to suggest guests from.
+    pub contacts: Option<std::path::PathBuf>,
+    people: RefCell<(Option<u64>, Rc<Vec<Known>>)>,
 }
 
 /// An event someone else organised, with me (perhaps) invited.
@@ -112,6 +119,8 @@ impl State {
             days_from: Cell::new(date),
             me: Vec::new(),
             guessed_me: RefCell::new((None, Vec::new())),
+            contacts: None,
+            people: RefCell::new((None, Rc::new(Vec::new()))),
         }
     }
 
@@ -151,12 +160,20 @@ impl State {
 
     /// My addresses: as given, or guessed from who is on most invitations.
     pub fn my_addresses(&self) -> Vec<String> {
-        if !self.me.is_empty() {
-            return self.me.clone();
-        }
         let mut guess = self.guessed_me.borrow_mut();
         if guess.0 != Some(self.generation) {
-            *guess = (Some(self.generation), self.vdir.owner_addresses());
+            // as given (else guessed), and those my servers send as
+            let mut all = if self.me.is_empty() {
+                self.vdir.owner_addresses()
+            } else {
+                self.me.iter().map(|m| m.to_lowercase()).collect()
+            };
+            for e in self.vdir.senders().into_values() {
+                if !all.contains(&e) {
+                    all.push(e);
+                }
+            }
+            *guess = (Some(self.generation), all);
         }
         guess.1.clone()
     }
@@ -179,6 +196,46 @@ impl State {
             // RFC 5545: no PARTSTAT means not yet answered
             .map(|a| a.status.as_deref().unwrap_or("NEEDS-ACTION"));
         Some(Invite { from, reply })
+    }
+
+    /// Me as the organiser of events in `calendar`. Best is the address
+    /// its server has sent invitations as before, as a scheduling server
+    /// only sends for that one; then one of mine seen on its invitations;
+    /// then my first.
+    pub fn organizer_for(&self, calendar: &str) -> Option<Guest> {
+        let email = self.vdir.senders().remove(calendar).or_else(|| {
+            let owners = self.vdir.owners();
+            let seen = owners.get(calendar);
+            if self.me.is_empty() {
+                seen.cloned()
+                    .or_else(|| self.my_addresses().into_iter().next())
+            } else {
+                seen.filter(|e| self.me.iter().any(|m| m.eq_ignore_ascii_case(e)))
+                    .cloned()
+                    .or_else(|| self.me.first().cloned())
+            }
+        })?;
+        Some(Guest { email, name: None })
+    }
+
+    /// People to invite: from events (most frequent first), then contacts.
+    pub fn people(&self) -> Rc<Vec<Known>> {
+        let mut cache = self.people.borrow_mut();
+        if cache.0 != Some(self.generation) {
+            let mut known = self.vdir.people(&self.my_addresses());
+            if let Some(dir) = &self.contacts {
+                for guest in rical_core::people::contacts(dir) {
+                    match known.iter_mut().find(|k| k.guest.email == guest.email) {
+                        // a contact's name beats one from an invitation
+                        Some(k) if guest.name.is_some() => k.guest.name = guest.name,
+                        Some(_) => {}
+                        None => known.push(Known { guest, count: 0 }),
+                    }
+                }
+            }
+            *cache = (Some(self.generation), Rc::new(known));
+        }
+        cache.1.clone()
     }
 
     /// The days on screen. The N-day view keeps its first day while the

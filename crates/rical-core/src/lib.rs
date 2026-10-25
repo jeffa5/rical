@@ -6,6 +6,7 @@ pub mod files;
 pub mod ics;
 pub mod input;
 pub mod occurrence;
+pub mod people;
 pub mod query;
 pub mod rule;
 pub mod short_id;

@@ -162,6 +162,27 @@ pub static SPECS: &[Spec] = &[
         )
     },
     spec("edit", "Edit the selected event"),
+    Spec {
+        args: &[Arg {
+            name: "who",
+            kind: Kind::Dynamic("guest"),
+            optional: false,
+            rest: true,
+        }],
+        ..spec(
+            "invite",
+            "Invite people to the selected event (addresses; names complete)",
+        )
+    },
+    Spec {
+        args: &[Arg {
+            name: "who",
+            kind: Kind::Dynamic("invited"),
+            optional: false,
+            rest: true,
+        }],
+        ..spec("uninvite", "Take people off the selected event's guests")
+    },
     spec(
         "raw",
         "Show the selected event's .ics file as it is on disk",
@@ -344,7 +365,43 @@ impl Values for StateValues<'_> {
                 .iter()
                 .map(|c| c.name.clone())
                 .collect(),
+            "guest" => self.described(key).into_iter().map(|(v, _)| v).collect(),
             _ => Vec::new(),
+        }
+    }
+
+    fn described(&self, key: &str) -> Vec<(String, String)> {
+        match key {
+            // people to invite: from past events and contacts
+            "guest" => self
+                .0
+                .people()
+                .iter()
+                .map(|k| {
+                    (
+                        k.guest.email.clone(),
+                        k.guest.name.clone().unwrap_or_default(),
+                    )
+                })
+                .collect(),
+            // the guests of the selected event
+            "invited" => self
+                .0
+                .selected_occurrence()
+                .map(|o| {
+                    o.attendees
+                        .iter()
+                        .filter_map(|a| {
+                            Some((a.email.clone()?, a.name.clone().unwrap_or_default()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            _ => self
+                .values(key)
+                .into_iter()
+                .map(|v| (v, String::new()))
+                .collect(),
         }
     }
 

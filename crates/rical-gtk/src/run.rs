@@ -126,6 +126,36 @@ impl Window {
             }
             "new" => self.run_new(p)?,
             "edit" => self.edit_selected(),
+            "invite" | "uninvite" => {
+                let words = p.arg(0).unwrap_or_default();
+                let known = self.state.borrow().people();
+                let mut who = Vec::new();
+                for word in words.split_whitespace() {
+                    // an address, or a name only one person matches
+                    let guest = crate::guests::typed_guest(word)
+                        .map(|mut g| {
+                            g.name = known
+                                .iter()
+                                .find(|k| k.guest.email == g.email)
+                                .and_then(|k| k.guest.name.clone());
+                            g
+                        })
+                        .or_else(
+                            || match rical_core::people::suggest(&known, word, &[], 2)[..] {
+                                [one] => Some(one.guest.clone()),
+                                _ => None,
+                            },
+                        )
+                        .ok_or(format!("who is “{word}”? Give an address"))?;
+                    who.push(guest);
+                }
+                if p.spec == "invite" {
+                    self.change_guests(who, &[])?;
+                } else {
+                    let emails = who.into_iter().map(|g| g.email).collect::<Vec<_>>();
+                    self.change_guests(Vec::new(), &emails)?;
+                }
+            }
             "raw" => {
                 let occ = self.current_item().ok_or("select an event first")?;
                 details::close();
