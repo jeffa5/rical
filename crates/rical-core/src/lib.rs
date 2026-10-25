@@ -7,6 +7,7 @@ pub mod ics;
 pub mod input;
 pub mod occurrence;
 pub mod query;
+pub mod rule;
 pub mod short_id;
 pub mod stats;
 pub mod task;

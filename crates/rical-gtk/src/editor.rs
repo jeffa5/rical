@@ -7,20 +7,9 @@ use std::rc::Rc;
 use adw::prelude::*;
 use chrono::{Days, TimeDelta};
 use gtk::glib;
-use rical_core::{
-    Kind, When,
-    write::{Draft, Repeat},
-};
+use rical_core::{Kind, When, write::Draft};
 
-use crate::{format, state::SharedState};
-
-const REPEATS: [(&str, Repeat); 5] = [
-    ("Never", Repeat::None),
-    ("Daily", Repeat::Daily),
-    ("Weekly", Repeat::Weekly),
-    ("Monthly", Repeat::Monthly),
-    ("Yearly", Repeat::Yearly),
-];
+use crate::{format, repeat::RepeatEditor, state::SharedState};
 
 pub struct Options {
     pub title: &'static str,
@@ -96,23 +85,7 @@ pub fn open(
         .text(format::input(&shown_end(&draft), local))
         .build();
 
-    let mut repeat_labels = REPEATS.iter().map(|(l, _)| *l).collect::<Vec<_>>();
-    let custom = match &draft.repeat {
-        Repeat::Custom(rule) => Some(rule.clone()),
-        _ => None,
-    };
-    let custom_label = custom.as_ref().map(|r| format!("Custom: {r}"));
-    if let Some(label) = &custom_label {
-        repeat_labels.push(label);
-    }
-    let repeat = adw::ComboRow::builder()
-        .title("Repeat")
-        .model(&gtk::StringList::new(&repeat_labels))
-        .selected(match &draft.repeat {
-            Repeat::Custom(_) => REPEATS.len() as u32,
-            r => REPEATS.iter().position(|(_, x)| x == r).unwrap_or(0) as u32,
-        })
-        .build();
+    let repeat = RepeatEditor::new(&draft.repeat);
 
     let location = adw::EntryRow::builder()
         .title("Location")
@@ -138,7 +111,9 @@ pub fn open(
     when.add(&all_day);
     when.add(&starts);
     when.add(&ends);
-    when.add(&repeat);
+    for row in repeat.rows() {
+        when.add(&row);
+    }
     let more = adw::PreferencesGroup::new();
     more.add(&location);
     let notes_group = adw::PreferencesGroup::builder().title("Notes").build();
@@ -258,6 +233,15 @@ pub fn open(
                 ends.grab_focus();
                 return;
             };
+            repeat.choice.remove_css_class("error");
+            let rule = match repeat.value() {
+                Ok(r) => r,
+                Err(_) => {
+                    repeat.choice.add_css_class("error");
+                    repeat.choice.grab_focus();
+                    return;
+                }
+            };
             let buffer = notes.buffer();
             let draft = Draft {
                 kind: if kind.selected() == 1 {
@@ -273,10 +257,7 @@ pub fn open(
                     .to_owned(),
                 start,
                 end,
-                repeat: match REPEATS.get(repeat.selected() as usize) {
-                    Some((_, r)) => r.clone(),
-                    None => custom.clone().map_or(Repeat::None, Repeat::Custom),
-                },
+                repeat: rule,
             };
             let calendar = calendars
                 .get(calendar.selected() as usize)

@@ -19,6 +19,7 @@ mod help;
 mod layout;
 mod listhead;
 mod month;
+mod repeat;
 
 mod state;
 mod tasks;

@@ -4,6 +4,7 @@ use chrono::{DateTime, NaiveDateTime, TimeDelta, Utc};
 use chrono_tz::Tz;
 use rical_core::{
     Kind, Occurrence, Vdir, When,
+    rule::{End, Freq},
     write::{Draft, Repeat, Scope},
 };
 
@@ -171,7 +172,7 @@ fn create_copies_timezone_and_round_trips() {
     let start = When::parse("20250310T140000", Some("Europe/London")).unwrap();
     let mut draft = Draft::new(start, start.add(TimeDelta::minutes(45)));
     draft.summary = "New thing".into();
-    draft.repeat = Repeat::Weekly;
+    draft.repeat = Repeat::every(Freq::Weekly);
     let change = vdir.create("home", &draft).unwrap();
 
     assert_eq!(change.path.parent().unwrap(), dir.path().join("home"));
@@ -283,7 +284,10 @@ fn stop_repeating() {
     let (dir, mut vdir) = setup(&[("work/standup.ics", STANDUP)]);
     let first = &query(&vdir, range("2025-03-03 00:00", "2025-03-04 00:00"))[0];
     let mut draft = vdir.draft(first);
-    assert_eq!(draft.repeat, Repeat::Custom("FREQ=DAILY;COUNT=5".into()));
+    let Repeat::Rule(rule) = &draft.repeat else {
+        panic!("{:?}", draft.repeat)
+    };
+    assert_eq!(rule.end, End::Count(5));
     draft.repeat = Repeat::None;
     vdir.update(first, Scope::All, &draft, None).unwrap();
     let text = fs::read_to_string(dir.path().join("work/standup.ics")).unwrap();
@@ -710,4 +714,60 @@ fn completing_a_repeating_task_moves_it_on() {
     // a due-only daily task moves a day
     vdir.set_done(&find(&vdir, "plants"), true).unwrap();
     assert_eq!(find(&vdir, "plants").due, Some(when("20250311")));
+}
+
+#[test]
+fn editing_repeat_rules() {
+    let (dir, mut vdir) = setup(&[(
+        "work/class.ics",
+        "
+        BEGIN:VEVENT
+        UID:class
+        DTSTAMP:20250101T000000Z
+        DTSTART;TZID=Europe/London:20250303T180000
+        DURATION:PT1H
+        RRULE:FREQ=WEEKLY;BYDAY=WE,MO
+        SUMMARY:Class
+        END:VEVENT
+        ",
+    )]);
+    let path = dir.path().join("work/class.ics");
+    let occ = &query(&vdir, range("2025-03-03 00:00", "2025-03-04 00:00"))[0];
+
+    // editing something else leaves the rule exactly as written
+    let mut draft = vdir.draft(occ);
+    draft.summary = "Pottery class".into();
+    vdir.update(occ, Scope::All, &draft, None).unwrap();
+    assert!(
+        fs::read_to_string(&path)
+            .unwrap()
+            .contains("RRULE:FREQ=WEEKLY;BYDAY=WE,MO\r\n")
+    );
+
+    // every two weeks on Mondays until the end of March
+    let occ = &query(&vdir, range("2025-03-03 00:00", "2025-03-04 00:00"))[0];
+    let mut draft = vdir.draft(occ);
+    let Repeat::Rule(mut rule) = draft.repeat.clone() else {
+        panic!()
+    };
+    rule.interval = 2;
+    rule.weekdays = vec![chrono::Weekday::Mon];
+    rule.end = End::Until(chrono::NaiveDate::from_ymd_opt(2025, 3, 31).unwrap());
+    draft.repeat = Repeat::Rule(rule);
+    vdir.update(occ, Scope::All, &draft, None).unwrap();
+    let text = fs::read_to_string(&path).unwrap();
+    // 23:59:59 on 31 March in London is BST, 22:59:59 UTC
+    assert!(
+        text.contains("RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;UNTIL=20250331T225959Z\r\n"),
+        "{text}"
+    );
+    let starts = query(&vdir, range("2025-03-01 00:00", "2025-05-01 00:00"))
+        .iter()
+        .map(|o| o.start.date(SINGAPORE).to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        starts,
+        ["2025-03-04", "2025-03-18", "2025-04-01"],
+        "Singapore dates of 18:00 London"
+    );
 }

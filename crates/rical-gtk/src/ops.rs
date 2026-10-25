@@ -11,7 +11,7 @@ use log::warn;
 use rical_core::{
     Kind, Occurrence, Task, Vdir, When,
     when::resolve_local,
-    write::{Change, Draft, Scope},
+    write::{Change, Draft, Repeat, Scope},
 };
 
 use super::Window;
@@ -471,6 +471,24 @@ impl Window {
             self.state.borrow_mut().date = start.date(local);
             self.reselect(&occ.uid, &start);
             self.toast(&format!("Scheduled “{}”", occ.summary));
+        }
+        Ok(())
+    }
+
+    /// Change how the selected event repeats (the whole series).
+    pub(super) fn set_repeat(self: &Rc<Self>, repeat: Repeat) -> Result<(), String> {
+        let occ = self.current_item().ok_or("select an event first")?;
+        let mut draft = self.state.borrow().vdir.draft(&occ);
+        let summary = match &repeat {
+            Repeat::None => "no longer repeats".to_owned(),
+            Repeat::Rule(r) => format!("repeats {r}"),
+            Repeat::Custom(raw) => format!("repeats ({raw})"),
+        };
+        draft.repeat = repeat;
+        if self.perform("change how it repeats", |v| {
+            v.update(&occ, Scope::All, &draft, None)
+        }) {
+            self.toast(&format!("“{}” {summary}", occ.summary));
         }
         Ok(())
     }

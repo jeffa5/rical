@@ -18,6 +18,7 @@ use icalendar::Component as _;
 use crate::{
     doc::{self, Component, Document, Line},
     occurrence::{Kind, Occurrence, unescape_text},
+    rule::{Freq, Rule},
     vdir::Vdir,
     when::When,
 };
@@ -34,42 +35,32 @@ pub enum Scope {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Repeat {
     None,
-    Daily,
-    Weekly,
-    Monthly,
-    Yearly,
-    /// A rule rical does not edit; kept as it is.
+    /// A rule rical can edit.
+    Rule(Rule),
+    /// A rule using more than rical edits; kept as it is.
     Custom(String),
 }
 
 impl Repeat {
     pub fn from_rrule(rule: Option<&str>) -> Self {
-        let Some(rule) = rule else { return Self::None };
-        let parts = rule
-            .split(';')
-            .filter(|p| {
-                !p.eq_ignore_ascii_case("INTERVAL=1")
-                    && !p.to_ascii_uppercase().starts_with("WKST=")
-            })
-            .collect::<Vec<_>>();
-        match parts.as_slice() {
-            [f] if f.eq_ignore_ascii_case("FREQ=DAILY") => Self::Daily,
-            [f] if f.eq_ignore_ascii_case("FREQ=WEEKLY") => Self::Weekly,
-            [f] if f.eq_ignore_ascii_case("FREQ=MONTHLY") => Self::Monthly,
-            [f] if f.eq_ignore_ascii_case("FREQ=YEARLY") => Self::Yearly,
-            _ => Self::Custom(rule.to_owned()),
+        match rule {
+            None => Self::None,
+            Some(r) => Rule::parse(r).map_or_else(|| Self::Custom(r.to_owned()), Self::Rule),
         }
     }
 
-    pub fn rrule(&self) -> Option<String> {
+    /// The RRULE value for a series starting at `start`.
+    pub fn rrule(&self, start: &When) -> Option<String> {
         match self {
             Self::None => None,
-            Self::Daily => Some("FREQ=DAILY".into()),
-            Self::Weekly => Some("FREQ=WEEKLY".into()),
-            Self::Monthly => Some("FREQ=MONTHLY".into()),
-            Self::Yearly => Some("FREQ=YEARLY".into()),
+            Self::Rule(r) => Some(r.to_rrule(start)),
             Self::Custom(r) => Some(r.clone()),
         }
+    }
+
+    /// Every day/week/month/year, no end: the presets.
+    pub fn every(freq: Freq) -> Self {
+        Self::Rule(Rule::new(freq))
     }
 }
 
@@ -433,10 +424,19 @@ fn set_fields(c: &mut Component, draft: &Draft, repeat: bool) {
         }
     }
     if repeat {
-        match draft.repeat.rrule() {
-            None => c.remove("RRULE"),
-            Some(rule) => {
-                if c.property("RRULE").map(Line::value) != Some(rule.as_str()) {
+        // UNTIL is written relative to the series' own start form
+        let start = c
+            .property("DTSTART")
+            .and_then(Line::when)
+            .unwrap_or(draft.start);
+        let current = c.property("RRULE").map(|l| l.value().to_owned());
+        match (&draft.repeat, current) {
+            (Repeat::None, _) => c.remove("RRULE"),
+            // the same rule written differently: leave the file alone
+            (Repeat::Rule(rule), Some(cur)) if Rule::parse(&cur).as_ref() == Some(rule) => {}
+            (repeat, cur) => {
+                let rule = repeat.rrule(&start).unwrap();
+                if cur.as_deref() != Some(rule.as_str()) {
                     c.set(Line::property("RRULE", &[], &rule));
                 }
             }
@@ -576,14 +576,21 @@ mod tests {
     #[test]
     fn repeat_rules() {
         assert_eq!(Repeat::from_rrule(None), Repeat::None);
-        assert_eq!(Repeat::from_rrule(Some("FREQ=WEEKLY")), Repeat::Weekly);
         assert_eq!(
-            Repeat::from_rrule(Some("FREQ=DAILY;INTERVAL=1")),
-            Repeat::Daily
+            Repeat::from_rrule(Some("FREQ=WEEKLY")),
+            Repeat::every(Freq::Weekly)
         );
         assert_eq!(
+            Repeat::from_rrule(Some("FREQ=DAILY;INTERVAL=1")),
+            Repeat::every(Freq::Daily)
+        );
+        assert!(matches!(
             Repeat::from_rrule(Some("FREQ=WEEKLY;BYDAY=MO,WE")),
-            Repeat::Custom("FREQ=WEEKLY;BYDAY=MO,WE".into())
+            Repeat::Rule(_)
+        ));
+        assert_eq!(
+            Repeat::from_rrule(Some("FREQ=MONTHLY;BYDAY=1TU")),
+            Repeat::Custom("FREQ=MONTHLY;BYDAY=1TU".into())
         );
     }
 

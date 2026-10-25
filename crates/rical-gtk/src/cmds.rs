@@ -226,6 +226,40 @@ pub static SPECS: &[Spec] = &[
             "Time-block the selected task, e.g. :schedule tomorrow 14:00 --for 2h",
         )
     },
+    Spec {
+        args: &[Arg {
+            name: "rule",
+            kind: Kind::Text("repeat"),
+            optional: false,
+            rest: true,
+        }],
+        flags: &[
+            Flag {
+                name: "every",
+                kind: Kind::Text("every"),
+                help: "every N days/weeks/...",
+            },
+            Flag {
+                name: "on",
+                kind: Kind::Text("on"),
+                help: "weekdays, e.g. mo,we,fr",
+            },
+            Flag {
+                name: "count",
+                kind: Kind::Text("count"),
+                help: "end after this many times",
+            },
+            Flag {
+                name: "until",
+                kind: DATE,
+                help: "end on this date",
+            },
+        ],
+        ..spec(
+            "repeat",
+            "Make the selected event repeat: none, daily, weekly, monthly, yearly or an RRULE, e.g. :repeat weekly --on mo,we --count 10",
+        )
+    },
     spec("undo", "Undo the last change"),
     spec("redo", "Redo the last undone change"),
     Spec {
@@ -328,6 +362,10 @@ impl Values for StateValues<'_> {
             ],
             "week" => &["fullweek", "workweek", "3days", "4days", "5days"],
             "remind" => &["none", "5m", "10m", "15m", "30m", "1h"],
+            "repeat" => &["none", "daily", "weekly", "monthly", "yearly"],
+            "every" => &["2", "3", "4"],
+            "on" => &["mo,we,fr", "tu,th", "sa,su", "mo,tu,we,th,fr"],
+            "count" => &["5", "10", "20"],
             _ => &[],
         };
         list.iter().map(|s| s.to_string()).collect()

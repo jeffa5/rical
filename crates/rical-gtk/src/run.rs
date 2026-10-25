@@ -8,7 +8,8 @@ use gtk::{gdk, glib};
 use rical_core::{
     Kind, When,
     input::parse_at,
-    write::{Draft, Scope},
+    rule::{End, Freq, Rule, parse_weekday},
+    write::{Draft, Repeat, Scope},
 };
 
 use super::{Window, palette, search};
@@ -181,6 +182,11 @@ impl Window {
                 let shift = parse_shift(text).ok_or(format!("not a duration: “{text}”"))?;
                 self.forced_scope.set(scope(1));
                 self.nudge_selected(shift, p.spec == "resize");
+            }
+            "repeat" => {
+                let today = self.today_date();
+                let repeat = parse_repeat(p, today)?;
+                self.set_repeat(repeat)?;
             }
             "undo" => self.undo(),
             "redo" => self.redo(),
@@ -481,6 +487,57 @@ pub fn key_of(keyval: gdk::Key, mods: gdk::ModifierType) -> Option<Key> {
     })
 }
 
+/// The rule `:repeat` describes.
+fn parse_repeat(p: &Parsed, today: chrono::NaiveDate) -> Result<Repeat, String> {
+    let text = p.arg(0).unwrap().trim();
+    if text.to_ascii_uppercase().starts_with("FREQ=") {
+        return Ok(Repeat::from_rrule(Some(text)));
+    }
+    let freq = match text {
+        "none" | "never" => return Ok(Repeat::None),
+        _ => Freq::ALL
+            .into_iter()
+            .find(|f| f.name() == text)
+            .ok_or(format!(
+                "“{text}”: say none, daily, weekly, monthly, yearly or an RRULE"
+            ))?,
+    };
+    let mut rule = Rule::new(freq);
+    if let Some(n) = p.flag("every") {
+        rule.interval = n
+            .parse()
+            .ok()
+            .filter(|n| *n >= 1)
+            .ok_or(format!("--every: not a number: “{n}”"))?;
+    }
+    if let Some(days) = p.flag("on") {
+        if freq != Freq::Weekly {
+            return Err("--on only goes with weekly".into());
+        }
+        rule.weekdays = days
+            .split(',')
+            .map(|d| parse_weekday(d).ok_or(format!("--on: not a weekday: “{d}”")))
+            .collect::<Result<_, _>>()?;
+    }
+    match (p.flag("count"), p.flag("until")) {
+        (Some(_), Some(_)) => return Err("give --count or --until, not both".into()),
+        (Some(n), None) => {
+            rule.end = End::Count(
+                n.parse()
+                    .ok()
+                    .filter(|n| *n >= 1)
+                    .ok_or(format!("--count: not a number: “{n}”"))?,
+            )
+        }
+        (None, Some(d)) => {
+            rule.end =
+                End::Until(parse_date(d, today).ok_or(format!("--until: not a date: “{d}”"))?)
+        }
+        (None, None) => {}
+    }
+    Ok(Repeat::Rule(rule))
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -503,5 +560,30 @@ mod tests {
         assert_eq!(k(gdk::Key::bracketright, M::empty()).as_deref(), Some("]"));
         assert_eq!(k(gdk::Key::_1, M::ALT_MASK).as_deref(), Some("<A-1>"));
         assert_eq!(k(gdk::Key::Shift_L, M::empty()), None);
+    }
+
+    #[test]
+    fn repeat_commands() {
+        let today = chrono::NaiveDate::from_ymd_opt(2025, 3, 1).unwrap();
+        let rep = |line: &str| {
+            let p = REGISTRY.parse(line, cmds::ALL).map_err(|e| e.to_string())?;
+            parse_repeat(&p, today)
+        };
+        let Ok(Repeat::Rule(r)) = rep("repeat weekly --on mo,we --count 3") else {
+            panic!()
+        };
+        assert_eq!(r.to_string(), "every week on Mon, Wed, 3 times");
+        let Ok(Repeat::Rule(r)) = rep("repeat monthly --every 2 --until 2025-12-31") else {
+            panic!()
+        };
+        assert_eq!(r.to_string(), "every 2 months, until 31 Dec 2025");
+        assert_eq!(rep("repeat none"), Ok(Repeat::None));
+        assert!(matches!(
+            rep("repeat FREQ=MONTHLY;BYDAY=1TU"),
+            Ok(Repeat::Custom(_))
+        ));
+        assert!(rep("repeat daily --on mo").is_err());
+        assert!(rep("repeat fortnightly").is_err());
+        assert!(rep("repeat weekly --count 2 --until fri").is_err());
     }
 }
