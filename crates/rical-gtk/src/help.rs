@@ -178,12 +178,13 @@ fn entry(title: String, subtitle: String, keys: Vec<Vec<Key>>, extra: &str) -> E
 }
 
 /// The view sections and what to call them.
-const VIEWS: [(&str, &str); 5] = [
+const VIEWS: [(&str, &str); 6] = [
     ("grid", "Day and week"),
     ("month", "Month"),
     ("agenda", "Agenda"),
     ("tasks", "Tasks"),
     ("invitations", "Invitations"),
+    ("journal", "Journal"),
 ];
 
 /// The command an action runs with nothing else given, if it is just

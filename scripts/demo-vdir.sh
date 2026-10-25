@@ -91,4 +91,14 @@ item personal BEGIN:VEVENT UID:housewarming DTSTAMP:20250101T000000Z \
   "LOCATION:12 Mill Lane" \
   "ORGANIZER;CN=Jo Park:mailto:jo@example.com" \
   "ATTENDEE;CN=Demo User;PARTSTAT=TENTATIVE:mailto:me@example.com" END:VEVENT
+
+# journal entries (as jtx Board writes them): dated, and an undated note
+item personal BEGIN:VJOURNAL UID:journal-run DTSTAMP:20250101T000000Z CREATED:20250101T000000Z \
+  "DTSTART;VALUE=DATE:$(day 1)" "SUMMARY:First 10k" STATUS:FINAL \
+  "DESCRIPTION:First 10k\nRan the river loop in 58 minutes. Knees fine.\nNext: try the hill route." END:VJOURNAL
+item work BEGIN:VJOURNAL UID:journal-review DTSTAMP:20250101T000000Z CREATED:20250101T000000Z \
+  "DTSTART;VALUE=DATE:$(day 2)" "SUMMARY:Design review notes" STATUS:FINAL \
+  "DESCRIPTION:Agreed to ship the sync engine behind a flag.\nPriya to write the migration plan." END:VJOURNAL
+item personal BEGIN:VJOURNAL UID:note-gifts DTSTAMP:20250101T000000Z "CREATED:$(day 0)T090000Z" \
+  STATUS:FINAL "DESCRIPTION:Gift ideas\nJo: climbing chalk bag\nKim: a good bread knife" END:VJOURNAL
 echo "$out"

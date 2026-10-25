@@ -33,6 +33,7 @@ use crate::{
     details, format,
     grid::{DragAction, TimeGrid},
     invitations::{InvitationsView, OnReply},
+    journals::JournalsView,
     layout::ViewKind,
     minimonth::MiniMonth,
     month::MonthView,
@@ -58,6 +59,7 @@ pub struct Window {
     month: Rc<MonthView>,
     agenda: Rc<AgendaView>,
     invitations: Rc<InvitationsView>,
+    journals: Rc<JournalsView>,
     tasks: Rc<TasksView>,
     side_tasks: Rc<SideTasks>,
     /// The collapsible sidebar sections.
@@ -172,6 +174,7 @@ impl Window {
         let month = MonthView::new(state.clone(), on_change.clone());
         let agenda = AgendaView::new(state.clone(), on_change.clone(), on_toggle.clone());
         let invitations = InvitationsView::new(state.clone(), on_change.clone(), on_reply);
+        let journals = JournalsView::new(state.clone(), on_change.clone());
         let side_tasks = SideTasks::new(state.clone(), on_toggle.clone());
         let tasks = TasksView::new(state.clone(), on_change.clone(), on_toggle);
 
@@ -184,6 +187,7 @@ impl Window {
         views.add_named(&agenda.widget, Some("agenda"));
         views.add_named(&tasks.widget, Some("tasks"));
         views.add_named(&invitations.widget, Some("invitations"));
+        views.add_named(&journals.widget, Some("journal"));
 
         let title = adw::WindowTitle::new("", "");
 
@@ -394,6 +398,7 @@ impl Window {
             month,
             agenda,
             invitations,
+            journals,
             tasks,
             side_tasks,
             sections,
@@ -525,6 +530,13 @@ impl Window {
     }
 
     fn select_relative(&self, forward: bool) {
+        // the task and journal lists are not by date: step through them
+        let view = self.state.borrow().view;
+        match view {
+            ViewKind::Tasks => return self.tasks.step(forward),
+            ViewKind::Journal => return self.journals.step(forward),
+            _ => {}
+        }
         self.state.borrow_mut().select_relative(forward);
         self.refresh();
         self.grid.reveal_selected();
@@ -539,7 +551,17 @@ impl Window {
             ViewKind::Month => self.month.show_selected_details(),
             ViewKind::Agenda => self.agenda.show_selected_details(),
             ViewKind::Invitations => self.invitations.show_selected_details(),
-            ViewKind::Tasks => {}
+            ViewKind::Tasks | ViewKind::Journal => {
+                let row = if view == ViewKind::Tasks {
+                    self.tasks.selected_row()
+                } else {
+                    self.journals.selected_row()
+                };
+                if let (Some(row), Some(occ)) = (row, self.current_item()) {
+                    let rect = gtk::gdk::Rectangle::new(0, 0, row.width(), row.height());
+                    details::show(&row, rect, &occ, &self.state.borrow());
+                }
+            }
         }
     }
 
@@ -547,12 +569,13 @@ impl Window {
     /// that was just switched to cannot take focus yet.
     fn focus_view(&self) {
         let view = self.state.borrow().view;
-        let (grid, month, agenda, tasks, invitations) = (
+        let (grid, month, agenda, tasks, invitations, journals) = (
             self.grid.clone(),
             self.month.clone(),
             self.agenda.clone(),
             self.tasks.clone(),
             self.invitations.clone(),
+            self.journals.clone(),
         );
         glib::idle_add_local_once(move || match view {
             ViewKind::Day | ViewKind::Week | ViewKind::WorkWeek | ViewKind::Days(_) => grid.focus(),
@@ -560,6 +583,7 @@ impl Window {
             ViewKind::Agenda => agenda.focus(),
             ViewKind::Tasks => tasks.focus(),
             ViewKind::Invitations => invitations.focus(),
+            ViewKind::Journal => journals.focus(),
         });
     }
 
@@ -703,6 +727,10 @@ impl Window {
             ViewKind::Invitations => {
                 self.views.set_visible_child_name("invitations");
                 self.invitations.refresh();
+            }
+            ViewKind::Journal => {
+                self.views.set_visible_child_name("journal");
+                self.journals.refresh();
             }
         }
 
@@ -955,6 +983,7 @@ fn view_toggles(state: &SharedState) -> (adw::ToggleGroup, gtk::Label) {
     );
     for (name, text, tooltip) in [
         ("tasks", "Tasks", "Tasks (T)"),
+        ("journal", "Journal", "Journal entries and notes (E)"),
         (
             "invitations",
             "Invites",

@@ -262,7 +262,7 @@ impl AgendaView {
 
         let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
         let title = match o.kind {
-            Kind::Todo => format::label(o, state.local),
+            Kind::Todo | Kind::Journal => format::label(o, state.local),
             _ => o.summary.clone(),
         };
         let title = gtk::Label::builder()

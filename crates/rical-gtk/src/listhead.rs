@@ -31,3 +31,24 @@ pub fn label(text: &str) -> gtk::Label {
         .margin_start(6)
         .build()
 }
+
+/// Select the next (or previous) selectable row after the selected one,
+/// or the first, and give it focus.
+pub fn step(list: &gtk::ListBox, forward: bool) {
+    let mut i = match list.selected_row() {
+        Some(r) if forward => r.index() + 1,
+        Some(r) => r.index() - 1,
+        None => 0,
+    };
+    while i >= 0 {
+        let Some(row) = list.row_at_index(i) else {
+            return;
+        };
+        if row.is_selectable() {
+            list.select_row(Some(&row));
+            row.grab_focus();
+            return;
+        }
+        i += if forward { 1 } else { -1 };
+    }
+}

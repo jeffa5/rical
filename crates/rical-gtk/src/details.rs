@@ -82,7 +82,14 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
         ));
     }
 
-    if let Some(status) = &occ.status {
+    // only a status that says something: not the usual confirmed, final
+    // or still to do
+    if let Some(status) = occ.status.as_ref().filter(|s| {
+        !matches!(
+            s.to_ascii_uppercase().as_str(),
+            "CONFIRMED" | "FINAL" | "NEEDS-ACTION"
+        )
+    }) {
         content.append(&row("dialog-information-symbolic", &status.to_lowercase()));
     }
     if let Some(location) = occ.location.as_deref().filter(|l| !l.is_empty()) {

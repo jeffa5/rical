@@ -258,6 +258,15 @@ impl TasksView {
         }
     }
 
+    /// Select the next or previous task (j and k).
+    pub fn step(&self, forward: bool) {
+        listhead::step(&self.list, forward);
+    }
+
+    pub fn selected_row(&self) -> Option<gtk::ListBoxRow> {
+        self.list.selected_row()
+    }
+
     /// A task's row, `depth` levels in as a subtask; `progress` is how many
     /// of its own subtasks are done, of how many.
     fn row(

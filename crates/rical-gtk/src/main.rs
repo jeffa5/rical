@@ -19,6 +19,7 @@ mod grid;
 mod guests;
 mod help;
 mod invitations;
+mod journals;
 mod layout;
 mod listhead;
 mod minimonth;

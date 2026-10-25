@@ -278,6 +278,12 @@ pub fn open(
     when.add(&all_day);
     when.add(&starts);
     when.add(&ends);
+    // a journal entry is dated, not timed: no end, no guests or call
+    if draft.kind == Kind::Journal {
+        ends.set_visible(false);
+        zones.end.set_visible(false);
+        video.set_visible(false);
+    }
     when.add(&zones.start);
     when.add(&zones.end);
     for row in repeat.rows() {
@@ -431,7 +437,8 @@ pub fn open(
             let task = kind == Kind::Todo;
             let (start_text, end_text) = (starts.text(), ends.text());
             let has_start = !(task && start_text.trim().is_empty());
-            let has_due = !(task && end_text.trim().is_empty());
+            // a journal entry has only its date
+            let has_due = kind != Kind::Journal && !(task && end_text.trim().is_empty());
             // times are read in their zones; all-day ones are plain dates
             let start = if !has_start {
                 None

@@ -106,7 +106,8 @@ impl Window {
             },
             "open" => {
                 let view = self.state.borrow().view;
-                if self.state.borrow().selected.is_some() {
+                // tasks and journal entries are chosen in their own lists
+                if !view.is_calendar() || self.state.borrow().selected.is_some() {
                     self.show_details();
                 } else if view != ViewKind::Day {
                     self.set_view(ViewKind::Day);

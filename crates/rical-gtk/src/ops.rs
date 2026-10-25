@@ -368,6 +368,7 @@ impl Window {
                 title: match (occ.kind, occ.recurring) {
                     (Kind::Todo, true) => "Edit Repeating Task",
                     (Kind::Todo, false) => "Edit Task",
+                    (Kind::Journal, _) => "Edit Journal Entry",
                     (_, true) => "Edit Repeating Event",
                     _ => "Edit Event",
                 },
@@ -486,6 +487,15 @@ impl Window {
     /// otherwise the selected occurrence.
     pub(super) fn current_item(&self) -> Option<Occurrence> {
         let state = self.state.borrow();
+        if state.view == ViewKind::Journal {
+            let (path, uid) = state.selected_journal.as_ref()?;
+            return state
+                .vdir
+                .journals()
+                .into_iter()
+                .find(|(o, _)| o.path == *path && o.uid == *uid)
+                .map(|(o, _)| o);
+        }
         if state.view != ViewKind::Tasks {
             return state.selected_occurrence();
         }

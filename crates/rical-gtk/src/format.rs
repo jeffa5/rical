@@ -3,7 +3,7 @@
 use adw::prelude::*;
 use chrono::{Datelike, NaiveDate};
 use chrono_tz::Tz;
-use rical_core::{Occurrence, Rgb, When};
+use rical_core::{Kind, Occurrence, Rgb, When};
 
 use crate::{
     draw,
@@ -96,6 +96,7 @@ pub fn view_title(view: ViewKind, date: NaiveDate, days: &[NaiveDate]) -> (Strin
             "Invitations".to_owned(),
             "Waiting for your reply".to_owned(),
         ),
+        ViewKind::Journal => ("Journal".to_owned(), String::new()),
     }
 }
 
@@ -137,6 +138,9 @@ pub fn is_inactive(o: &Occurrence) -> bool {
 /// The text to show for an occurrence; overdue tasks say when they were
 /// due. Views draw the task circle themselves.
 pub fn label(o: &Occurrence, local: Tz) -> String {
+    if o.kind == Kind::Journal {
+        return format!("✎ {}", journal_title(o));
+    }
     let mut t = o.summary.clone();
     if is_overdue(o, local)
         && let Some(due) = o.due
@@ -144,6 +148,18 @@ pub fn label(o: &Occurrence, local: Tz) -> String {
         t += &format!(" (due {})", due.date(local).format("%-d %b"));
     }
     t
+}
+
+/// A journal entry's title: its summary, else the first line of its text.
+pub fn journal_title(o: &Occurrence) -> String {
+    let title = o.summary.trim();
+    if !title.is_empty() {
+        return title.to_owned();
+    }
+    o.description
+        .as_deref()
+        .and_then(|d| d.lines().map(str::trim).find(|l| !l.is_empty()))
+        .map_or_else(|| "(untitled)".to_owned(), str::to_owned)
 }
 
 pub fn is_done(o: &Occurrence) -> bool {

@@ -183,7 +183,7 @@ fn find(w: &Window, query: &str) -> Vec<Hit> {
     let range = layout::days_range(&days(today), local);
     let mut occ = state
         .vdir
-        .query(&range, &[Kind::Event, Kind::Todo], local)
+        .query(&range, &[Kind::Event, Kind::Todo, Kind::Journal], local)
         .into_iter()
         .filter(|o| !state.hidden.contains(&o.calendar) && matches(o, &q))
         .collect::<Vec<_>>();

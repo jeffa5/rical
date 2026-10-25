@@ -19,6 +19,8 @@ pub enum ViewKind {
     Month,
     Agenda,
     Tasks,
+    /// Journal entries and notes.
+    Journal,
     /// Upcoming invitations waiting for my answer.
     Invitations,
 }
@@ -36,6 +38,7 @@ impl ViewKind {
             Self::Agenda => "agenda".into(),
             Self::Tasks => "tasks".into(),
             Self::Invitations => "invitations".into(),
+            Self::Journal => "journal".into(),
         }
     }
 
@@ -49,6 +52,7 @@ impl ViewKind {
             "agenda" => Self::Agenda,
             "tasks" => Self::Tasks,
             "invitations" | "invites" => Self::Invitations,
+            "journal" | "journals" | "notes" => Self::Journal,
             other => {
                 let n: u8 = other.strip_suffix("days")?.parse().ok()?;
                 if !(2..=14).contains(&n) {
@@ -65,13 +69,14 @@ impl ViewKind {
         match self {
             Self::Tasks => "tasks",
             Self::Invitations => "invitations",
+            Self::Journal => "journal",
             _ => "calendar",
         }
     }
 
     /// A view of the calendar by date, as opposed to tasks or invitations.
     pub fn is_calendar(self) -> bool {
-        !matches!(self, Self::Tasks | Self::Invitations)
+        !matches!(self, Self::Tasks | Self::Invitations | Self::Journal)
     }
 
     /// What the calendar view menu calls it.
@@ -85,6 +90,7 @@ impl ViewKind {
             Self::Agenda => "Agenda".into(),
             Self::Tasks => "Tasks".into(),
             Self::Invitations => "Invitations".into(),
+            Self::Journal => "Journal".into(),
         }
     }
 
@@ -125,7 +131,7 @@ pub fn visible_days(view: ViewKind, date: NaiveDate) -> Vec<NaiveDate> {
         ViewKind::Month => (week_start(date.with_day(1).unwrap()), 42),
         ViewKind::Agenda => (date, AGENDA_DAYS),
         // tasks are not by date; the focused day still matters for "today"
-        ViewKind::Tasks => (date, 1),
+        ViewKind::Tasks | ViewKind::Journal => (date, 1),
         ViewKind::Invitations => (date, INVITATION_DAYS),
     };
     (0..n).map(|i| first + Days::new(i)).collect()
@@ -145,7 +151,7 @@ pub fn step(view: ViewKind, date: NaiveDate, forward: bool) -> NaiveDate {
         ViewKind::Week | ViewKind::WorkWeek => shift(date, 7),
         ViewKind::Days(n) => shift(date, n as u64),
         ViewKind::Agenda => shift(date, AGENDA_DAYS),
-        ViewKind::Tasks | ViewKind::Invitations => date,
+        ViewKind::Tasks | ViewKind::Invitations | ViewKind::Journal => date,
         ViewKind::Month => {
             let months = chrono::Months::new(1);
             if forward {
@@ -188,7 +194,8 @@ pub fn days_range(days: &[NaiveDate], local: Tz) -> Range<DateTime<Utc>> {
 
 /// Whether an occurrence belongs in the all-day row rather than the grid.
 pub fn is_all_day_row(o: &Occurrence) -> bool {
-    o.all_day || o.duration() >= TimeDelta::days(1)
+    // journal entries are about their day, whatever time they were written
+    o.all_day || o.kind == rical_core::Kind::Journal || o.duration() >= TimeDelta::days(1)
 }
 
 /// The days `o` covers, as indices into `days`, clipped to them.

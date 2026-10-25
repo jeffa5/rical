@@ -316,8 +316,9 @@ impl<'a> Fields<'a> {
                 .and_then(parse_duration)
             {
                 Some(d) => d.max(TimeDelta::zero()),
-                // RFC 5545: an event with a DATE start and no end lasts one day
-                None if start.is_date() && kind == Kind::Event => TimeDelta::days(1),
+                // RFC 5545: an event with a DATE start and no end lasts one
+                // day; a journal entry dated so is about that day
+                None if start.is_date() && kind != Kind::Todo => TimeDelta::days(1),
                 None => TimeDelta::zero(),
             },
         };
@@ -635,6 +636,47 @@ impl Occurrence {
                     base.to_utc(local) + *offset
                 }
             })
+            .collect()
+    }
+}
+
+/// A journal entry (VJOURNAL) as an occurrence, and whether it is dated:
+/// at its DTSTART, or for an undated note (as jtx Board keeps them) at
+/// when it was written, for ordering.
+pub fn journal_entry(calendar: &str, component: &AnyComponent) -> Option<(Occurrence, bool)> {
+    if component.component_kind() != "VJOURNAL" || component.prop("RECURRENCE-ID").is_some() {
+        return None;
+    }
+    let dated = component.prop("DTSTART").and_then(When::from_property);
+    let start = dated.or_else(|| {
+        let written = component
+            .get_created()
+            .or_else(|| component.get_timestamp())?;
+        Some(When::Zoned(written.with_timezone(&Tz::UTC)))
+    })?;
+    let fields = Fields {
+        component,
+        kind: Kind::Journal,
+        uid: component.get_uid().unwrap_or_default().to_owned(),
+        start,
+        duration: if start.is_date() {
+            TimeDelta::days(1)
+        } else {
+            TimeDelta::zero()
+        },
+    };
+    let recurring = fields.is_recurring();
+    Some((
+        fields.occurrence(calendar, start, None, recurring),
+        dated.is_some(),
+    ))
+}
+
+impl crate::Vdir {
+    /// Every journal entry, dated or not (first instances only).
+    pub fn journals(&self) -> Vec<(Occurrence, bool)> {
+        self.components()
+            .filter_map(|(cal, c)| journal_entry(&cal.id, c))
             .collect()
     }
 }

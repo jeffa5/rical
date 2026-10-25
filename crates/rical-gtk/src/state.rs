@@ -49,6 +49,8 @@ pub struct State {
     pub selected: Option<OccurrenceKey>,
     /// In the tasks view: (file, UID) of the selected task.
     pub selected_task: Option<(std::path::PathBuf, String)>,
+    /// The journal entry selected in the journal view, as (file, UID).
+    pub selected_journal: Option<(std::path::PathBuf, String)>,
     /// Calendar new items go in; the last one used.
     pub last_calendar: Option<String>,
     /// Each entry is the file changes one action made.
@@ -112,6 +114,7 @@ impl State {
             date,
             selected: None,
             selected_task: None,
+            selected_journal: None,
             last_calendar: None,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -300,7 +303,11 @@ impl State {
         }
         let mut occurrences = self
             .vdir
-            .query(&range, &[Kind::Event, Kind::Todo], self.local)
+            .query(
+                &range,
+                &[Kind::Event, Kind::Todo, Kind::Journal],
+                self.local,
+            )
             .into_iter()
             .filter(|o| !self.hidden.contains(&o.calendar))
             .collect::<Vec<_>>();
