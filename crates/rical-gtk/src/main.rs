@@ -61,8 +61,8 @@ struct Args {
     #[clap(long, env = "RICAL_REMIND")]
     remind: Option<String>,
 
-    /// Do not show reminders.
-    #[clap(long)]
+    /// Do not show reminders (e.g. when `rical remind` runs as a service).
+    #[clap(long, env = "RICAL_NO_NOTIFICATIONS")]
     no_notifications: bool,
 }
 

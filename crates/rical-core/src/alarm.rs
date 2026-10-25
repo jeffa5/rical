@@ -62,3 +62,67 @@ impl Vdir {
         out
     }
 }
+
+impl Alarm {
+    /// Notification text: the title, then when (relative and absolute)
+    /// and where.
+    pub fn describe(&self, now: DateTime<Utc>, local: Tz) -> (String, String) {
+        let o = &self.occurrence;
+        let mut title = o.summary.clone();
+        if o.kind == Kind::Todo {
+            title = format!("☐ {title}");
+        }
+        let start = o.start.to_tz(local);
+        let mut body = vec![relative(o.start.to_utc(local) - now, o.all_day)];
+        body.push(if o.all_day {
+            start.format("%a %-d %b, all day").to_string()
+        } else if o.start == o.end {
+            start.format("%a %-d %b, %H:%M").to_string()
+        } else {
+            format!(
+                "{} – {}",
+                start.format("%a %-d %b, %H:%M"),
+                o.end.to_tz(local).format("%H:%M")
+            )
+        });
+        if let Some(loc) = o.location.as_deref().filter(|l| !l.is_empty()) {
+            body.push(loc.to_owned());
+        }
+        (title, body.join("\n"))
+    }
+}
+
+/// "in 30 min", "starting now", "started 5 min ago"; for all-day items
+/// "today", "tomorrow" or "in N days".
+pub fn relative(until: TimeDelta, all_day: bool) -> String {
+    if all_day {
+        return match until.num_hours() {
+            h if h <= 0 => "today".to_owned(),
+            h if h < 24 => "tomorrow".to_owned(),
+            h => format!("in {} days", h / 24),
+        };
+    }
+    match until.num_minutes() {
+        m if m.abs() < 1 => "starting now".to_owned(),
+        m if m > 0 && m < 120 => format!("in {m} min"),
+        m if m > 0 && m < 48 * 60 => format!("in {} h {} min", m / 60, m % 60),
+        m if m > 0 => format!("in {} days", m / (24 * 60)),
+        m => format!("started {} min ago", -m),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relative_times() {
+        assert_eq!(relative(TimeDelta::minutes(30), false), "in 30 min");
+        assert_eq!(relative(TimeDelta::seconds(20), false), "starting now");
+        assert_eq!(relative(TimeDelta::minutes(150), false), "in 2 h 30 min");
+        assert_eq!(relative(TimeDelta::days(14), false), "in 14 days");
+        assert_eq!(relative(-TimeDelta::minutes(5), false), "started 5 min ago");
+        assert_eq!(relative(-TimeDelta::hours(9), true), "today");
+        assert_eq!(relative(TimeDelta::days(14), true), "in 14 days");
+    }
+}

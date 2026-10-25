@@ -64,6 +64,10 @@
       ...
     }: let
       cfg = config.programs.rical;
+      vdirPath =
+        if cfg.vdir == null
+        then null
+        else builtins.replaceStrings ["~/"] ["${config.home.homeDirectory}/"] cfg.vdir;
     in {
       options.programs.rical = {
         enable = lib.mkEnableOption "rical, a calendar for a vdir";
@@ -96,6 +100,11 @@
           example = "10m";
           description = "Remind this long before timed events without alarms of their own.";
         };
+        reminders = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = "Run `rical remind` as a user service so reminders arrive without rical-gtk open (rical-gtk then leaves reminders to it).";
+        };
         binds = lib.mkOption {
           type = lib.types.lines;
           default = "";
@@ -115,13 +124,35 @@
             nativeBuildInputs = [pkgs.makeWrapper];
             postBuild = ''
               wrapProgram $out/bin/rical-gtk \
-                ${lib.optionalString (cfg.vdir != null) "--set-default RICAL_VDIR ${lib.escapeShellArg (builtins.replaceStrings ["~/"] ["${config.home.homeDirectory}/"] cfg.vdir)}"} \
+                ${lib.optionalString (cfg.vdir != null) "--set-default RICAL_VDIR ${lib.escapeShellArg vdirPath}"} \
                 ${lib.optionalString (cfg.calendar != null) "--set-default RICAL_CALENDAR ${lib.escapeShellArg cfg.calendar}"} \
                 ${lib.optionalString (cfg.remind != null) "--set-default RICAL_REMIND ${lib.escapeShellArg cfg.remind}"} \
-                ${lib.optionalString (cfg.week != null) "--set-default RICAL_WEEK ${lib.escapeShellArg cfg.week}"}
+                ${lib.optionalString (cfg.week != null) "--set-default RICAL_WEEK ${lib.escapeShellArg cfg.week}"} \
+                ${lib.optionalString cfg.reminders "--set-default RICAL_NO_NOTIFICATIONS true"}
             '';
           })
         ];
+        assertions = [
+          {
+            assertion = cfg.reminders -> cfg.vdir != null;
+            message = "programs.rical.reminders needs programs.rical.vdir";
+          }
+        ];
+        systemd.user.services.rical-remind = lib.mkIf cfg.reminders {
+          Unit = {
+            Description = "rical reminders";
+            PartOf = ["graphical-session.target"];
+            After = ["graphical-session.target"];
+          };
+          Service = {
+            ExecStart = lib.escapeShellArgs (
+              ["${cfg.package}/bin/rical" "remind" vdirPath]
+              ++ lib.optionals (cfg.remind != null) ["--remind" cfg.remind]
+            );
+            Restart = "on-failure";
+          };
+          Install.WantedBy = ["graphical-session.target"];
+        };
         xdg.configFile."rical/binds.conf" = lib.mkIf (cfg.binds != "") {
           text = cfg.binds;
         };

@@ -15,6 +15,7 @@ mod edit;
 mod format;
 mod list;
 mod pretty;
+mod remind;
 mod show;
 mod stats;
 #[allow(dead_code)]
@@ -161,6 +162,17 @@ enum Subcommand {
         #[clap(long)]
         id: String,
     },
+    /// Show reminders as desktop notifications, checking every 30 seconds.
+    Remind {
+        vdir: PathBuf,
+        /// Also remind this long before timed events with no alarms of
+        /// their own, e.g. 10m.
+        #[clap(long, env = "RICAL_REMIND")]
+        remind: Option<String>,
+        /// Check once (alarms in the last five minutes) and exit.
+        #[clap(long)]
+        once: bool,
+    },
     /// Edit an item's file in $VISUAL or $EDITOR.
     Edit {
         vdir: PathBuf,
@@ -269,6 +281,9 @@ fn main() -> anyhow::Result<()> {
         Subcommand::Done { vdir, id, undo } => edit::done(&vdir, &id, undo)?,
         Subcommand::Delete { vdir, id } => edit::delete(&vdir, &id)?,
         Subcommand::Edit { vdir, id } => edit::edit(&vdir, &id)?,
+        Subcommand::Remind { vdir, remind, once } => {
+            remind::remind(&vdir, remind.as_deref(), once)?
+        }
     }
 
     Ok(())

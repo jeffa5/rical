@@ -15,6 +15,7 @@ log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_plain.workspace = true
+notify-rust = "4.18.2"
 
 [dev-dependencies]
 tempfile = "3.27.0"
