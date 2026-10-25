@@ -22,6 +22,8 @@ pub const HOUR_HEIGHT: f64 = 48.0;
 pub const GUTTER: f64 = 56.0;
 const HEADER_HEIGHT: i32 = 52;
 const LANE_HEIGHT: f64 = 24.0;
+/// The all-day row shows this many lanes before scrolling.
+const MAX_ALL_DAY_LANES: f64 = 4.5;
 /// Short events are drawn at least this long so their title fits.
 const MIN_EVENT_MINUTES: f64 = 22.0;
 /// Drags snap to this many minutes.
@@ -117,7 +119,15 @@ impl TimeGrid {
 
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 0);
         widget.append(&header);
-        widget.append(&all_day);
+        // many all-day items (or carried-over tasks) scroll rather than
+        // squeezing the grid
+        let all_day_scroller = gtk::ScrolledWindow::builder()
+            .child(&all_day)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .max_content_height((MAX_ALL_DAY_LANES * LANE_HEIGHT) as i32 + 6)
+            .build();
+        widget.append(&all_day_scroller);
         widget.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
         widget.append(&scroller);
 
@@ -805,7 +815,8 @@ fn draw_block(
         text_color(cr, 1.0);
         draw::show_layout(cr, &l, x + 7.0, y + (h - draw::layout_height(&l)) / 2.0);
     } else {
-        let one_line = h < 34.0;
+        // short or narrow blocks: one ellipsized line rather than wrapping
+        let one_line = h < 34.0 || w < 64.0;
         let time = format::time(&o.start, state.local);
         if one_line {
             let l = draw::layout(area, &format!("{title}  {time}"), &style, tw, 1);

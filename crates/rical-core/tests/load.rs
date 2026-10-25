@@ -192,3 +192,47 @@ fn stats_counts() {
     // not recursive: the root has no items of its own
     assert_eq!(stats::stats(&[fixtures()], false).total, 0);
 }
+
+#[test]
+fn nested_accounts_and_duplicate_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let ics = std::fs::read_to_string(fixtures().join("home/dinner.ics")).unwrap();
+    for (cal, name) in [
+        ("jeffas/personal", Some("personal")),
+        ("nextcloud/personal", Some("personal")),
+        ("nextcloud/joint", Some("Joint")),
+        ("deep/a/b/misc", None),
+    ] {
+        let d = dir.path().join(cal);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("x.ics"), &ics).unwrap();
+        if let Some(name) = name {
+            std::fs::write(d.join("displayname"), name).unwrap();
+        }
+    }
+    // an empty calendar vdirsyncer has created, and a folder of other files
+    std::fs::create_dir_all(dir.path().join("nextcloud/empty")).unwrap();
+    std::fs::write(dir.path().join("nextcloud/empty/color"), "#ff0000").unwrap();
+    std::fs::create_dir_all(dir.path().join("notes")).unwrap();
+    std::fs::write(dir.path().join("notes/readme.txt"), "hi").unwrap();
+
+    let vdir = Vdir::load(dir.path()).unwrap();
+    let cals = vdir
+        .calendars
+        .iter()
+        .map(|c| (c.id.as_str(), c.name.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cals,
+        [
+            ("deep/a/b/misc", "misc"),
+            ("jeffas/personal", "jeffas/personal"),
+            ("nextcloud/empty", "empty"),
+            ("nextcloud/joint", "Joint"),
+            ("nextcloud/personal", "nextcloud/personal"),
+        ]
+    );
+    assert!(vdir.dirs.contains(&dir.path().join("notes")));
+    // items from every calendar are loaded
+    assert_eq!(vdir.components().count(), 4);
+}

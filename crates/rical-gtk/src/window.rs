@@ -505,9 +505,24 @@ impl Window {
                 w.refresh();
             });
             let row = adw::ActionRow::builder()
-                .title(&cal.name)
+                .title(&cal.label)
+                .title_lines(1)
+                .subtitle_lines(1)
                 .activatable_widget(&check)
+                .tooltip_text(cal.path.display().to_string())
                 .build();
+            // the folder it is in (an account, say), when nested
+            if let Some((parent, _)) = cal.id.rsplit_once('/') {
+                row.set_subtitle(parent);
+            }
+            let info = gtk::MenuButton::builder()
+                .icon_name("dialog-information-symbolic")
+                .tooltip_text("About this calendar")
+                .valign(gtk::Align::Center)
+                .css_classes(["flat"])
+                .popover(&calendar_info(cal, &state))
+                .build();
+            row.add_suffix(&info);
             row.add_prefix(&format::color_dot(state.color(&cal.id), 12));
             if i < 9 {
                 row.add_suffix(
@@ -623,16 +638,20 @@ impl Window {
     fn watch(self: &Rc<Self>) {
         let mut monitors = Vec::new();
         let state = self.state.borrow();
-        let root = state.vdir.root.clone();
-        let dirs = std::iter::once((root.clone(), true)).chain(
-            state
-                .vdir
-                .calendars
-                .iter()
-                .filter(|c| c.path != root)
-                .map(|c| (c.path.clone(), false)),
-        );
-        for (dir, is_root) in dirs {
+        // every folder under the root: in calendars, items reload one by one;
+        // anywhere else (a new calendar or account), everything reloads
+        let dirs = state
+            .vdir
+            .dirs
+            .iter()
+            .map(|d| {
+                (
+                    d.clone(),
+                    !state.vdir.calendars.iter().any(|c| &c.path == d),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (dir, not_calendar) in dirs {
             let file = gio::File::for_path(&dir);
             let monitor = match file.monitor_directory(
                 gio::FileMonitorFlags::WATCH_MOVES,
@@ -660,7 +679,7 @@ impl Window {
                     .filter_map(|f| f.path());
                 for path in paths {
                     let is_item = path.extension().is_some_and(|e| e == "ics");
-                    if is_root || !is_item {
+                    if not_calendar || !is_item {
                         // a calendar was added or removed, or its metadata changed
                         w.reload_all_pending.set(true);
                     } else {
@@ -715,4 +734,68 @@ fn state_days(state: &crate::state::State) -> Option<(chrono::NaiveDate, usize)>
         let days = state.visible_days();
         (days[0], days.len())
     })
+}
+
+/// Details of a calendar: where it is on disk and what it holds.
+fn calendar_info(cal: &rical_core::Calendar, state: &crate::state::State) -> gtk::Popover {
+    let items = state
+        .vdir
+        .components()
+        .filter(|(c, _)| c.id == cal.id)
+        .map(|(_, comp)| comp.path().to_owned())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let grid = gtk::Grid::builder()
+        .row_spacing(6)
+        .column_spacing(12)
+        .margin_top(6)
+        .margin_bottom(6)
+        .margin_start(6)
+        .margin_end(6)
+        .build();
+    let color = state.color(&cal.id).to_string();
+    let rows = [
+        ("Name", cal.name.clone()),
+        ("Folder", cal.id.clone()),
+        ("Path", cal.path.display().to_string()),
+        ("Items", items.to_string()),
+        ("Colour", color),
+    ];
+    for (i, (key, value)) in rows.iter().enumerate() {
+        grid.attach(
+            &gtk::Label::builder()
+                .label(*key)
+                .css_classes(["dim-label"])
+                .xalign(1.0)
+                .build(),
+            0,
+            i as i32,
+            1,
+            1,
+        );
+        grid.attach(
+            &gtk::Label::builder()
+                .label(value)
+                .selectable(true)
+                .wrap(true)
+                .max_width_chars(48)
+                .xalign(0.0)
+                .build(),
+            1,
+            i as i32,
+            1,
+            1,
+        );
+    }
+    let open = gtk::Button::builder()
+        .label("Open folder")
+        .halign(gtk::Align::Start)
+        .build();
+    let uri = gio::File::for_path(&cal.path).uri().to_string();
+    open.connect_clicked(move |b| {
+        let window = b.root().and_downcast::<gtk::Window>();
+        crate::details::open_uri(window.as_ref(), &uri);
+    });
+    grid.attach(&open, 1, rows.len() as i32, 1, 1);
+    gtk::Popover::builder().child(&grid).build()
 }

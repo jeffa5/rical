@@ -63,24 +63,36 @@ impl Serialize for Rgb {
 /// One collection in a vdir.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Calendar {
-    /// Folder name, stable across runs.
+    /// Path relative to the vdir root, e.g. "nextcloud/personal"; stable
+    /// across runs.
     pub id: String,
     pub path: PathBuf,
-    /// From the `displayname` file, falling back to the id.
+    /// From the `displayname` file, falling back to the folder name; the
+    /// whole relative path when names would otherwise clash.
     pub name: String,
+    /// The display name or folder name alone, even when it clashes.
+    pub label: String,
     /// From the `color` file.
     pub color: Option<Rgb>,
 }
 
 impl Calendar {
-    pub fn load(path: &Path) -> anyhow::Result<Self> {
-        let id = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .with_context(|| format!("calendar path has no name: {path:?}"))?
-            .to_owned();
-
-        let name = read_metadata(path, "displayname").unwrap_or_else(|| id.clone());
+    /// The calendar in folder `path` under the vdir `root`.
+    pub fn load(path: &Path, root: &Path) -> anyhow::Result<Self> {
+        let id = match path.strip_prefix(root) {
+            Ok(rel) if !rel.as_os_str().is_empty() => rel
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/"),
+            _ => path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .with_context(|| format!("calendar path has no name: {path:?}"))?
+                .to_owned(),
+        };
+        let folder = id.rsplit('/').next().unwrap_or(&id).to_owned();
+        let label = read_metadata(path, "displayname").unwrap_or(folder);
         let color = read_metadata(path, "color").and_then(|c| match c.parse() {
             Ok(c) => Some(c),
             Err(e) => {
@@ -92,7 +104,8 @@ impl Calendar {
         Ok(Self {
             id,
             path: path.to_owned(),
-            name,
+            name: label.clone(),
+            label,
             color,
         })
     }
@@ -128,6 +141,8 @@ pub struct Vdir {
     pub root: PathBuf,
     /// Sorted by id.
     pub calendars: Vec<Calendar>,
+    /// Every folder scanned (the root and those under it), for watching.
+    pub dirs: Vec<PathBuf>,
     /// Parsed components of each item, by path.
     items: BTreeMap<PathBuf, Vec<AnyComponent>>,
 }
@@ -143,31 +158,43 @@ impl fmt::Debug for Vdir {
 }
 
 impl Vdir {
-    /// Load the calendars under `root`. Each non-hidden subdirectory is a
-    /// calendar. If there are none, `root` itself is treated as one calendar.
+    /// Find the calendars under `root`: every folder (at any depth, skipping
+    /// hidden ones) that holds `.ics` items or vdir metadata (`displayname`,
+    /// `color`). If there are none, `root` itself is one, empty, calendar.
     pub fn load(root: impl AsRef<Path>) -> anyhow::Result<Self> {
         let root = root.as_ref();
         if !root.is_dir() {
             anyhow::bail!("vdir root is not a directory: {root:?}");
         }
 
-        let mut calendars = read_dir(root)
-            .with_context(|| format!("reading vdir {root:?}"))?
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| p.is_dir() && !is_hidden(p))
-            .map(|p| Calendar::load(&p))
+        let mut dirs = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        scan(root, 0, &mut dirs, &mut seen);
+        let mut calendars = dirs
+            .iter()
+            .filter(|d| is_calendar_dir(d))
+            .map(|d| Calendar::load(d, root))
             .collect::<anyhow::Result<Vec<_>>>()?;
-
         if calendars.is_empty() {
-            calendars.push(Calendar::load(root)?);
+            calendars.push(Calendar::load(root, root)?);
         }
-
         calendars.sort_by(|a, b| a.id.cmp(&b.id));
+
+        // the same display name twice (two accounts, say): use the paths
+        let mut counts = BTreeMap::<String, usize>::new();
+        for c in &calendars {
+            *counts.entry(c.name.clone()).or_default() += 1;
+        }
+        for c in &mut calendars {
+            if counts[&c.name] > 1 {
+                c.name = c.id.clone();
+            }
+        }
 
         let mut vdir = Self {
             root: root.to_owned(),
             calendars,
+            dirs,
             items: BTreeMap::new(),
         };
         for calendar in &vdir.calendars {
@@ -268,6 +295,55 @@ fn read_item(path: &Path) -> Option<Vec<AnyComponent>> {
             None
         }
     }
+}
+
+/// Collect `dir` and the non-hidden folders under it, following symlinks
+/// but never into a folder twice.
+fn scan(
+    dir: &Path,
+    depth: usize,
+    dirs: &mut Vec<PathBuf>,
+    seen: &mut std::collections::HashSet<PathBuf>,
+) {
+    const MAX_DEPTH: usize = 12;
+    let Ok(canonical) = dir.canonicalize() else {
+        return;
+    };
+    if depth > MAX_DEPTH || !seen.insert(canonical) {
+        return;
+    }
+    dirs.push(dir.to_owned());
+    let Ok(entries) = read_dir(dir) else {
+        warn!("cannot read {dir:?}");
+        return;
+    };
+    let mut children = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_dir() && !is_hidden(p))
+        .collect::<Vec<_>>();
+    children.sort();
+    for child in children {
+        scan(&child, depth + 1, dirs, seen);
+    }
+}
+
+/// A folder holding `.ics` files or vdir calendar metadata, or an empty
+/// folder (a collection vdirsyncer has created but not filled yet).
+fn is_calendar_dir(dir: &Path) -> bool {
+    let Ok(entries) = read_dir(dir) else {
+        return false;
+    };
+    let entries = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .collect::<Vec<_>>();
+    entries.is_empty()
+        || dir.join("displayname").is_file()
+        || dir.join("color").is_file()
+        || entries
+            .iter()
+            .any(|p| p.extension().is_some_and(|x| x == "ics") && p.is_file())
 }
 
 fn is_hidden(path: &Path) -> bool {
