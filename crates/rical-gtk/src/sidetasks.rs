@@ -43,16 +43,6 @@ impl SideTasks {
             .build();
         list.update_property(&[gtk::accessible::Property::Label("Tasks to schedule")]);
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        widget.append(
-            &gtk::Label::builder()
-                .label("Tasks")
-                .css_classes(["heading"])
-                .xalign(0.0)
-                .margin_start(12)
-                .margin_top(12)
-                .tooltip_text("Drag a task onto the calendar to schedule it")
-                .build(),
-        );
         widget.append(&list);
         Rc::new(Self {
             widget,
@@ -95,7 +85,20 @@ impl SideTasks {
         while let Some(row) = self.list.row_at_index(0) {
             self.list.remove(&row);
         }
-        self.widget.set_visible(!tasks.is_empty());
+        if tasks.is_empty() {
+            self.list.append(
+                &gtk::ListBoxRow::builder()
+                    .activatable(false)
+                    .child(
+                        &gtk::Label::builder()
+                            .label("Nothing open; add a task with A")
+                            .css_classes(["dim-label", "caption"])
+                            .xalign(0.0)
+                            .build(),
+                    )
+                    .build(),
+            );
+        }
         let state = self.state.borrow();
         for t in tasks.iter().take(SHOWN) {
             let b = gtk::Box::new(gtk::Orientation::Horizontal, 8);

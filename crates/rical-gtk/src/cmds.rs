@@ -286,6 +286,16 @@ pub static SPECS: &[Spec] = &[
         ..spec("sidebar", "Show or hide the sidebar")
     },
     Spec {
+        args: &[
+            arg("section", Kind::Choice(&["month", "calendars", "tasks"])),
+            optional("state", Kind::Choice(&["toggle", "show", "hide"])),
+        ],
+        ..spec(
+            "section",
+            "Show or hide a part of the sidebar: month, calendars or tasks",
+        )
+    },
+    Spec {
         aliases: &["find"],
         args: &[Arg {
             name: "text",

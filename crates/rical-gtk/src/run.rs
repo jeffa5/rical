@@ -12,7 +12,7 @@ use rical_core::{
     write::{Draft, Repeat, Scope},
 };
 
-use super::{Window, palette, search};
+use super::{Window, palette, search, section};
 use crate::{
     binds::{self, Key, Lookup},
     cmds::{self, parse_date, parse_shift},
@@ -200,6 +200,19 @@ impl Window {
                 self.split.set_show_sidebar(show);
             }
             "reload" => self.reload_all(),
+            "section" => {
+                let name = p.arg(0).unwrap();
+                let sections = self.sections.borrow();
+                if let Some(s) = sections.iter().find(|s| s.name == name) {
+                    s.set_expanded(match p.arg(1) {
+                        Some("show") => true,
+                        Some("hide") => false,
+                        _ => !s.is_expanded(),
+                    });
+                    self.split.set_show_sidebar(true);
+                }
+                section::save_collapsed(&sections);
+            }
             "notifications" => {
                 let on = {
                     let mut s = self.state.borrow_mut();

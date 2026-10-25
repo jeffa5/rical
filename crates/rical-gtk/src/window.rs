@@ -33,6 +33,7 @@ use crate::{
     layout::{self, ViewKind},
     minimonth::MiniMonth,
     month::MonthView,
+    section::{self, Section},
     sidetasks::SideTasks,
     state::SharedState,
     tasks::TasksView,
@@ -53,6 +54,8 @@ pub struct Window {
     agenda: Rc<AgendaView>,
     tasks: Rc<TasksView>,
     side_tasks: Rc<SideTasks>,
+    /// The collapsible sidebar sections.
+    sections: Rc<RefCell<Vec<Rc<Section>>>>,
     syncing: Cell<bool>,
     /// First day and number of days the grid last showed.
     last_grid_days: Cell<Option<(chrono::NaiveDate, usize)>>,
@@ -255,19 +258,27 @@ impl Window {
             .css_classes(["navigation-sidebar"])
             .build();
         calendar_list.update_property(&[gtk::accessible::Property::Label("Calendars")]);
+        // collapsible sections, remembered between runs
+        let sections: Rc<RefCell<Vec<Rc<Section>>>> = Default::default();
+        let save: Rc<dyn Fn()> = {
+            let sections = sections.clone();
+            Rc::new(move || section::save_collapsed(&sections.borrow()))
+        };
+        let collapsed = section::load_collapsed();
         let sidebar_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        sidebar_box.append(&mini.widget);
-        sidebar_box.append(
-            &gtk::Label::builder()
-                .label("Calendars")
-                .css_classes(["heading"])
-                .xalign(0.0)
-                .margin_start(12)
-                .margin_top(6)
-                .build(),
-        );
-        sidebar_box.append(&calendar_list);
-        sidebar_box.append(&side_tasks.widget);
+        for (name, title, child) in [
+            (
+                "month",
+                "Month",
+                mini.widget.clone().upcast::<gtk::Widget>(),
+            ),
+            ("calendars", "Calendars", calendar_list.clone().upcast()),
+            ("tasks", "Tasks", side_tasks.widget.clone().upcast()),
+        ] {
+            let s = Section::new(name, title, &child, !collapsed.contains(name), save.clone());
+            sidebar_box.append(&s.widget);
+            sections.borrow_mut().push(s);
+        }
         let sidebar_scroll = gtk::ScrolledWindow::builder()
             .child(&sidebar_box)
             .hscrollbar_policy(gtk::PolicyType::Never)
@@ -339,6 +350,7 @@ impl Window {
             agenda,
             tasks,
             side_tasks,
+            sections,
             syncing: Cell::new(false),
             last_grid_days: Cell::new(None),
             monitors: Default::default(),

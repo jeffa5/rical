@@ -22,6 +22,7 @@ mod minimonth;
 mod month;
 mod repeat;
 
+mod section;
 mod sidetasks;
 mod state;
 mod tasks;
