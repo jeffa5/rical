@@ -398,7 +398,7 @@ fn line_for(name: &str, value: &str) -> String {
 /// one is replaced, keeping a trailing comment, and earlier ones (which it
 /// overrode) left alone; with no line, one is added at the end. Removing
 /// drops every line for it.
-fn edit_file(path: &Path, name: &str, value: Option<&str>) -> Result<(), String> {
+pub(crate) fn edit_file(path: &Path, name: &str, value: Option<&str>) -> Result<(), String> {
     let text = std::fs::read_to_string(path).unwrap_or_default();
     let key_of = |line: &str| {
         let (k, _) = strip_comment(line).split_once('=')?;

@@ -34,6 +34,7 @@ mod section;
 mod sidetasks;
 mod state;
 mod tasks;
+mod uistate;
 mod window;
 mod year;
 mod zonepick;
@@ -174,6 +175,7 @@ fn setup(o: config::Options) -> Result<(state::SharedState, binds::Binds), Strin
     state.me = o.me;
     state.contacts = o.contacts;
     state.zones = o.zones;
+    state.zones_shown = uistate::zones_shown();
     if let Some(text) = &o.remind {
         match rical_core::input::parse_shift(text) {
             Some(d) if d > chrono::TimeDelta::zero() => state.default_reminder = Some(d),

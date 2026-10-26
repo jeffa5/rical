@@ -190,6 +190,23 @@ impl TimeGrid {
                 let Some(this) = this.upgrade() else {
                     return false;
                 };
+                let width = area.width() as f64;
+                if !rows
+                    && let Some((left, right)) = this.zone_corner(width)
+                    && (left..right).contains(&(x as f64))
+                {
+                    let n = this.state.borrow().zones.len();
+                    let shown = !this.zones(width).is_empty();
+                    let squeezed = !shown && this.state.borrow().zones_shown;
+                    tip.set_text(Some(&if squeezed {
+                        "Too narrow for the extra time zones".to_owned()
+                    } else if shown {
+                        "Hide the extra time zones (Z)".to_owned()
+                    } else {
+                        format!("Show {n} time zone{} (Z)", if n == 1 { "" } else { "s" })
+                    }));
+                    return true;
+                }
                 let row = rows.then(|| (y as f64 / HOUR_HEIGHT).round() as i64);
                 match this.zone_tooltip(area.width() as f64, x as f64, row) {
                     Some(text) => {
@@ -260,7 +277,17 @@ impl TimeGrid {
         let changed = on_change.clone();
         click.connect_pressed(move |_, _, x, _| {
             let Some(this) = this.upgrade() else { return };
-            let day = this.day_at(x, this.header.width() as f64);
+            let width = this.header.width() as f64;
+            // the corner over the hours folds the extra zones
+            if let Some((left, right)) = this.zone_corner(width)
+                && (left..right).contains(&x)
+            {
+                if this.toggle_zones(width) {
+                    changed();
+                }
+                return;
+            }
+            let day = this.day_at(x, width);
             if let Some(day) = day {
                 let mut s = this.state.borrow_mut();
                 s.date = day;
@@ -541,6 +568,30 @@ impl TimeGrid {
         state.zones.clone()
     }
 
+    /// The header's corner over the local hours, where the extra zones are
+    /// folded away or brought back: its left and right, if there are
+    /// zones to fold.
+    fn zone_corner(&self, width: f64) -> Option<(f64, f64)> {
+        if self.state.borrow().zones.is_empty() {
+            return None;
+        }
+        let left = self.zones(width).len() as f64 * ZONE_WIDTH;
+        Some((left, left + GUTTER))
+    }
+
+    /// Fold the extra zones away, or bring them back, and remember it.
+    /// Not when they are shown but the window is too narrow for them: then
+    /// there is nothing to fold.
+    fn toggle_zones(&self, width: f64) -> bool {
+        let shown = self.state.borrow().zones_shown;
+        if shown && self.zones(width).is_empty() {
+            return false;
+        }
+        self.state.borrow_mut().zones_shown = !shown;
+        crate::uistate::set_zones_shown(!shown);
+        true
+    }
+
     /// Width of the hour labels: one column per extra zone, then local.
     fn gutter(&self, width: f64) -> f64 {
         GUTTER + self.zones(width).len() as f64 * ZONE_WIDTH
@@ -678,8 +729,9 @@ impl TimeGrid {
 
         // over each extra zone's hours: its name, the time there now, and
         // its abbreviation; over the local hours, the local abbreviation
+        // and a chevron that folds the zones away (or how many are folded)
         let zones = self.zones(width);
-        if !zones.is_empty() {
+        if !state.zones.is_empty() {
             let now = Utc::now();
             let local = crate::zones::Zone {
                 label: String::new(),
@@ -716,15 +768,39 @@ impl TimeGrid {
                     ],
                 );
             }
+            let x = zones.len() as f64 * ZONE_WIDTH;
+            let folded = zones.is_empty();
+            let n = state.zones.len();
             column(
-                zones.len() as f64 * ZONE_WIDTH,
+                x,
                 GUTTER,
                 [
                     (String::new(), 0.0, false),
-                    (String::new(), 0.0, false),
+                    if folded {
+                        (
+                            format!("{n} zone{}", if n == 1 { "" } else { "s" }),
+                            0.6,
+                            false,
+                        )
+                    } else {
+                        (String::new(), 0.0, false)
+                    },
                     (local.abbreviation(now), 0.5, false),
                 ],
             );
+            // the chevron points the way the zones go: out, or back in
+            if !(folded && state.zones_shown) {
+                let (cx, cy, s) = (x + GUTTER / 2.0, 12.0, 3.5);
+                let dir = if folded { 1.0 } else { -1.0 };
+                pal.fg(cr, 0.6);
+                cr.set_line_width(1.5);
+                cr.set_line_cap(cairo::LineCap::Round);
+                cr.set_line_join(cairo::LineJoin::Round);
+                cr.move_to(cx - dir * s / 2.0, cy - s);
+                cr.line_to(cx + dir * s / 2.0, cy);
+                cr.line_to(cx - dir * s / 2.0, cy + s);
+                let _ = cr.stroke();
+            }
         }
 
         for (i, day) in days.iter().enumerate() {

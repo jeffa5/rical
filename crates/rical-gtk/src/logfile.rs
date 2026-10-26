@@ -17,11 +17,7 @@ const MAX_BYTES: u64 = 1024 * 1024;
 /// Where the log goes: `$XDG_STATE_HOME/rical/rical.log`, by default
 /// `~/.local/state/rical/rical.log` (the XDG folder for logs and history).
 pub fn path() -> Option<PathBuf> {
-    std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
-        .map(|d| d.join("rical/rical.log"))
+    crate::uistate::dir().map(|d| d.join("rical.log"))
 }
 
 struct Logger {

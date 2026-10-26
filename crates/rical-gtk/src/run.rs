@@ -341,6 +341,8 @@ impl Window {
                         self.toast("No extra zones: set zones = … in the config, or :zones NAME");
                     }
                 }
+                // remembered for next time
+                crate::uistate::set_zones_shown(self.state.borrow().zones_shown);
                 self.refresh();
             }
             "reload" => self.reload_all(),
