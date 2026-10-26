@@ -22,8 +22,8 @@ programs.rical = {
 With Cargo (needs GTK 4 and libadwaita, and pkg-config to find them):
 
 ```sh
-cargo install --path crates/rical-gtk   # the app
-cargo install --path crates/rical       # the command-line tool
+cargo install --path crates/rical-calendar   # the app
+cargo install --path crates/rical            # the command-line tool
 ```
 
 ## Point it at your calendars
@@ -46,14 +46,14 @@ Tell rical where that is, in `~/.config/rical/config`:
 vdir = ~/calendar/nextcloud
 ```
 
-or for one run, `RICAL_VDIR=~/calendar/nextcloud rical-gtk`. Then start
-**Calendar (rical)** from your launcher, or `rical-gtk`.
+or for one run, `RICAL_VDIR=~/calendar/nextcloud rical-calendar`. Then start
+**Calendar (rical)** from your launcher, or `rical-calendar`.
 
 To look around without your own calendars, make a demo one:
 
 ```sh
 scripts/demo-vdir.sh /tmp/demo
-RICAL_VDIR=/tmp/demo rical-gtk
+RICAL_VDIR=/tmp/demo rical-calendar
 ```
 
 ## Sync

@@ -1476,24 +1476,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rical-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "chrono-tz",
- "compact-ics",
- "iana-time-zone",
- "icalendar",
- "log",
- "rrule",
- "serde",
- "tempfile",
- "uuid",
-]
-
-[[package]]
-name = "rical-gtk"
+name = "rical-calendar"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1509,6 +1492,23 @@ dependencies = [
  "nucleo-matcher",
  "pangocairo",
  "rical-core",
+]
+
+[[package]]
+name = "rical-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "chrono-tz",
+ "compact-ics",
+ "iana-time-zone",
+ "icalendar",
+ "log",
+ "rrule",
+ "serde",
+ "tempfile",
+ "uuid",
 ]
 
 [[package]]

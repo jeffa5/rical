@@ -52,7 +52,7 @@ fn main() -> glib::ExitCode {
     let options = match config::Options::load() {
         Ok(o) => o,
         Err(e) => {
-            eprintln!("rical-gtk: {e}");
+            eprintln!("rical-calendar: {e}");
             return glib::ExitCode::FAILURE;
         }
     };
@@ -105,7 +105,7 @@ fn main() -> glib::ExitCode {
             match setup(options) {
                 Ok(v) => *ui.borrow_mut() = Some(v),
                 Err(e) => {
-                    eprintln!("rical-gtk: {e}");
+                    eprintln!("rical-calendar: {e}");
                     failed.set(true);
                 }
             }

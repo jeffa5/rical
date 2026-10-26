@@ -5,7 +5,7 @@ of `.ics` files, such as one kept in sync by vdirsyncer. The files are the
 source of truth: rical reads them, writes plain iCalendar back, and picks up
 changes made on disk while it runs.
 
-- `rical-gtk` (“Calendar (rical)” in your app launcher): a GTK4/libadwaita
+- `rical-calendar` (“Calendar (rical)” in your app launcher): a GTK4/libadwaita
   app with day, week, month, year, agenda, task and journal views,
   recurring events, time zones, subtasks, invitations and reminders.
 - `rical`: a CLI for listing, adding, completing and editing items, plus
@@ -19,7 +19,7 @@ changes made on disk while it runs.
 
 To try it without your own calendars, `scripts/demo-vdir.sh /tmp/demo`
 writes the made-up calendars shown here; then run
-`RICAL_VDIR=/tmp/demo rical-gtk`.
+`RICAL_VDIR=/tmp/demo rical-calendar`.
 
 ## Documentation
 
@@ -35,7 +35,7 @@ The [documentation](docs/README.md) covers everything; start with
 
 ```sh
 nix run github:jeffa5/rical           # or: nix profile install github:jeffa5/rical
-cargo install --path crates/rical-gtk  # needs GTK 4 and libadwaita
+cargo install --path crates/rical-calendar  # needs GTK 4 and libadwaita
 ```
 
 The flake also has a [Home Manager module](docs/configuration.md#home-manager)

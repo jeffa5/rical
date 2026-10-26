@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Run rical-gtk in a private headless sway, drive it with the keyboard and
+# Run rical-calendar in a private headless sway, drive it with the keyboard and
 # pointer, and save screenshots. Nothing appears on the real desktop.
 #
 # Usage:
 #   RICAL_VDIR=DIR scripts/screenshot.sh [--size WxH] [--bin PATH] OUTDIR STEP... [-- FILE.ics...]
 #
-# rical-gtk takes its settings from the environment (RICAL_VIEW,
+# rical-calendar takes its settings from the environment (RICAL_VIEW,
 # RICAL_DATE, RICAL_NO_NOTIFICATIONS=true...) or RICAL_CONFIG; arguments
 # after -- are files for it to open (import).
 #
@@ -25,7 +25,7 @@
 set -euo pipefail
 
 size=1280x860
-bin=target/debug/rical-gtk
+bin=target/debug/rical-calendar
 while [[ $# -gt 0 ]]; do
   case $1 in
     --size) size=$2; shift 2 ;;
@@ -90,7 +90,7 @@ pids+=("$app_pid")
 
 for _ in $(seq 100); do
   SWAYSOCK=$sock swaymsg -t get_tree 2>/dev/null | grep -q '"app_id": "net.jeffas.Rical"' && break
-  kill -0 "$app_pid" 2>/dev/null || { echo "rical-gtk exited:" >&2; cat "$tmp/app.log" >&2; exit 1; }
+  kill -0 "$app_pid" 2>/dev/null || { echo "rical-calendar exited:" >&2; cat "$tmp/app.log" >&2; exit 1; }
   sleep 0.1
 done
 sleep 1
@@ -135,9 +135,9 @@ for step in "${steps[@]}"; do
 done
 
 if ! kill -0 "$app_pid" 2>/dev/null; then
-  echo "rical-gtk exited early" >&2
+  echo "rical-calendar exited early" >&2
 fi
 if [[ -s $tmp/app.log ]]; then
-  echo "--- rical-gtk output" >&2
+  echo "--- rical-calendar output" >&2
   cat "$tmp/app.log" >&2
 fi

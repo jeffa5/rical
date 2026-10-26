@@ -54,7 +54,7 @@ reads everything again.
 ## Opening `.ics` files
 
 Open an `.ics` file with rical (from a mail client, a file manager, or
-`rical-gtk invitation.ics`) and, before changing anything, it shows what
+`rical-calendar invitation.ics`) and, before changing anything, it shows what
 each item in it would do:
 
 | The file is | rical |

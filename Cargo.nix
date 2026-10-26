@@ -63,20 +63,20 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
-    "rical-core" = rec {
-      packageId = "rical-core";
+    "rical-calendar" = rec {
+      packageId = "rical-calendar";
       build = internal.buildRustCrateWithFeatures {
-        packageId = "rical-core";
+        packageId = "rical-calendar";
       };
 
       # Debug support which might change between releases.
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
-    "rical-gtk" = rec {
-      packageId = "rical-gtk";
+    "rical-core" = rec {
+      packageId = "rical-core";
       build = internal.buildRustCrateWithFeatures {
-        packageId = "rical-gtk";
+        packageId = "rical-core";
       };
 
       # Debug support which might change between releases.
@@ -4803,78 +4803,18 @@ rec {
         ];
 
       };
-      "rical-core" = rec {
-        crateName = "rical-core";
-        version = "0.1.0";
-        edition = "2024";
-        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/rical-core; };
-        libName = "rical_core";
-        dependencies = [
-          {
-            name = "anyhow";
-            packageId = "anyhow";
-          }
-          {
-            name = "chrono";
-            packageId = "chrono";
-          }
-          {
-            name = "chrono-tz";
-            packageId = "chrono-tz";
-          }
-          {
-            name = "compact-ics";
-            packageId = "compact-ics";
-          }
-          {
-            name = "iana-time-zone";
-            packageId = "iana-time-zone";
-          }
-          {
-            name = "icalendar";
-            packageId = "icalendar";
-            features = [ "serde" "chrono-tz" ];
-          }
-          {
-            name = "log";
-            packageId = "log";
-            features = [ "kv" ];
-          }
-          {
-            name = "rrule";
-            packageId = "rrule";
-          }
-          {
-            name = "serde";
-            packageId = "serde";
-            features = [ "derive" ];
-          }
-          {
-            name = "uuid";
-            packageId = "uuid";
-            features = [ "v4" ];
-          }
-        ];
-        devDependencies = [
-          {
-            name = "tempfile";
-            packageId = "tempfile";
-          }
-        ];
-
-      };
-      "rical-gtk" = rec {
-        crateName = "rical-gtk";
+      "rical-calendar" = rec {
+        crateName = "rical-calendar";
         version = "0.1.0";
         edition = "2024";
         crateBin = [
           {
-            name = "rical-gtk";
+            name = "rical-calendar";
             path = "src/main.rs";
             requiredFeatures = [ ];
           }
         ];
-        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/rical-gtk; };
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/rical-calendar; };
         dependencies = [
           {
             name = "anyhow";
@@ -4933,6 +4873,66 @@ rec {
           {
             name = "rical-core";
             packageId = "rical-core";
+          }
+        ];
+
+      };
+      "rical-core" = rec {
+        crateName = "rical-core";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/rical-core; };
+        libName = "rical_core";
+        dependencies = [
+          {
+            name = "anyhow";
+            packageId = "anyhow";
+          }
+          {
+            name = "chrono";
+            packageId = "chrono";
+          }
+          {
+            name = "chrono-tz";
+            packageId = "chrono-tz";
+          }
+          {
+            name = "compact-ics";
+            packageId = "compact-ics";
+          }
+          {
+            name = "iana-time-zone";
+            packageId = "iana-time-zone";
+          }
+          {
+            name = "icalendar";
+            packageId = "icalendar";
+            features = [ "serde" "chrono-tz" ];
+          }
+          {
+            name = "log";
+            packageId = "log";
+            features = [ "kv" ];
+          }
+          {
+            name = "rrule";
+            packageId = "rrule";
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+          {
+            name = "uuid";
+            packageId = "uuid";
+            features = [ "v4" ];
+          }
+        ];
+        devDependencies = [
+          {
+            name = "tempfile";
+            packageId = "tempfile";
           }
         ];
 

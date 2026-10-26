@@ -2,7 +2,7 @@
 
 rical is a calendar, task list and journal for a folder of iCalendar
 (`.ics`) files, the layout vdirsyncer keeps in sync with a CalDAV server
-such as Nextcloud. The app (`rical-gtk`, “Calendar” in your launcher) is
+such as Nextcloud. The app (`rical-calendar`, “Calendar” in your launcher) is
 keyboard-first: every action is a `:command`, and keys are bound to
 commands. A command-line tool (`rical`) works on the same files.
 

@@ -52,7 +52,7 @@ include-if-exists = ~/.config/rical/secret.conf
   `include-if-exists = FILE` skips one that doesn't.
 - An unknown setting is an error, so a typo doesn't go unnoticed.
 
-`rical-gtk --help` lists the settings too.
+`rical-calendar --help` lists the settings too.
 
 ## Settings
 

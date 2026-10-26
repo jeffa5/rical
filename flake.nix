@@ -28,7 +28,7 @@
         };
     };
 
-    # rical (CLI) and rical-gtk (GUI)
+    # rical (CLI) and rical-calendar (GUI)
     rical = pkgs.stdenv.mkDerivation {
       pname = "rical";
       version = "0.1.0";
@@ -44,14 +44,14 @@
       installPhase = ''
         mkdir -p $out/bin
         cp ${cargoNix.workspaceMembers.rical.build}/bin/rical $out/bin/
-        cp ${cargoNix.workspaceMembers.rical-gtk.build}/bin/rical-gtk $out/bin/
+        cp ${cargoNix.workspaceMembers.rical-calendar.build}/bin/rical-calendar $out/bin/
         install -Dm644 ${./data/net.jeffas.Rical.desktop} $out/share/applications/net.jeffas.Rical.desktop
         install -Dm644 ${./data/icons/hicolor/scalable/apps/net.jeffas.Rical.svg} $out/share/icons/hicolor/scalable/apps/net.jeffas.Rical.svg
         install -Dm644 ${./data/icons/hicolor/symbolic/apps/net.jeffas.Rical-symbolic.svg} $out/share/icons/hicolor/symbolic/apps/net.jeffas.Rical-symbolic.svg
       '';
       meta = {
         description = "Calendar and tasks over a vdir of .ics files";
-        mainProgram = "rical-gtk";
+        mainProgram = "rical-calendar";
         license = lib.licenses.mit;
         platforms = lib.platforms.linux;
       };
@@ -91,7 +91,7 @@
           type = lib.types.nullOr lib.types.str;
           default = null;
           example = "~/calendar/nextcloud";
-          description = "Root of the vdir (a folder of calendar folders) rical-gtk opens.";
+          description = "Root of the vdir (a folder of calendar folders) rical-calendar opens.";
         };
         calendar = lib.mkOption {
           type = lib.types.nullOr lib.types.str;
@@ -114,7 +114,7 @@
         reminders = lib.mkOption {
           type = lib.types.bool;
           default = false;
-          description = "Run `rical remind` as a user service so reminders arrive without rical-gtk open (rical-gtk then leaves reminders to it).";
+          description = "Run `rical remind` as a user service so reminders arrive without rical-calendar open (rical-calendar then leaves reminders to it).";
         };
         binds = lib.mkOption {
           type = lib.types.lines;
@@ -133,12 +133,12 @@
             contacts = "~/contacts/nextcloud";
             view = "3days";
           };
-          description = "Settings for ~/.config/rical/config: any rical-gtk flag by its long name.";
+          description = "Settings for ~/.config/rical/config: any rical-calendar flag by its long name.";
         };
         openCalendarFiles = lib.mkOption {
           type = lib.types.bool;
           default = false;
-          description = "Make rical-gtk the default for .ics files (text/calendar), so mail clients open invitations in it.";
+          description = "Make rical-calendar the default for .ics files (text/calendar), so mail clients open invitations in it.";
         };
         extraConfig = lib.mkOption {
           type = lib.types.lines;
@@ -150,7 +150,7 @@
 
       config = lib.mkIf cfg.enable {
         # settings go in the config file rather than the environment, so
-        # rical-gtk's Preferences can override them (in local.conf, as
+        # rical-calendar's Preferences can override them (in local.conf, as
         # this file is read-only)
         home.packages = [cfg.package];
         assertions = [
@@ -218,7 +218,7 @@
         # regenerate Cargo.nix after changing dependencies
         pkgs.crate2nix
 
-        # rical-gtk
+        # rical-calendar
         pkgs.pkg-config
         pkgs.gtk4
         pkgs.libadwaita
@@ -228,7 +228,7 @@
         pkgs.grim
         pkgs.wtype
       ];
-      # icons and GSettings schemas for running rical-gtk from the shell
+      # icons and GSettings schemas for running rical-calendar from the shell
       shellHook = ''
         export XDG_DATA_DIRS=${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}:${pkgs.gtk4}/share/gsettings-schemas/${pkgs.gtk4.name}:${pkgs.adwaita-icon-theme}/share:${pkgs.hicolor-icon-theme}/share:$XDG_DATA_DIRS
       '';

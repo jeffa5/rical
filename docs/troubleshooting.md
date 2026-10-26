@@ -7,7 +7,7 @@ you set it): what it opened, files it couldn't read, changes it couldn't
 make. Warnings and errors also go to the terminal. Past 1 MB the log is
 moved to `rical.log.old` when the app starts.
 
-For more detail, set `RUST_LOG`: `RUST_LOG=debug rical-gtk` logs
+For more detail, set `RUST_LOG`: `RUST_LOG=debug rical-calendar` logs
 everything, to the file and the terminal; `RUST_LOG=rical_core=debug`
 narrows it to one part.
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Write a demo vdir around the current week, for screenshots and trying
-# rical-gtk without real data:  scripts/demo-vdir.sh /tmp/demo
+# rical-calendar without real data:  scripts/demo-vdir.sh /tmp/demo
 set -euo pipefail
 out=${1:?usage: demo-vdir.sh DIR}
 rm -rf "$out"

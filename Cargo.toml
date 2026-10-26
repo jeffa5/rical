@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/compact-ics", "crates/rical-core", "crates/rical", "crates/rical-gtk"]
+members = ["crates/compact-ics", "crates/rical-core", "crates/rical", "crates/rical-calendar"]
 
 [workspace.package]
 version = "0.1.0"
