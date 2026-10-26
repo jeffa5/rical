@@ -40,7 +40,7 @@ impl TasksView {
     ) -> Rc<Self> {
         let list = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::Single)
-            .css_classes(["navigation-sidebar"])
+            .css_classes(["navigation-sidebar", "rical-list"])
             .build();
         list.update_property(&[gtk::accessible::Property::Label("Tasks")]);
         let clamp = adw::Clamp::builder()

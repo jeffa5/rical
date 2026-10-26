@@ -58,7 +58,7 @@ impl InvitationsView {
     pub fn new(state: SharedState, on_change: Rc<dyn Fn()>, on_reply: OnReply) -> Rc<Self> {
         let list = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::Single)
-            .css_classes(["navigation-sidebar"])
+            .css_classes(["navigation-sidebar", "rical-list"])
             .build();
         list.update_property(&[gtk::accessible::Property::Label("Invitations")]);
         let clamp = adw::Clamp::builder()

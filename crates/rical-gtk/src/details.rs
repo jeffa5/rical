@@ -186,6 +186,30 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
             r.add_css_class("warning");
         }
         content.append(&r);
+        // answer it here too (the invitations view has these on each row)
+        if state.view != ViewKind::Invitations {
+            let answers = gtk::Box::builder()
+                .css_classes(["linked"])
+                .halign(gtk::Align::Start)
+                .margin_start(24)
+                .build();
+            for (label, status, cmd, key) in [
+                ("Accept", "ACCEPTED", "accept", "y"),
+                ("Maybe", "TENTATIVE", "maybe", "Y"),
+                ("Decline", "DECLINED", "decline", "N"),
+            ] {
+                // the answer given shows pressed
+                let b = gtk::ToggleButton::builder()
+                    .label(label)
+                    .active(invite.reply == Some(status))
+                    .tooltip_text(format!("{label} ({key})"))
+                    .action_name("win.run")
+                    .action_target(&cmd.to_variant())
+                    .build();
+                answers.append(&b);
+            }
+            content.append(&answers);
+        }
     } else if let Some(organizer) = &occ.organizer
         && !occ.attendees.is_empty()
     {
@@ -197,36 +221,27 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
     if !occ.attendees.is_empty() {
         content.append(&people(occ, &state.my_addresses()));
     }
-    let join = format::join_url(occ);
-    let place = format::place(occ).map(str::to_owned);
-    if join.is_some() || place.is_some() {
-        let buttons = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(6)
+    // joining and the map go with the other actions at the bottom
+    let window = parent.as_ref().root().and_downcast::<gtk::Window>();
+    let join = format::join_url(occ).map(|url| {
+        let b = gtk::Button::builder()
+            .label("Join")
+            .tooltip_text(format!("Open {url} (O)"))
+            .css_classes(["suggested-action"])
             .build();
-        let window = parent.as_ref().root().and_downcast::<gtk::Window>();
-        if let Some(url) = join {
-            let b = gtk::Button::builder()
-                .label("Join")
-                .tooltip_text(format!("Open {url} (O)"))
-                .css_classes(["suggested-action", "pill"])
-                .build();
-            let w = window.clone();
-            b.connect_clicked(move |_| open_uri(w.as_ref(), &url));
-            buttons.append(&b);
-        }
-        if let Some(place) = place {
-            let b = gtk::Button::builder()
-                .label("Map")
-                .tooltip_text("Show on a map (M)")
-                .css_classes(["pill"])
-                .build();
-            let w = window.clone();
-            b.connect_clicked(move |_| open_uri(w.as_ref(), &format::map_url(&place)));
-            buttons.append(&b);
-        }
-        content.append(&buttons);
-    }
+        let w = window.clone();
+        b.connect_clicked(move |_| open_uri(w.as_ref(), &url));
+        b
+    });
+    let map = format::place(occ).map(str::to_owned).map(|place| {
+        let b = gtk::Button::builder()
+            .label("Map")
+            .tooltip_text("Show on a map (M)")
+            .build();
+        let w = window.clone();
+        b.connect_clicked(move |_| open_uri(w.as_ref(), &format::map_url(&place)));
+        b
+    });
     if let Some(description) = occ.description.as_deref().filter(|d| !d.is_empty()) {
         let label = gtk::Label::builder()
             .label(description.trim())
@@ -265,7 +280,13 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
         }
         b
     };
+    if let Some(join) = &join {
+        actions.append(join);
+    }
     actions.append(&action("Edit", None, "Edit (e, or double-click)", "edit"));
+    if let Some(map) = &map {
+        actions.append(map);
+    }
     if occ.kind == Kind::Todo {
         let done = format::is_done(occ);
         actions.append(&action(
@@ -297,7 +318,8 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
     }
     let spacer = gtk::Box::builder().hexpand(true).build();
     actions.append(&spacer);
-    if occ.kind != Kind::Journal {
+    // not for events with guests: removing the original would tell them
+    if occ.kind != Kind::Journal && occ.attendees.is_empty() {
         let (icon, tip) = if occ.kind == Kind::Todo {
             (
                 "x-office-calendar-symbolic",

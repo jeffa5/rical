@@ -32,7 +32,7 @@ impl AgendaView {
     ) -> Rc<Self> {
         let list = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::Single)
-            .css_classes(["navigation-sidebar"])
+            .css_classes(["navigation-sidebar", "rical-list"])
             .build();
         list.update_property(&[gtk::accessible::Property::Label("Agenda")]);
         let clamp = adw::Clamp::builder()
@@ -141,7 +141,10 @@ impl AgendaView {
         };
         self.syncing.set(true);
         match index.and_then(|i| self.list.row_at_index(i as i32)) {
-            Some(row) => self.list.select_row(Some(&row)),
+            Some(row) => {
+                self.list.select_row(Some(&row));
+                listhead::reveal(&row);
+            }
             None => self.list.unselect_all(),
         }
         self.syncing.set(false);
@@ -200,6 +203,9 @@ impl AgendaView {
             .set_visible_child_name(if rows.is_empty() { "empty" } else { "list" });
         *self.rows.borrow_mut() = rows;
         self.list.select_row(selected_row.as_ref());
+        if let Some(row) = &selected_row {
+            listhead::reveal(row);
+        }
         self.syncing.set(false);
     }
 

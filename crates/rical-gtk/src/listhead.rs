@@ -52,3 +52,29 @@ pub fn step(list: &gtk::ListBox, forward: bool) {
         i += if forward { 1 } else { -1 };
     }
 }
+
+/// Scroll `row`, with its heading, into view once it is laid out: the
+/// selection moved from the keyboard without the list having focus.
+pub fn reveal(row: &gtk::ListBoxRow) {
+    let row = row.clone();
+    gtk::glib::idle_add_local_once(move || {
+        let Some(scroller) = row
+            .ancestor(gtk::ScrolledWindow::static_type())
+            .and_downcast::<gtk::ScrolledWindow>()
+        else {
+            return;
+        };
+        let Some(b) = row.compute_bounds(&scroller) else {
+            return;
+        };
+        let heading = row.header().map_or(0.0, |h| h.height() as f64);
+        let top = b.y() as f64 - heading - 6.0;
+        let bottom = (b.y() + b.height()) as f64 + 6.0;
+        let adj = scroller.vadjustment();
+        if top < 0.0 {
+            adj.set_value(adj.value() + top);
+        } else if bottom > adj.page_size() {
+            adj.set_value(adj.value() + bottom - adj.page_size());
+        }
+    });
+}

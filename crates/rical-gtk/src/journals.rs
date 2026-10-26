@@ -45,7 +45,7 @@ impl JournalsView {
     pub fn new(state: SharedState, on_change: Rc<dyn Fn()>) -> Rc<Self> {
         let list = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::Single)
-            .css_classes(["navigation-sidebar"])
+            .css_classes(["navigation-sidebar", "rical-list"])
             .build();
         list.update_property(&[gtk::accessible::Property::Label("Journal")]);
         let clamp = adw::Clamp::builder()

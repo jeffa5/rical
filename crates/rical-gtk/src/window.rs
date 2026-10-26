@@ -387,7 +387,6 @@ impl Window {
         narrow.add_setter(&bottom_bar, "revealed", Some(&true.to_value()));
         narrow.add_setter(&today, "visible", Some(&false.to_value()));
         narrow.add_setter(&today_icon, "visible", Some(&true.to_value()));
-        narrow.add_setter(&add, "visible", Some(&false.to_value()));
         window.add_breakpoint(narrow);
 
         Self {
@@ -458,6 +457,23 @@ impl Window {
             }
         });
         self.window.add_action(&run);
+
+        // the view menu, marked with the calendar view shown
+        let calview = gio::SimpleAction::new_stateful(
+            "calview",
+            Some(glib::VariantTy::STRING),
+            &self.state.borrow().calendar_view.name().to_variant(),
+        );
+        let weak = Rc::downgrade(self);
+        calview.connect_activate(move |_, param| {
+            let Some(w) = weak.upgrade() else { return };
+            if let Some(view) = param.and_then(|p| p.str())
+                && let Err(e) = w.execute(&format!("view {view}"))
+            {
+                w.toast(&e);
+            }
+        });
+        self.window.add_action(&calview);
 
         let open = gio::SimpleAction::new("palette", None);
         let weak = Rc::downgrade(self);
@@ -604,9 +620,11 @@ impl Window {
         }
         let state = self.state.borrow();
         // the menu of each calendar shows on hover or focus, not as a column
-        // of icons
+        // of icons; the selection in lists stands out from a hovered row
         let mut css = String::from(
-            "row:not(:hover):not(:focus-within) .calendar-more > button:not(:checked) { opacity: 0; }\n",
+            "row:not(:hover):not(:focus-within) .calendar-more > button:not(:checked) { opacity: 0; }\n\
+             .rical-list row:selected { background-color: alpha(@accent_bg_color, 0.16); }\n\
+             .rical-list row:selected:hover { background-color: alpha(@accent_bg_color, 0.22); }\n",
         );
         for (i, cal) in state.vdir.calendars.iter().enumerate() {
             let check = gtk::CheckButton::builder()
@@ -723,6 +741,13 @@ impl Window {
         self.add
             .set_action_target_value(Some(&command.to_variant()));
         self.add.set_tooltip_text(Some(tip));
+        if let Some(action) = self
+            .window
+            .lookup_action("calview")
+            .and_downcast::<gio::SimpleAction>()
+        {
+            action.set_state(&calendar_view.name().to_variant());
+        }
         for label in &self.calendar_labels {
             label.set_label(&calendar_view.label());
         }
@@ -972,6 +997,8 @@ fn calendar_info(cal: &rical_core::Calendar, state: &crate::state::State) -> gtk
             &gtk::Label::builder()
                 .label(value)
                 .selectable(true)
+                // focusing a selectable label selects all of it
+                .can_focus(false)
                 .wrap(true)
                 .max_width_chars(48)
                 .xalign(0.0)
@@ -1044,10 +1071,7 @@ fn view_toggles(state: &SharedState) -> (adw::ToggleGroup, gtk::Label) {
         ("_Agenda", "agenda"),
     ] {
         let item = gio::MenuItem::new(Some(text), None);
-        item.set_action_and_target_value(
-            Some("win.run"),
-            Some(&format!("view {view}").to_variant()),
-        );
+        item.set_action_and_target_value(Some("win.calview"), Some(&view.to_variant()));
         menu.append_item(&item);
     }
     let popover = gtk::PopoverMenu::from_model(Some(&menu));

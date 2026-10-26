@@ -5,10 +5,7 @@ use chrono::{Datelike, NaiveDate};
 use chrono_tz::Tz;
 use rical_core::{Kind, Occurrence, Rgb, When};
 
-use crate::{
-    draw,
-    layout::{self, ViewKind},
-};
+use crate::{draw, layout::ViewKind};
 
 pub fn time(w: &When, local: Tz) -> String {
     w.to_tz(local).format("%H:%M").to_string()
@@ -89,8 +86,12 @@ pub fn view_title(view: ViewKind, date: NaiveDate, days: &[NaiveDate]) -> (Strin
         ViewKind::Month => (date.format("%B %Y").to_string(), String::new()),
         ViewKind::Year => (date.format("%Y").to_string(), String::new()),
         ViewKind::Agenda => (
-            format!("From {}", date.format("%-d %B %Y")),
-            format!("Next {} days", layout::AGENDA_DAYS),
+            "Agenda".to_owned(),
+            // the days the list covers, which selecting in it does not move
+            match (days.first(), days.last()) {
+                (Some(a), Some(b)) => format!("{} – {}", a.format("%-d %b"), b.format("%-d %b %Y")),
+                _ => String::new(),
+            },
         ),
         ViewKind::Tasks => ("Tasks".to_owned(), String::new()),
         ViewKind::Invitations => (
