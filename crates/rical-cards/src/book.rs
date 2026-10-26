@@ -52,6 +52,9 @@ pub struct Books {
     generation: u64,
 }
 
+/// A file as read: when it last changed, and its cards.
+type Read = (Option<SystemTime>, Vec<Component>);
+
 fn modified(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
@@ -143,9 +146,32 @@ impl Books {
             by_uid: HashMap::new(),
             generation: 0,
         };
+        // read and parse on every core, then file them in order
+        let mut files = Vec::new();
         for i in 0..out.books.len() {
-            for path in out.card_paths(i)? {
-                out.read(i, &path);
+            files.extend(out.card_paths(i)?.into_iter().map(|p| (i, p)));
+        }
+        let threads = std::thread::available_parallelism()
+            .map_or(1, |n| n.get())
+            .min(16);
+        let chunk = files.len().div_ceil(threads).max(64);
+        let read: Vec<Vec<Option<Read>>> = std::thread::scope(|s| {
+            let handles: Vec<_> = files
+                .chunks(chunk)
+                .map(|slice| {
+                    s.spawn(move || {
+                        slice
+                            .iter()
+                            .map(|(_, p)| read_cards(p).map(|c| (modified(p), c)))
+                            .collect()
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        for ((book, path), parsed) in files.into_iter().zip(read.into_iter().flatten()) {
+            if let Some((modified, cards)) = parsed {
+                out.file(book, &path, modified, cards);
             }
         }
         Ok(out)
@@ -169,22 +195,7 @@ impl Books {
         self.forget_uids(path);
         match read_cards(path) {
             Some(cards) => {
-                for (index, c) in cards.iter().enumerate() {
-                    if let Some(uid) = Card(c).uid() {
-                        self.by_uid.entry(uid.to_owned()).or_default().push(CardId {
-                            path: path.to_owned(),
-                            index,
-                        });
-                    }
-                }
-                self.items.insert(
-                    path.as_os_str().to_owned(),
-                    Item {
-                        book,
-                        modified: modified(path),
-                        cards,
-                    },
-                );
+                self.file(book, path, modified(path), cards);
                 true
             }
             None => {
@@ -345,5 +356,33 @@ impl Books {
             Some(item) => item.modified.is_none() || item.modified != modified(path),
             None => true,
         }
+    }
+}
+
+impl Books {
+    /// Keep a file's parsed cards, and index their UIDs.
+    fn file(
+        &mut self,
+        book: usize,
+        path: &Path,
+        modified: Option<SystemTime>,
+        cards: Vec<Component>,
+    ) {
+        for (index, c) in cards.iter().enumerate() {
+            if let Some(uid) = Card(c).uid() {
+                self.by_uid.entry(uid.to_owned()).or_default().push(CardId {
+                    path: path.to_owned(),
+                    index,
+                });
+            }
+        }
+        self.items.insert(
+            path.as_os_str().to_owned(),
+            Item {
+                book,
+                modified,
+                cards,
+            },
+        );
     }
 }

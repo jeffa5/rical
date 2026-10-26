@@ -37,6 +37,8 @@ pub struct Entry {
     /// organisation.
     pub detail: String,
     pub book: usize,
+    /// The same card (by UID) in other address books.
+    pub copies: Vec<CardId>,
 }
 
 #[derive(Clone, Copy)]
@@ -51,6 +53,9 @@ struct Token {
 pub struct Index {
     pub generation: u64,
     pub entries: Vec<Entry>,
+    /// Each entry's place in name order, to sort by without comparing
+    /// names each time.
+    rank: Vec<u32>,
     text: String,
     tokens: Vec<Token>,
     /// Each phone number's digits, by entry.
@@ -59,75 +64,71 @@ pub struct Index {
 
 impl Index {
     pub fn build(books: &Books) -> Self {
-        let mut entries = Vec::with_capacity(books.len());
+        // one entry per person: a card with the same UID in another address
+        // book (two synced copies of one account, say) is a copy, noted
+        let mut cards: Vec<(CardId, Card, Vec<CardId>)> = Vec::with_capacity(books.len());
+        let mut seen: std::collections::HashMap<&str, usize> = Default::default();
+        for (id, _, card) in books.cards() {
+            if let Some(uid) = card.uid().filter(|u| !u.is_empty())
+                && let Some(&i) = seen.get(uid)
+                && books.book_of(&cards[i].0.path) != books.book_of(&id.path)
+            {
+                cards[i].2.push(id);
+                continue;
+            }
+            if let Some(uid) = card.uid().filter(|u| !u.is_empty()) {
+                seen.entry(uid).or_insert(cards.len());
+            }
+            cards.push((id, card, Vec::new()));
+        }
+
+        // the words of each card, on every core, in chunks joined after
+        let threads = std::thread::available_parallelism()
+            .map_or(1, |n| n.get())
+            .min(16);
+        let chunk = cards.len().div_ceil(threads).max(256);
+        let parts: Vec<Part> = std::thread::scope(|s| {
+            let handles: Vec<_> = cards
+                .chunks(chunk)
+                .enumerate()
+                .map(|(i, slice)| {
+                    let first = (i * chunk) as u32;
+                    s.spawn(move || index_cards(books, slice, first))
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        let mut entries = Vec::with_capacity(cards.len());
         let mut text = String::new();
         let mut tokens = Vec::new();
         let mut phones = Vec::new();
-        for (id, _, card) in books.cards() {
-            let n = entries.len() as u32;
-            push_words(&mut text, &mut tokens, &card.display_name(), n, Field::Name);
-            if let Some(name) = card.name() {
-                for part in [
-                    &name.given,
-                    &name.family,
-                    &name.additional,
-                    &name.prefixes,
-                    &name.suffixes,
-                ] {
-                    push_words(&mut text, &mut tokens, part, n, Field::Name);
-                }
-            }
-            for nick in card.nicknames() {
-                push_words(&mut text, &mut tokens, &nick, n, Field::Name);
-            }
-            for o in card.org() {
-                push_words(&mut text, &mut tokens, &o, n, Field::Org);
-            }
-            if let Some(t) = card.title() {
-                push_words(&mut text, &mut tokens, &t, n, Field::Org);
-            }
-            if let Some(r) = card.role() {
-                push_words(&mut text, &mut tokens, &r, n, Field::Org);
-            }
-            for e in card.emails() {
-                // the address whole, and its parts by the word splitting
-                push_words(&mut text, &mut tokens, &e.value, n, Field::Email);
-                push_token(&mut text, &mut tokens, &fold(&e.value), n, Field::Email);
-            }
-            for p in card.phones() {
-                let digits = phone_digits(&p.value);
-                if !digits.is_empty() {
-                    phones.push((digits.trim_start_matches('+').to_owned(), n));
-                }
-            }
-            for a in card.addresses() {
-                push_words(&mut text, &mut tokens, &a.one_line(), n, Field::Place);
-            }
-            for c in card.categories() {
-                push_words(&mut text, &mut tokens, &c, n, Field::Other);
-            }
-            for note in card.notes() {
-                push_words(&mut text, &mut tokens, &note, n, Field::Other);
-            }
-            for u in card.urls().into_iter().chain(card.chats()) {
-                push_words(&mut text, &mut tokens, &u.value, n, Field::Other);
-            }
-            entries.push(Entry {
-                detail: detail(&card),
-                name: card.display_name(),
-                sort: card.sort_key(),
-                book: books.book_of(&id.path).unwrap_or(0),
-                id,
-            });
+        for p in parts {
+            let offset = text.len() as u32;
+            text.push_str(&p.text);
+            tokens.extend(p.tokens.into_iter().map(|mut t| {
+                t.start += offset;
+                t
+            }));
+            entries.extend(p.entries);
+            phones.extend(p.phones);
         }
         tokens.sort_unstable_by(|a, b| {
             let ta = &text[a.start as usize..(a.start + a.len as u32) as usize];
             let tb = &text[b.start as usize..(b.start + b.len as u32) as usize];
             ta.cmp(tb).then(a.entry.cmp(&b.entry))
         });
+        text.shrink_to_fit();
+        let mut by_name: Vec<u32> = (0..entries.len() as u32).collect();
+        by_name.sort_by(|a, b| entries[*a as usize].sort.cmp(&entries[*b as usize].sort));
+        let mut rank = vec![0u32; entries.len()];
+        for (place, e) in by_name.iter().enumerate() {
+            rank[*e as usize] = place as u32;
+        }
+        tokens.shrink_to_fit();
         Index {
             generation: books.generation(),
             entries,
+            rank,
             text,
             tokens,
             phones,
@@ -144,7 +145,7 @@ impl Index {
         let query = query.trim();
         if query.is_empty() {
             let mut all: Vec<usize> = (0..self.entries.len()).collect();
-            all.sort_by(|a, b| self.entries[*a].sort.cmp(&self.entries[*b].sort));
+            all.sort_by_key(|&e| self.rank[e]);
             return all;
         }
         // scores by entry: lower is better, summed over the words
@@ -191,13 +192,7 @@ impl Index {
             });
         }
         let mut out: Vec<(u32, u32)> = scores.unwrap_or_default().into_iter().collect();
-        out.sort_by(|(ea, sa), (eb, sb)| {
-            sa.cmp(sb).then_with(|| {
-                self.entries[*ea as usize]
-                    .sort
-                    .cmp(&self.entries[*eb as usize].sort)
-            })
-        });
+        out.sort_unstable_by_key(|(e, score)| (*score, self.rank[*e as usize]));
         out.into_iter().map(|(e, _)| e as usize).collect()
     }
 
@@ -251,17 +246,6 @@ fn query_words(q: &str) -> Vec<String> {
     out
 }
 
-/// What to show under a card's name.
-fn detail(card: &Card) -> String {
-    if let Some(e) = card.emails().into_iter().next() {
-        return e.value;
-    }
-    if let Some(p) = card.phones().into_iter().next() {
-        return p.value;
-    }
-    card.org().join(", ")
-}
-
 fn push_token(text: &mut String, tokens: &mut Vec<Token>, w: &str, entry: u32, field: Field) {
     if w.is_empty() || w.len() > u16::MAX as usize {
         return;
@@ -279,6 +263,89 @@ fn push_words(text: &mut String, tokens: &mut Vec<Token>, s: &str, entry: u32, f
     for w in words(s) {
         push_token(text, tokens, &w, entry, field);
     }
+}
+/// Part of an index, made on one thread.
+struct Part {
+    entries: Vec<Entry>,
+    text: String,
+    tokens: Vec<Token>,
+    phones: Vec<(String, u32)>,
+}
+
+/// Index `cards`, numbering entries from `first`.
+fn index_cards(books: &Books, cards: &[(CardId, Card, Vec<CardId>)], first: u32) -> Part {
+    let mut part = Part {
+        entries: Vec::with_capacity(cards.len()),
+        text: String::new(),
+        tokens: Vec::new(),
+        phones: Vec::new(),
+    };
+    for (i, (id, card, copies)) in cards.iter().enumerate() {
+        let n = first + i as u32;
+        let (text, tokens) = (&mut part.text, &mut part.tokens);
+        let display = card.display_name();
+        push_words(text, tokens, &display, n, Field::Name);
+        if let Some(name) = card.name() {
+            for p in [
+                &name.given,
+                &name.family,
+                &name.additional,
+                &name.prefixes,
+                &name.suffixes,
+            ] {
+                push_words(text, tokens, p, n, Field::Name);
+            }
+        }
+        for nick in card.nicknames() {
+            push_words(text, tokens, &nick, n, Field::Name);
+        }
+        for o in card.org() {
+            push_words(text, tokens, &o, n, Field::Org);
+        }
+        for t in card.title().into_iter().chain(card.role()) {
+            push_words(text, tokens, &t, n, Field::Org);
+        }
+        let emails = card.emails();
+        for e in &emails {
+            // the address whole, and its parts by the word splitting
+            push_words(text, tokens, &e.value, n, Field::Email);
+            push_token(text, tokens, &fold(&e.value), n, Field::Email);
+        }
+        let phones = card.phones();
+        for p in &phones {
+            let digits = phone_digits(&p.value);
+            if !digits.is_empty() {
+                part.phones
+                    .push((digits.trim_start_matches('+').to_owned(), n));
+            }
+        }
+        for a in card.addresses() {
+            push_words(text, tokens, &a.one_line(), n, Field::Place);
+        }
+        for c in card.categories() {
+            push_words(text, tokens, &c, n, Field::Other);
+        }
+        for note in card.notes() {
+            push_words(text, tokens, &note, n, Field::Other);
+        }
+        for u in card.urls().into_iter().chain(card.chats()) {
+            push_words(text, tokens, &u.value, n, Field::Other);
+        }
+        let detail = emails
+            .first()
+            .map(|e| e.value.clone())
+            .or_else(|| phones.first().map(|p| p.value.clone()))
+            .unwrap_or_else(|| card.org().join(", "));
+        part.entries.push(Entry {
+            detail,
+            sort: card.sort_key(),
+            name: display,
+            book: books.book_of(&id.path).unwrap_or(0),
+            id: id.clone(),
+            copies: copies.clone(),
+        });
+    }
+    part
 }
 #[cfg(test)]
 mod tests {
