@@ -1482,6 +1482,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "chrono-tz",
+ "compact-ics",
  "env_filter",
  "env_logger",
  "gtk4",
@@ -1491,6 +1492,7 @@ dependencies = [
  "notify-rust",
  "nucleo-matcher",
  "pangocairo",
+ "rical-cards",
  "rical-core",
  "rical-ui",
 ]

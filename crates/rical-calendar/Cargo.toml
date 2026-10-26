@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 rical-core.workspace = true
 rical-ui.workspace = true
+rical-cards.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 env_logger.workspace = true
@@ -18,3 +19,6 @@ chrono-tz = "0.10.4"
 pangocairo = "0.22.9"
 notify-rust = "4.18.2"
 nucleo-matcher = "0.3.1"
+
+[dev-dependencies]
+compact-ics.workspace = true

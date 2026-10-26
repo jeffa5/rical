@@ -56,11 +56,15 @@ to:
 - **Suggest guests** from everyone in your contacts, as well as people from
   past events.
 - **Show a person's card**: click someone in the details popup, or
-  `:person NAME` (`:who`). The card shows what they do and where, their
-  email addresses (click to write), phone numbers (to call), addresses (to
-  map), web links, birthday and notes, and **Open in …** opens their
-  contact file in your contacts app. Someone not in your contacts shows
-  their address.
+  `:person NAME` (`:who`). It is the same card as in
+  [Contacts](contacts.md): what they do and where, their email addresses
+  (click to write), phone numbers (to call), addresses (to map), web
+  links, birthday and age, groups and notes, each with a copy button.
+  **Open in …** opens the card in rical-contacts if it is installed, else
+  in your app for vCards. Someone not in your contacts shows their
+  address and **Add to …**, which hands a new card with their name and
+  address to that app. rical-contacts then asks which address book to add
+  it to, or offers to merge it with someone you have.
 
-The contacts are read again when a file in the folder changes. rical
-doesn't edit contacts: that's for your contacts app.
+The contacts are read again when a file in the folder changes. The
+calendar doesn't edit contacts itself: that's for the contacts app.

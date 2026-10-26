@@ -276,26 +276,41 @@ impl State {
         let seen = rical_core::people::contacts_fingerprint(dir);
         let mut cache = self.contact_cache.borrow_mut();
         if cache.0 != Some(seen) {
-            let cards = rical_core::people::cards(dir);
-            let mut guests = rical_core::people::guests(&cards);
+            let books = match rical_cards::Books::load(dir) {
+                Ok(b) => Some(b),
+                Err(e) => {
+                    log::warn!("could not read the contacts in {dir:?}: {e:#}");
+                    None
+                }
+            };
+            let mut guests = Vec::new();
+            let mut by_email = std::collections::HashMap::new();
+            for (id, _, card) in books.iter().flat_map(|b| b.cards()) {
+                let name = Some(card.display_name()).filter(|n| !n.is_empty());
+                for e in card.emails() {
+                    let email = rical_cards::text::email_key(&e.value);
+                    if !email.contains('@') {
+                        continue;
+                    }
+                    by_email.entry(email.clone()).or_insert_with(|| id.clone());
+                    guests.push(Guest {
+                        email,
+                        name: name.clone(),
+                    });
+                }
+            }
             guests.sort_by(|a, b| a.email.cmp(&b.email));
             guests.dedup_by(|a, b| a.email == b.email);
             let names = guests
                 .iter()
-                .filter_map(|g| Some((g.email.to_lowercase(), g.name.clone()?)))
+                .filter_map(|g| Some((g.email.clone(), g.name.clone()?)))
                 .collect();
-            let mut by_email = std::collections::HashMap::new();
-            for (i, c) in cards.iter().enumerate() {
-                for (email, _) in &c.emails {
-                    by_email.entry(email.clone()).or_insert(i);
-                }
-            }
             *cache = (
                 Some(seen),
                 Rc::new(Contacts {
                     guests,
                     names,
-                    cards,
+                    books,
                     by_email,
                 }),
             );
@@ -303,11 +318,18 @@ impl State {
         (seen, cache.1.clone())
     }
 
-    /// The contact card with `email` on it, if any.
-    pub fn card_for(&self, email: &str) -> Option<rical_core::people::Card> {
+    /// `f` of the contact card with `email` on it, and where it is, if any.
+    pub fn with_card<T>(
+        &self,
+        email: &str,
+        f: impl FnOnce(&rical_cards::Card, &rical_cards::CardId) -> T,
+    ) -> Option<T> {
         let contacts = self.contacts().1;
-        let i = *contacts.by_email.get(&email.to_lowercase())?;
-        contacts.cards.get(i).cloned()
+        let id = contacts
+            .by_email
+            .get(&rical_cards::text::email_key(email))?;
+        let card = contacts.books.as_ref()?.get(id)?;
+        Some(f(&card, id))
     }
 
     /// Who someone on an event is, by the name you know them by: your
@@ -576,7 +598,7 @@ struct Contacts {
     guests: Vec<rical_core::write::Guest>,
     /// Each address (lower case) with its contact's name.
     names: std::collections::HashMap<String, String>,
-    cards: Vec<rical_core::people::Card>,
+    books: Option<rical_cards::Books>,
     /// Each address (lower case) with the card it is on.
-    by_email: std::collections::HashMap<String, usize>,
+    by_email: std::collections::HashMap<String, rical_cards::CardId>,
 }

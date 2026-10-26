@@ -4901,12 +4901,22 @@ rec {
             packageId = "pangocairo";
           }
           {
+            name = "rical-cards";
+            packageId = "rical-cards";
+          }
+          {
             name = "rical-core";
             packageId = "rical-core";
           }
           {
             name = "rical-ui";
             packageId = "rical-ui";
+          }
+        ];
+        devDependencies = [
+          {
+            name = "compact-ics";
+            packageId = "compact-ics";
           }
         ];
 

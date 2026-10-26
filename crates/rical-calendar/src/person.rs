@@ -1,19 +1,24 @@
 //! A person's card: who someone on an event is, from your contacts, with
-//! ways to reach them. Read only; the contacts app edits.
+//! ways to reach them. It is the contacts app's card (`rical_ui::card`);
+//! editing is left to that app, which the card opens.
+
+use std::path::Path;
 
 use adw::prelude::*;
-use chrono::NaiveDate;
 use gtk::gio;
 use rical_core::Person;
 
-use crate::{details::open_uri, format, state::State};
+use crate::{details::open_uri, state::State};
+
+/// The contacts app, when it is installed.
+const CONTACTS_APP: &str = "net.jeffas.Rical.Contacts.desktop";
 
 /// Show `person` (from an event) in a dialog over `parent`.
 pub fn show(parent: &impl IsA<gtk::Widget>, state: &State, person: &Person) {
     let email = person.email.clone().unwrap_or_default();
-    let card = state.card_for(&email);
     let name = state.name_of(person);
     let window = parent.as_ref().root().and_downcast::<gtk::Window>();
+    let today = chrono::Local::now().date_naive();
 
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -24,151 +29,74 @@ pub fn show(parent: &impl IsA<gtk::Widget>, state: &State, person: &Person) {
         .margin_end(18)
         .build();
 
-    // who: avatar, name, and what they do
-    let who = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(6)
-        .build();
-    who.append(&adw::Avatar::new(64, Some(&name), true));
-    who.append(
-        &gtk::Label::builder()
-            .label(&name)
-            .css_classes(["title-2"])
-            .wrap(true)
-            .justify(gtk::Justification::Center)
-            .selectable(true)
-            .can_focus(false)
-            .build(),
-    );
-    let role = card.as_ref().map(|c| {
-        [c.title.as_deref(), c.org.as_deref()]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .join(" · ")
+    let known = state.with_card(&email, |card, id| {
+        content.append(&rical_ui::card::heading(card, 64));
+        for g in rical_ui::card::groups(card, today) {
+            content.append(&g);
+        }
+        id.path.clone()
     });
-    let role = role
-        .filter(|r| !r.is_empty())
-        .or_else(|| card.is_none().then(|| "Not in your contacts".to_owned()));
-    if let Some(role) = role {
-        who.append(
-            &gtk::Label::builder()
-                .label(&role)
-                .css_classes(["dim-label"])
-                .wrap(true)
-                .justify(gtk::Justification::Center)
-                .build(),
-        );
-    }
-    content.append(&who);
-
-    // ways to reach them, each opening its link
-    let group = adw::PreferencesGroup::new();
-    let link_row = |title: &str, subtitle: &str, icon: &str, tip: &str, uri: String| {
-        let row = adw::ActionRow::builder()
-            .title(glib_escape(title))
-            .subtitle(glib_escape(subtitle))
-            .activatable(true)
-            .tooltip_text(tip)
-            .build();
-        row.add_suffix(&gtk::Image::from_icon_name(icon));
-        let w = window.clone();
-        row.connect_activated(move |_| open_uri(w.as_ref(), &uri));
-        row
-    };
-    let emails = match &card {
-        Some(c) => c.emails.clone(),
-        None if !email.is_empty() => vec![(email.to_lowercase(), Vec::new())],
-        None => Vec::new(),
-    };
-    for (address, labels) in &emails {
-        group.add(&link_row(
-            address,
-            &labels.join(", "),
-            "mail-send-symbolic",
-            "Write an email",
-            format!("mailto:{address}"),
-        ));
-    }
-    if let Some(c) = &card {
-        for (number, labels) in &c.phones {
-            let tel = number
-                .chars()
-                .filter(|ch| ch.is_ascii_digit() || *ch == '+')
-                .collect::<String>();
-            group.add(&link_row(
-                number,
-                &labels.join(", "),
-                "call-start-symbolic",
-                "Call",
-                format!("tel:{tel}"),
-            ));
+    match &known {
+        Some(path) => {
+            let open = gtk::Button::builder()
+                .label(format!("Open in {}", contacts_app_name()))
+                .halign(gtk::Align::Center)
+                .tooltip_text(path.display().to_string())
+                .css_classes(["pill"])
+                .build();
+            let (path, w) = (path.clone(), window.clone());
+            open.connect_clicked(move |_| open_in_contacts(w.as_ref(), &path));
+            content.append(&open);
         }
-        for (address, labels) in &c.addresses {
-            group.add(&link_row(
-                address,
-                &labels.join(", "),
-                "mark-location-symbolic",
-                "Show on a map",
-                format::map_url(address),
-            ));
-        }
-        for url in &c.urls {
-            group.add(&link_row(
-                url,
-                "",
-                "web-browser-symbolic",
-                "Open",
-                url.clone(),
-            ));
-        }
-        if let Some(day) = c.birthday.as_deref().and_then(birthday) {
-            group.add(
-                &adw::ActionRow::builder()
-                    .title(glib_escape(&day))
-                    .subtitle("birthday")
+        None => {
+            // not a contact: who the event says, and a way to add them
+            let who = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .spacing(6)
+                .build();
+            who.append(&adw::Avatar::new(64, Some(&name), true));
+            who.append(
+                &gtk::Label::builder()
+                    .label(&name)
+                    .css_classes(["title-2"])
+                    .wrap(true)
+                    .justify(gtk::Justification::Center)
+                    .selectable(true)
+                    .can_focus(false)
                     .build(),
             );
-        }
-        if let Some(note) = &c.note {
-            group.add(
-                &adw::ActionRow::builder()
-                    .title(glib_escape(note))
-                    .subtitle("note")
+            who.append(
+                &gtk::Label::builder()
+                    .label("Not in your contacts")
+                    .css_classes(["dim-label"])
                     .build(),
             );
+            content.append(&who);
+            if !email.is_empty() {
+                let group = adw::PreferencesGroup::new();
+                let address = email.to_lowercase();
+                group.add(&rical_ui::card::link_row(
+                    &address,
+                    "",
+                    "mail-send-symbolic",
+                    "Write an email",
+                    Some(format!("mailto:{address}")),
+                    &address,
+                ));
+                content.append(&group);
+                let add = gtk::Button::builder()
+                    .label(format!("Add to {}", contacts_app_name()))
+                    .halign(gtk::Align::Center)
+                    .css_classes(["pill"])
+                    .build();
+                let given = person.name.clone();
+                let w = window.clone();
+                add.connect_clicked(move |_| {
+                    add_to_contacts(w.as_ref(), given.as_deref(), &address);
+                });
+                content.append(&add);
+            }
         }
-    }
-    content.append(&group);
-
-    // the whole contact, in the app that opens vCards
-    if let Some(c) = &card {
-        let app = gio::AppInfo::default_for_type("text/vcard", false);
-        let label = app.as_ref().map_or_else(
-            || "Open contact".to_owned(),
-            |a| format!("Open in {}", a.display_name()),
-        );
-        let open = gtk::Button::builder()
-            .label(&label)
-            .halign(gtk::Align::Center)
-            .tooltip_text(c.path.display().to_string())
-            .css_classes(["pill"])
-            .build();
-        let path = c.path.clone();
-        let w = window.clone();
-        open.connect_clicked(move |_| {
-            let file = gio::File::for_path(&path);
-            gtk::FileLauncher::new(Some(&file)).launch(
-                w.as_ref(),
-                None::<&gio::Cancellable>,
-                |r| {
-                    if let Err(e) = r {
-                        log::warn!("could not open the contact: {e}");
-                    }
-                },
-            );
-        });
-        content.append(&open);
     }
 
     let view = adw::ToolbarView::new();
@@ -183,31 +111,67 @@ pub fn show(parent: &impl IsA<gtk::Widget>, state: &State, person: &Person) {
     ));
     adw::Dialog::builder()
         .title(&name)
-        .content_width(400)
+        .content_width(420)
         .child(&view)
         .build()
         .present(Some(parent.as_ref()));
 }
 
-fn glib_escape(s: &str) -> String {
-    gtk::glib::markup_escape_text(s).to_string()
+/// The app contacts open in: rical's own if installed, else the desktop's
+/// app for vCards.
+fn contacts_app() -> Option<gio::AppInfo> {
+    gio::AppInfo::all()
+        .into_iter()
+        .find(|a| a.id().as_deref() == Some(CONTACTS_APP))
+        .or_else(|| gio::AppInfo::default_for_type("text/vcard", false))
 }
 
-/// A vCard birthday in words: "31 January 1990", or "31 January" when
-/// the year is left out ("--0131").
-fn birthday(value: &str) -> Option<String> {
-    let date = value.split('T').next()?.replace('-', "");
-    match date.len() {
-        // --MMDD, the dashes gone
-        4 => {
-            let d = NaiveDate::parse_from_str(&format!("2000{date}"), "%Y%m%d").ok()?;
-            Some(d.format("%-d %B").to_string())
+fn contacts_app_name() -> String {
+    contacts_app().map_or_else(|| "Contacts".to_owned(), |a| a.display_name().to_string())
+}
+
+/// Open a card file in the contacts app, which shows the card it has (by
+/// UID) rather than adding a copy.
+fn open_in_contacts(parent: Option<&gtk::Window>, path: &Path) {
+    let file = gio::File::for_path(path);
+    match contacts_app() {
+        Some(app) => {
+            let ctx = parent.map(|w| gtk::prelude::WidgetExt::display(w).app_launch_context());
+            if let Err(e) = app.launch(&[file], ctx.as_ref()) {
+                log::warn!("could not open the contact: {e}");
+            }
         }
-        8 => {
-            let d = NaiveDate::parse_from_str(&date, "%Y%m%d").ok()?;
-            Some(d.format("%-d %B %Y").to_string())
-        }
-        _ => None,
+        None => open_uri(parent, &file.uri()),
+    }
+}
+
+/// A vCard for someone seen on an event: their name and address.
+fn new_card(name: Option<&str>, email: &str) -> String {
+    let escape = |s: &str| {
+        s.replace('\\', "\\\\")
+            .replace(',', "\\,")
+            .replace(';', "\\;")
+            .replace('\n', "\\n")
+    };
+    let name = name.filter(|n| !n.trim().is_empty()).unwrap_or(email);
+    format!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\nUID:urn:uuid:{}\r\nFN:{}\r\nEMAIL:{}\r\nEND:VCARD\r\n",
+        gtk::glib::uuid_string_random(),
+        escape(name.trim()),
+        escape(email),
+    )
+}
+
+/// Hand a new card to the contacts app, which asks where to add it (or
+/// offers to merge it with someone it already has).
+fn add_to_contacts(parent: Option<&gtk::Window>, name: Option<&str>, email: &str) {
+    let dir = gtk::glib::user_runtime_dir().join("rical");
+    let path = dir.join(format!("contact-{}.vcf", gtk::glib::uuid_string_random()));
+    let written =
+        std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, new_card(name, email)));
+    match written {
+        Ok(()) => open_in_contacts(parent, &path),
+        Err(e) => log::warn!("could not write {path:?}: {e}"),
     }
 }
 
@@ -216,16 +180,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn birthdays_in_words() {
-        assert_eq!(birthday("1990-01-31").as_deref(), Some("31 January 1990"));
-        assert_eq!(birthday("19900131").as_deref(), Some("31 January 1990"));
-        assert_eq!(birthday("--0131").as_deref(), Some("31 January"));
-        assert_eq!(birthday("--01-31").as_deref(), Some("31 January"));
-        assert_eq!(
-            birthday("1990-01-31T00:00:00Z").as_deref(),
-            Some("31 January 1990")
-        );
-        assert_eq!(birthday("--0229").as_deref(), Some("29 February"));
-        assert_eq!(birthday("soon"), None);
+    fn cards_for_guests_parse() {
+        let text = new_card(Some("Lee, Sam"), "sam@example.com");
+        let (cards, _) = compact_ics::parse(&text).unwrap();
+        let card = rical_cards::Card(&cards[0]);
+        assert_eq!(card.display_name(), "Lee, Sam");
+        assert_eq!(card.emails()[0].value, "sam@example.com");
+        assert!(card.uid().is_some_and(|u| u.starts_with("urn:uuid:")));
+        // no name: the address
+        let text = new_card(None, "jo@example.com");
+        assert!(text.contains("\r\nFN:jo@example.com\r\n"));
     }
 }
