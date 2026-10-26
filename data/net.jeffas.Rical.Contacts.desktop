@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Contacts (rical)
+GenericName=Contacts
+Comment=Address books of vCards: search, edit, and tidy up duplicates
+Exec=rical-contacts %U
+Icon=net.jeffas.Rical.Contacts
+Terminal=false
+Categories=Office;ContactManagement;GTK;
+Keywords=contacts;address book;people;vcard;vcf;rical;
+StartupNotify=true
+MimeType=text/vcard;text/x-vcard;text/directory;

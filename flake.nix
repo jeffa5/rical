@@ -28,7 +28,7 @@
         };
     };
 
-    # rical (CLI) and rical-calendar (GUI)
+    # rical (CLI), rical-calendar and rical-contacts (GUIs)
     rical = pkgs.stdenv.mkDerivation {
       pname = "rical";
       version = "0.1.0";
@@ -45,12 +45,16 @@
         mkdir -p $out/bin
         cp ${cargoNix.workspaceMembers.rical.build}/bin/rical $out/bin/
         cp ${cargoNix.workspaceMembers.rical-calendar.build}/bin/rical-calendar $out/bin/
+        cp ${cargoNix.workspaceMembers.rical-contacts.build}/bin/rical-contacts $out/bin/
+        install -Dm644 ${./data/net.jeffas.Rical.Contacts.desktop} $out/share/applications/net.jeffas.Rical.Contacts.desktop
+        install -Dm644 ${./data/icons/hicolor/scalable/apps/net.jeffas.Rical.Contacts.svg} $out/share/icons/hicolor/scalable/apps/net.jeffas.Rical.Contacts.svg
+        install -Dm644 ${./data/icons/hicolor/symbolic/apps/net.jeffas.Rical.Contacts-symbolic.svg} $out/share/icons/hicolor/symbolic/apps/net.jeffas.Rical.Contacts-symbolic.svg
         install -Dm644 ${./data/net.jeffas.Rical.desktop} $out/share/applications/net.jeffas.Rical.desktop
         install -Dm644 ${./data/icons/hicolor/scalable/apps/net.jeffas.Rical.svg} $out/share/icons/hicolor/scalable/apps/net.jeffas.Rical.svg
         install -Dm644 ${./data/icons/hicolor/symbolic/apps/net.jeffas.Rical-symbolic.svg} $out/share/icons/hicolor/symbolic/apps/net.jeffas.Rical-symbolic.svg
       '';
       meta = {
-        description = "Calendar and tasks over a vdir of .ics files";
+        description = "Calendar and tasks over a vdir of .ics files, and contacts over vCards";
         mainProgram = "rical-calendar";
         license = lib.licenses.mit;
         platforms = lib.platforms.linux;
@@ -140,6 +144,11 @@
           default = false;
           description = "Make rical-calendar the default for .ics files (text/calendar), so mail clients open invitations in it.";
         };
+        openContactFiles = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = "Make rical-contacts the default for .vcf files (text/vcard), so a contact opened elsewhere is shown, or added, in it.";
+        };
         extraConfig = lib.mkOption {
           type = lib.types.lines;
           default = "";
@@ -174,10 +183,16 @@
           };
           Install.WantedBy = ["graphical-session.target"];
         };
-        xdg.mimeApps.defaultApplications = lib.mkIf cfg.openCalendarFiles {
-          "text/calendar" = ["net.jeffas.Rical.desktop"];
-          "application/ics" = ["net.jeffas.Rical.desktop"];
-        };
+        xdg.mimeApps.defaultApplications = lib.mkMerge [
+          (lib.mkIf cfg.openCalendarFiles {
+            "text/calendar" = ["net.jeffas.Rical.desktop"];
+            "application/ics" = ["net.jeffas.Rical.desktop"];
+          })
+          (lib.mkIf cfg.openContactFiles {
+            "text/vcard" = ["net.jeffas.Rical.Contacts.desktop"];
+            "text/x-vcard" = ["net.jeffas.Rical.Contacts.desktop"];
+          })
+        ];
         xdg.configFile."rical/binds.conf" = lib.mkIf (cfg.binds != "") {
           text = cfg.binds;
         };

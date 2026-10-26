@@ -89,7 +89,7 @@ app_pid=$!
 pids+=("$app_pid")
 
 for _ in $(seq 100); do
-  SWAYSOCK=$sock swaymsg -t get_tree 2>/dev/null | grep -q '"app_id": "net.jeffas.Rical"' && break
+  SWAYSOCK=$sock swaymsg -t get_tree 2>/dev/null | grep -q "\"app_id\": \"${APP_ID:-net.jeffas.Rical}\"" && break
   kill -0 "$app_pid" 2>/dev/null || { echo "rical-calendar exited:" >&2; cat "$tmp/app.log" >&2; exit 1; }
   sleep 0.1
 done

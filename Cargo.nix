@@ -83,6 +83,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "rical-contacts" = rec {
+      packageId = "rical-contacts";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "rical-contacts";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "rical-core" = rec {
       packageId = "rical-core";
       build = internal.buildRustCrateWithFeatures {
@@ -4943,6 +4953,59 @@ rec {
         ];
 
       };
+      "rical-contacts" = rec {
+        crateName = "rical-contacts";
+        version = "0.1.0";
+        edition = "2024";
+        crateBin = [
+          {
+            name = "rical-contacts";
+            path = "src/main.rs";
+            requiredFeatures = [ ];
+          }
+        ];
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/rical-contacts; };
+        dependencies = [
+          {
+            name = "anyhow";
+            packageId = "anyhow";
+          }
+          {
+            name = "chrono";
+            packageId = "chrono";
+          }
+          {
+            name = "gtk4";
+            packageId = "gtk4";
+            rename = "gtk";
+            features = [ "v4_18" ];
+          }
+          {
+            name = "libadwaita";
+            packageId = "libadwaita";
+            rename = "adw";
+            features = [ "v1_8" ];
+          }
+          {
+            name = "log";
+            packageId = "log";
+            features = [ "kv" ];
+          }
+          {
+            name = "rical-cards";
+            packageId = "rical-cards";
+          }
+          {
+            name = "rical-core";
+            packageId = "rical-core";
+          }
+          {
+            name = "rical-ui";
+            packageId = "rical-ui";
+          }
+        ];
+
+      };
       "rical-core" = rec {
         crateName = "rical-core";
         version = "0.1.0";
@@ -5046,6 +5109,10 @@ rec {
           {
             name = "pangocairo";
             packageId = "pangocairo";
+          }
+          {
+            name = "rical-cards";
+            packageId = "rical-cards";
           }
           {
             name = "rical-core";

@@ -8,6 +8,10 @@ changes made on disk while it runs.
 - `rical-calendar` (“Calendar (rical)” in your app launcher): a GTK4/libadwaita
   app with day, week, month, year, agenda, task and journal views,
   recurring events, time zones, subtasks, invitations and reminders.
+- `rical-contacts` (“Contacts (rical)”): an address book for folders of
+  vCards in the same style, with search across every field, contacts
+  opened from other apps matched by UID, and merging of duplicates. See
+  [Contacts](docs/contacts.md).
 - `rical`: a CLI for listing, adding, completing and editing items, plus
   `rical remind` for desktop notifications.
 
@@ -28,7 +32,7 @@ The [documentation](docs/README.md) covers everything; start with
 [Configuration](docs/configuration.md) (every setting) ·
 [Views](docs/views.md) · [Adding things](docs/adding.md) ·
 [Commands](docs/commands.md) · [Keys](docs/keys.md) ·
-[Files and sync](docs/files-and-sync.md) ·
+[Files and sync](docs/files-and-sync.md) · [Contacts](docs/contacts.md) ·
 [Troubleshooting](docs/troubleshooting.md).
 
 ## Install
@@ -36,6 +40,7 @@ The [documentation](docs/README.md) covers everything; start with
 ```sh
 nix run github:jeffa5/rical           # or: nix profile install github:jeffa5/rical
 cargo install --path crates/rical-calendar  # needs GTK 4 and libadwaita
+cargo install --path crates/rical-contacts
 ```
 
 The flake also has a [Home Manager module](docs/configuration.md#home-manager)

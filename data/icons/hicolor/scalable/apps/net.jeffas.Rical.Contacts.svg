@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="head" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#62a0ea"/>
+      <stop offset="1" stop-color="#3584e4"/>
+    </linearGradient>
+    <linearGradient id="page" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#f6f5f4"/>
+    </linearGradient>
+    <linearGradient id="face" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffbe6f"/>
+      <stop offset="1" stop-color="#ff7800"/>
+    </linearGradient>
+    <clipPath id="card"><rect x="12" y="20" width="104" height="92" rx="14"/></clipPath>
+  </defs>
+  <!-- the card, standing on a darker edge, like the calendar's page -->
+  <rect x="12" y="24" width="104" height="92" rx="14" fill="#c0bfbc"/>
+  <rect x="12" y="20" width="104" height="92" rx="14" fill="url(#page)"/>
+  <g clip-path="url(#card)">
+    <!-- the header band, with rical's ":" -->
+    <rect x="12" y="20" width="104" height="30" fill="url(#head)"/>
+    <rect x="12" y="48" width="104" height="2" fill="#1c71d8" opacity="0.5"/>
+  </g>
+  <circle cx="64" cy="29.5" r="3.6" fill="#ffffff"/>
+  <circle cx="64" cy="40.5" r="3.6" fill="#ffffff"/>
+  <!-- tabs, as on an address book -->
+  <rect x="116" y="58" width="6" height="14" rx="3" fill="#33d17a"/>
+  <rect x="116" y="76" width="6" height="14" rx="3" fill="#f6d32d"/>
+  <rect x="116" y="94" width="6" height="12" rx="3" fill="#c061cb"/>
+  <!-- a person -->
+  <circle cx="40" cy="74" r="10" fill="url(#face)"/>
+  <path d="M22 102c0-10 8-16 18-16s18 6 18 16z" fill="url(#face)"/>
+  <!-- and what you know of them -->
+  <g fill="#deddda">
+    <rect x="66" y="64" width="38" height="8" rx="4"/>
+    <rect x="66" y="80" width="30" height="8" rx="4"/>
+    <rect x="66" y="96" width="34" height="8" rx="4"/>
+  </g>
+  <rect x="66" y="64" width="24" height="8" rx="4" fill="#9a9996"/>
+</svg>

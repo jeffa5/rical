@@ -34,10 +34,10 @@ impl Reason {
 
     pub fn describe(&self) -> String {
         match self {
-            Reason::SameUid(_) => "the same card, in two places".to_owned(),
-            Reason::SameEmail(e) => format!("both have {e}"),
-            Reason::SamePhone(p) => format!("both have a number ending {p}"),
-            Reason::SameName(n) => format!("both are called {n}"),
+            Reason::SameUid(_) => "the same card ID (UID)".to_owned(),
+            Reason::SameEmail(e) => format!("the same email address, {e}"),
+            Reason::SamePhone(p) => format!("the same number, ending {p}"),
+            Reason::SameName(n) => format!("the same name, {n}"),
         }
     }
 }

@@ -25,6 +25,8 @@ commands. A command-line tool (`rical`) works on the same files.
   dates, time-blocking, and journal entries.
 - [Invitations and people](invitations-and-people.md): answering
   invitations, inviting guests, and your contacts.
+- [Contacts](contacts.md): the companion address book app: search,
+  editing, opening contacts from other apps, and merging duplicates.
 - [Reminders](reminders.md): alarms, a default reminder, and reminders
   without the app open.
 

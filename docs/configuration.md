@@ -156,6 +156,7 @@ The flake has a Home Manager module:
     remind = "10m";
     reminders = true;              # run `rical remind` as a user service
     openCalendarFiles = true;      # open .ics files (invitations) in rical
+    openContactFiles = true;       # open .vcf files (contacts) in rical-contacts
     settings = {
       me = [ "me@example.com" ];
       contacts = "~/contacts/nextcloud";
@@ -180,6 +181,7 @@ The flake has a Home Manager module:
 | `binds` | Key bindings, written to `~/.config/rical/binds.conf`. |
 | `extraConfig` | Lines added to the end of the config file. |
 | `openCalendarFiles` | Make rical the default for `.ics` files, so mail clients open invitations in it. |
+| `openContactFiles` | Make rical-contacts the default for `.vcf` files, so contacts opened elsewhere are shown or added there ([Contacts](contacts.md)). |
 
 The module writes these into `~/.config/rical/config`, which is then
 read-only: changes made in Preferences go to `local.conf` and override it.

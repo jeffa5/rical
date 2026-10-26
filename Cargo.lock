@@ -1509,6 +1509,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rical-contacts"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "gtk4",
+ "libadwaita",
+ "log",
+ "rical-cards",
+ "rical-core",
+ "rical-ui",
+]
+
+[[package]]
 name = "rical-core"
 version = "0.1.0"
 dependencies = [
@@ -1537,6 +1551,7 @@ dependencies = [
  "log",
  "nucleo-matcher",
  "pangocairo",
+ "rical-cards",
  "rical-core",
 ]
 
