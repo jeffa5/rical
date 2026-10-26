@@ -66,6 +66,12 @@ address or number to tell people apart.
 - `/` (or `Ctrl+F`) moves to the search box. Type any part of any field:
   `leeds`, `acme`, `7700 9`, `jo@`. Words narrow the search, so `sam leeds`
   finds Sams in Leeds.
+- Numbers match however either is written. Spaces, dashes, dots and
+  brackets don't matter, and digits typed with spaces are one run:
+  `7700 900` is `7700900`. A national number with its trunk 0
+  (`07700 900123`) finds one saved with a country code
+  (`+44 7700 900123`), and the other way round (`+44` or `0044`). Any part
+  of a number will do.
 - `Down` goes from the search to the list, and Enter opens the first
   result.
 - `j`/`k` (or the arrows) move through the list, and `g`/`G` jump to the

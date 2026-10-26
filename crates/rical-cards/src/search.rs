@@ -6,8 +6,9 @@
 //! (lower case, accents off) and kept in one sorted list, their text in a
 //! single buffer. A query's words each find their prefix in the list by
 //! binary search, and a card must match them all. Phone numbers are matched
-//! by digits, anywhere in the number, however they are written. A match in
-//! a name counts for more than one in a note.
+//! by digits, anywhere in the number, however either is written: spaces and
+//! punctuation aside, and with a trunk 0 or a country code. A match in a
+//! name counts for more than one in a note.
 
 use crate::{
     book::{Books, CardId},
@@ -150,16 +151,13 @@ impl Index {
         }
         // scores by entry: lower is better, summed over the words
         let mut scores: Option<std::collections::HashMap<u32, u32>> = None;
-        for word in query_words(query) {
+        for QueryWord { word, phone } in query_words(query) {
             let mut found: std::collections::HashMap<u32, u32> = Default::default();
-            // a number: its digits anywhere in a phone number
-            let digits: String = word.chars().filter(char::is_ascii_digit).collect();
-            if digits.len() >= 3
-                && digits.len() == word.chars().filter(|c| c.is_alphanumeric()).count()
-            {
+            // a number: in a phone number, however either is written
+            if !phone.is_empty() {
                 for (p, e) in &self.phones {
-                    if p.contains(&digits) {
-                        let s = Field::Phone as u32 * 10 + u32::from(!p.ends_with(&digits));
+                    if let Some(c) = phone.iter().find(|c| p.contains(c.as_str())) {
+                        let s = Field::Phone as u32 * 10 + u32::from(!p.ends_with(c.as_str()));
                         found
                             .entry(*e)
                             .and_modify(|b| *b = (*b).min(s))
@@ -216,32 +214,82 @@ impl Index {
     }
 }
 
-/// A query's words, folded as the index's are. An email address or a
-/// number is kept whole as well as split.
-fn query_words(q: &str) -> Vec<String> {
+/// A word of a query: as the index's words are folded, and, for a
+/// number, the digit runs to look for in phone numbers.
+struct QueryWord {
+    word: String,
+    phone: Vec<String>,
+}
+
+/// Whether a query word is (part of) a number as people write them:
+/// "+44", "(0113)", "496-0000".
+fn is_number(w: &str) -> bool {
+    w.chars().any(|c| c.is_ascii_digit())
+        && w.chars().all(|c| c.is_ascii_digit() || "+-().".contains(c))
+}
+
+/// What to look for in phone numbers' digits for a number typed as
+/// `typed`, however each is written. A number is kept in the index as its
+/// digits, so "+44 7700 900123" is "447700900123" and "07700 900123" is
+/// "07700900123"; the part they share is the number without its trunk 0,
+/// or without the international prefix ("+", "00") and country code. A
+/// country code is one to three digits, so each is tried.
+fn phone_needles(typed: &str) -> Vec<String> {
+    let digits: String = typed.chars().filter(char::is_ascii_digit).collect();
+    if digits.len() < 3 {
+        return Vec::new();
+    }
+    let international = typed.trim_start().starts_with('+') || digits.starts_with("00");
+    let national = digits.trim_start_matches('0');
+    let mut out = vec![national.to_owned()];
+    if international {
+        for cc in 1..=3 {
+            if national.len() >= cc + 4 {
+                out.push(national[cc..].to_owned());
+            }
+        }
+    }
+    out.retain(|n| n.len() >= 2);
+    out
+}
+
+/// A query's words, folded as the index's are. An email address is kept
+/// whole; numbers typed with spaces ("07700 900 123") are one number.
+fn query_words(q: &str) -> Vec<QueryWord> {
     let mut out = Vec::new();
-    for raw in q.split_whitespace() {
-        let folded = fold(raw);
+    let raw: Vec<&str> = q.split_whitespace().collect();
+    let mut i = 0;
+    while i < raw.len() {
+        let w = raw[i];
+        i += 1;
+        let folded = fold(w);
         if folded.contains('@') {
-            out.push(folded);
+            out.push(QueryWord {
+                word: folded,
+                phone: Vec::new(),
+            });
             continue;
         }
-        let parts = words(raw);
-        if parts.is_empty() {
-            continue;
-        }
-        // "+44" or "7700-900": digits for phone matching, whole
-        if folded.chars().any(|c| c.is_ascii_digit())
-            && folded
-                .chars()
-                .all(|c| c.is_ascii_digit() || "+-() .".contains(c))
-        {
-            out.push(folded.chars().filter(char::is_ascii_digit).collect());
+        if is_number(w) {
+            let mut typed = w.to_owned();
+            while i < raw.len() && is_number(raw[i]) {
+                typed.push_str(raw[i]);
+                i += 1;
+            }
+            out.push(QueryWord {
+                word: typed.chars().filter(char::is_ascii_digit).collect(),
+                phone: phone_needles(&typed),
+            });
             continue;
         }
         // all the word's parts must match: "o'brien" is "o" and "brien",
         // or "obrien"; take the joined form when there is one
-        out.push(parts.last().cloned().unwrap());
+        if let Some(last) = words(w).pop() {
+            out.push(QueryWord {
+                word: last,
+                phone: Vec::new(),
+            });
+        }
     }
     out
 }
@@ -351,7 +399,7 @@ fn index_cards(books: &Books, cards: &[(CardId, Card, Vec<CardId>)], first: u32)
 mod tests {
     use super::*;
 
-    fn books(cards: &[&str]) -> (tempfile::TempDir, Books) {
+    pub(super) fn books(cards: &[&str]) -> (tempfile::TempDir, Books) {
         let dir = tempfile::tempdir().unwrap();
         let book = dir.path().join("contacts");
         std::fs::create_dir(&book).unwrap();
@@ -366,7 +414,7 @@ mod tests {
         (dir, b)
     }
 
-    fn names(index: &Index, q: &str) -> Vec<String> {
+    pub(super) fn names(index: &Index, q: &str) -> Vec<String> {
         index
             .search(q)
             .into_iter()
@@ -409,5 +457,46 @@ mod tests {
             names(&index, ""),
             ["Sam Lee", "Samantha O'Brien", "Priya Shah", "Zoë Ørsted"]
         );
+    }
+}
+
+#[cfg(test)]
+mod phone_tests {
+    use super::tests::{books, names};
+
+    #[test]
+    fn numbers_however_written() {
+        let (_d, b) = books(&[
+            "FN:Sam Lee\r\nTEL:+44 7700 900123\r\n",
+            "FN:Jo Park\r\nTEL:0113 496 0000\r\n",
+            "FN:Ana Silva\r\nTEL:(415) 555-0134\r\n",
+            "FN:Wei Chen\r\nTEL:+1 415 555 0199\r\n",
+        ]);
+        let index = super::Index::build(&b);
+        // spaced, run together, dashed or dotted
+        for q in ["7700 900123", "7700900123", "7700-900-123", "77 00 900 1"] {
+            assert_eq!(names(&index, q), ["Sam Lee"], "{q}");
+        }
+        // the national form finds an international number
+        for q in ["07700 900123", "07700900123", "077009"] {
+            assert_eq!(names(&index, q), ["Sam Lee"], "{q}");
+        }
+        // and the international form a national one, with + or 00
+        for q in [
+            "+44 113 496 0000",
+            "0044 113 496 0000",
+            "+441134960000",
+            "+44 113 4",
+        ] {
+            assert_eq!(names(&index, q), ["Jo Park"], "{q}");
+        }
+        // brackets, and a one-digit country code
+        assert_eq!(names(&index, "(415) 555"), ["Ana Silva", "Wei Chen"]);
+        assert_eq!(names(&index, "+1 415 555 0134"), ["Ana Silva"]);
+        assert_eq!(names(&index, "555-0199"), ["Wei Chen"]);
+        // a run of digits must be in one number, in order
+        assert!(names(&index, "900123 7700").is_empty());
+        // with a name
+        assert_eq!(names(&index, "sam 07700"), ["Sam Lee"]);
     }
 }
