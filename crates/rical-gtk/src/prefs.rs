@@ -36,7 +36,6 @@ pub fn show(parent: &impl IsA<gtk::Widget>, calendars: Vec<(String, String)>, on
         dialog: dialog.clone(),
         on_saved,
         notice: RefCell::new(None),
-        hm_row: RefCell::new(None),
     });
     let now = config::current(Some(&path));
     let value = |name: &str| now.get(name).map(|(v, _)| v.clone());
@@ -200,8 +199,6 @@ struct Ctx {
     on_saved: OnSaved,
     /// The group that says where changes are saved.
     notice: RefCell<Option<adw::PreferencesGroup>>,
-    /// The line to add to the config, when it is shown.
-    hm_row: RefCell<Option<adw::ActionRow>>,
 }
 
 impl Ctx {
@@ -251,8 +248,7 @@ impl Ctx {
             group.set_title("Saving to local.conf");
             group.set_description(Some(&format!(
                 "{} can’t be changed (Nix or another tool made it), so changes go to {} \
-                 beside it, which rical reads after it. To keep them with the rest of your \
-                 Nix config, copy them into Home Manager and delete local.conf.",
+                 beside it, which rical reads after it.",
                 tilde(&self.path),
                 tilde(&local),
             )));
@@ -262,31 +258,6 @@ impl Ctx {
                 "Changes are saved to {} as you make them.",
                 tilde(&self.path)
             )));
-        }
-        // what local.conf holds, as Home Manager settings to paste
-        if let Some(old) = self.hm_row.borrow_mut().take() {
-            group.remove(&old);
-        }
-        let saved_here = config::load(&local).unwrap_or_default();
-        if read_only && !saved_here.is_empty() {
-            let nix = home_manager(&saved_here);
-            let row = adw::ActionRow::builder()
-                .title("Copy as Home Manager settings")
-                .subtitle(format!(
-                    "programs.rical.settings, {} set here",
-                    saved_here.len()
-                ))
-                .activatable(true)
-                .build();
-            let copy = gtk::Image::from_icon_name("edit-copy-symbolic");
-            row.add_suffix(&copy);
-            let dialog = self.dialog.clone();
-            row.connect_activated(move |r| {
-                r.clipboard().set_text(&nix);
-                dialog.add_toast(adw::Toast::new("Copied"));
-            });
-            group.add(&row);
-            *self.hm_row.borrow_mut() = Some(row);
         }
         // the file itself, for what this dialog doesn't cover
         if group.header_suffix().is_none() {
@@ -486,63 +457,5 @@ fn tilde(p: &Path) -> String {
             format!("~/{}", p.strip_prefix(&home).unwrap().display())
         }
         _ => p.display().to_string(),
-    }
-}
-
-/// Settings as a Home Manager `programs.rical.settings` block, each once
-/// (the last value), true/false as booleans and lists as lists.
-fn home_manager(settings: &[config::Setting]) -> String {
-    let mut seen: Vec<(&str, &str)> = Vec::new();
-    for s in settings {
-        seen.retain(|(n, _)| *n != s.name);
-        seen.push((&s.name, &s.value));
-    }
-    let quote = |v: &str| format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\""));
-    let mut out = String::from("programs.rical.settings = {\n");
-    for (name, value) in seen {
-        let key = if name.contains('-') {
-            quote(name)
-        } else {
-            name.to_owned()
-        };
-        let nix = match value.to_ascii_lowercase().as_str() {
-            "true" | "false" => value.to_ascii_lowercase(),
-            _ if matches!(name, "me" | "zones") => format!(
-                "[ {} ]",
-                value
-                    .split(',')
-                    .map(|v| quote(v.trim()))
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            ),
-            _ => quote(value),
-        };
-        out += &format!("  {key} = {nix};\n");
-    }
-    out + "};\n"
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn settings_as_home_manager() {
-        let s = |name: &str, value: &str| config::Setting {
-            name: name.into(),
-            value: value.into(),
-            origin: String::new(),
-            base: PathBuf::new(),
-        };
-        assert_eq!(
-            home_manager(&[
-                s("week", "workweek"),
-                s("me", "a@x.com, b@x.com"),
-                s("no-notifications", "true"),
-                s("week", "3days"),
-            ]),
-            "programs.rical.settings = {\n  me = [ \"a@x.com\" \"b@x.com\" ];\n  \
-             \"no-notifications\" = true;\n  week = \"3days\";\n};\n"
-        );
     }
 }

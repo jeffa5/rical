@@ -1105,11 +1105,12 @@ impl Window {
     /// a bug report.
     pub(super) fn show_about(self: &Rc<Self>) {
         crate::details::close();
+        let log = crate::logfile::path();
         let debug = {
             let s = self.state.borrow();
             format!(
                 "rical {}\nGTK {}.{}.{}, libadwaita {}.{}.{}\nrenderer: {}\nconfig: {}\nvdir: {}\n\
-                 calendars: {}\ntime zone: {}\n",
+                 calendars: {}\ntime zone: {}\nlog: {}\n\nThe end of the log:\n{}\n",
                 env!("CARGO_PKG_VERSION"),
                 gtk::major_version(),
                 gtk::minor_version(),
@@ -1122,9 +1123,12 @@ impl Window {
                 s.vdir.root.display(),
                 s.vdir.calendars.len(),
                 s.local.name(),
+                log.as_deref()
+                    .map_or("none".into(), |p| p.display().to_string()),
+                crate::logfile::tail(40),
             )
         };
-        adw::AboutDialog::builder()
+        let about = adw::AboutDialog::builder()
             .application_name("rical")
             .application_icon(crate::APP_ID)
             .version(env!("CARGO_PKG_VERSION"))
@@ -1140,7 +1144,11 @@ impl Window {
             .issue_url("https://github.com/jeffa5/rical/issues")
             .debug_info(debug)
             .debug_info_filename("rical-debug.txt")
-            .build()
-            .present(Some(&self.window));
+            .build();
+        // the log itself, opened in the text editor
+        if let Some(p) = log.filter(|p| p.exists()) {
+            about.add_link("Open log file", &gtk::gio::File::for_path(p).uri());
+        }
+        about.present(Some(&self.window));
     }
 }

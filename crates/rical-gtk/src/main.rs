@@ -22,6 +22,7 @@ mod invitations;
 mod journals;
 mod layout;
 mod listhead;
+mod logfile;
 mod minimonth;
 mod month;
 mod person;
@@ -41,10 +42,8 @@ mod zones;
 pub const APP_ID: &str = "net.jeffas.Rical";
 
 fn main() -> glib::ExitCode {
-    env_logger::Builder::from_default_env()
-        .filter_level(log::LevelFilter::Warn)
-        .parse_default_env()
-        .init();
+    logfile::init();
+    log::info!("rical {} starting", env!("CARGO_PKG_VERSION"));
     let options = match config::Options::load() {
         Ok(o) => o,
         Err(e) => {

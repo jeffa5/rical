@@ -1547,7 +1547,7 @@ rec {
           "default" = [ "regex" ];
           "regex" = [ "dep:regex" ];
         };
-        resolvedDefaultFeatures = [ "regex" ];
+        resolvedDefaultFeatures = [ "default" "regex" ];
       };
       "env_logger" = rec {
         crateName = "env_logger";
@@ -4887,6 +4887,10 @@ rec {
           {
             name = "chrono-tz";
             packageId = "chrono-tz";
+          }
+          {
+            name = "env_filter";
+            packageId = "env_filter";
           }
           {
             name = "env_logger";
