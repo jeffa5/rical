@@ -185,7 +185,7 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
         if invite.needs_reply() {
             r.add_css_class("warning");
         }
-        content.append(&r);
+        content.append(&person_link(&r, invite.from, &state.name_of(invite.from)));
         // answer it here too (the invitations view has these on each row)
         if state.view != ViewKind::Invitations {
             let answers = gtk::Box::builder()
@@ -213,9 +213,13 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
     } else if let Some(organizer) = &occ.organizer
         && !occ.attendees.is_empty()
     {
-        content.append(&row(
-            "avatar-default-symbolic",
-            &format!("Organised by {}", state.name_of(organizer)),
+        content.append(&person_link(
+            &row(
+                "avatar-default-symbolic",
+                &format!("Organised by {}", state.name_of(organizer)),
+            ),
+            organizer,
+            &state.name_of(organizer),
         ));
     }
     if !occ.attendees.is_empty() {
@@ -494,7 +498,7 @@ fn people(occ: &Occurrence, state: &State) -> gtk::Box {
             label.set_tooltip_text(Some(email));
         }
         l.append(&label);
-        l
+        person_link(&l, a, &state.name_of(a))
     };
     // me first, then by reply: going, maybe, unanswered, not going
     let rank = |a: &rical_core::Person| {
@@ -571,4 +575,19 @@ fn has_day(occ: &Occurrence, state: &State) -> bool {
             .any(|(o, dated)| *dated && o.path == occ.path && o.uid == occ.uid),
         Kind::Event => true,
     }
+}
+
+/// `child` as a link to `p`'s card (`:person`), when they have an address.
+fn person_link(child: &impl IsA<gtk::Widget>, p: &rical_core::Person, name: &str) -> gtk::Widget {
+    let Some(email) = &p.email else {
+        return child.clone().upcast();
+    };
+    gtk::Button::builder()
+        .child(child)
+        .css_classes(["flat", "person-link"])
+        .tooltip_text(format!("About {name}"))
+        .action_name("win.run")
+        .action_target(&format!("person {email}").to_variant())
+        .build()
+        .upcast()
 }

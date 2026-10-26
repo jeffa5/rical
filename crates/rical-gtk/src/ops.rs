@@ -993,4 +993,48 @@ impl Window {
         }
         Ok(())
     }
+
+    /// `:person [who]`: someone on the selected event, by address or a
+    /// name you know them by; with nobody named, the one other person.
+    pub(super) fn show_person(self: &Rc<Self>, who: &str) -> Result<(), String> {
+        let occ = self.current_item().ok_or("select an event first")?;
+        let state = self.state.borrow();
+        let me = state.my_addresses();
+        let mut people: Vec<&rical_core::Person> = Vec::new();
+        for p in occ.organizer.iter().chain(&occ.attendees) {
+            if !people.iter().any(|q| q.email == p.email) {
+                people.push(p);
+            }
+        }
+        let who = who.trim().to_lowercase();
+        let found = if who.is_empty() {
+            let others = people
+                .iter()
+                .filter(|p| !p.is_any_of(&me))
+                .collect::<Vec<_>>();
+            match others[..] {
+                [one] => Some(*one),
+                [] => return Err("nobody else is on it".into()),
+                _ => return Err("who? e.g. :person Sam".into()),
+            }
+        } else {
+            people
+                .iter()
+                .find(|p| {
+                    p.email
+                        .as_deref()
+                        .is_some_and(|e| e.eq_ignore_ascii_case(&who))
+                })
+                .or_else(|| {
+                    people
+                        .iter()
+                        .find(|p| state.name_of(p).to_lowercase().contains(&who))
+                })
+                .copied()
+        };
+        let person = found.ok_or(format!("nobody called “{who}” is on it"))?;
+        crate::details::close();
+        crate::person::show(&self.window, &state, person);
+        Ok(())
+    }
 }

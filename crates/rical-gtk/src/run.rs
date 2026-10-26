@@ -120,6 +120,7 @@ impl Window {
             "details" => self.show_details(),
             "reveal" => self.reveal()?,
             "convert" => self.convert()?,
+            "person" => self.show_person(p.arg(0).unwrap_or_default())?,
             "link" => {
                 let occ = self.current_item().ok_or("select an event first")?;
                 let url =

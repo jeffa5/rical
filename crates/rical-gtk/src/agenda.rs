@@ -217,6 +217,10 @@ impl AgendaView {
         });
         match row {
             Some(row) => {
+                // what looks chosen is what commands act on
+                if self.list.selected_row().is_none() {
+                    self.list.select_row(Some(&row));
+                }
                 row.grab_focus();
             }
             None => {

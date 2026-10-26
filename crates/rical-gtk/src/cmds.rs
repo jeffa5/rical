@@ -232,6 +232,19 @@ pub static SPECS: &[Spec] = &[
         ..spec("resize", "Change the selected event's end, e.g. +15m")
     },
     Spec {
+        aliases: &["who"],
+        args: &[Arg {
+            name: "who",
+            kind: Kind::Dynamic("invited"),
+            optional: true,
+            rest: true,
+        }],
+        ..spec(
+            "person",
+            "Show someone on the selected event (name or address) from your contacts",
+        )
+    },
+    Spec {
         aliases: &["to-task", "to-event"],
         ..spec(
             "convert",

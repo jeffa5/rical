@@ -24,6 +24,7 @@ mod layout;
 mod listhead;
 mod minimonth;
 mod month;
+mod person;
 mod raw;
 mod repeat;
 

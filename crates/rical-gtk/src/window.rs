@@ -624,7 +624,8 @@ impl Window {
         let mut css = String::from(
             "row:not(:hover):not(:focus-within) .calendar-more > button:not(:checked) { opacity: 0; }\n\
              .rical-list row:selected { background-color: alpha(@accent_bg_color, 0.16); }\n\
-             .rical-list row:selected:hover { background-color: alpha(@accent_bg_color, 0.22); }\n",
+             .rical-list row:selected:hover { background-color: alpha(@accent_bg_color, 0.22); }\n\
+             button.person-link { padding: 1px 4px; margin: -1px -4px; min-height: 0; font-weight: normal; }\n",
         );
         for (i, cal) in state.vdir.calendars.iter().enumerate() {
             let check = gtk::CheckButton::builder()

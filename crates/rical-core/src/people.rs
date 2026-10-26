@@ -57,23 +57,7 @@ impl Vdir {
 /// Contacts in a folder of `.vcf` files (searched recursively), e.g. a
 /// vdirsyncer address book: one per address, named by `FN`.
 pub fn contacts(dir: &Path) -> Vec<Guest> {
-    let mut out = Vec::new();
-    let mut stack = vec![dir.to_owned()];
-    while let Some(d) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&d) else {
-            continue;
-        };
-        for e in entries.flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                stack.push(p);
-            } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("vcf"))
-                && let Ok(text) = std::fs::read_to_string(&p)
-            {
-                out.extend(parse_vcards(&text));
-            }
-        }
-    }
+    let mut out = guests(&cards(dir));
     out.sort_by(|a, b| a.email.cmp(&b.email));
     out.dedup_by(|a, b| a.email == b.email);
     out
@@ -108,47 +92,183 @@ pub fn contacts_fingerprint(dir: &Path) -> (usize, Option<std::time::SystemTime>
     (count, newest)
 }
 
+/// One contact from a vCard: what the person card shows.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Card {
+    /// The `.vcf` file it is in.
+    pub path: std::path::PathBuf,
+    pub name: Option<String>,
+    /// Addresses in lower case, each with its labels ("work").
+    pub emails: Vec<(String, Vec<String>)>,
+    pub phones: Vec<(String, Vec<String>)>,
+    /// Postal addresses as one line each ("1 Park Row, Leeds, LS1 5HN").
+    pub addresses: Vec<(String, Vec<String>)>,
+    pub org: Option<String>,
+    pub title: Option<String>,
+    /// As written: "1990-01-31", "--01-31" (no year)…
+    pub birthday: Option<String>,
+    pub urls: Vec<String>,
+    pub note: Option<String>,
+}
+
+/// Every contact in a folder of `.vcf` files (searched recursively).
+pub fn cards(dir: &Path) -> Vec<Card> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_owned()];
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("vcf"))
+                && let Ok(text) = std::fs::read_to_string(&p)
+            {
+                out.extend(parse_cards(&text, &p));
+            }
+        }
+    }
+    out
+}
+
 /// The addresses in vCard text, each with its card's `FN`.
+#[cfg(test)]
 fn parse_vcards(text: &str) -> Vec<Guest> {
+    guests(&parse_cards(text, Path::new("")))
+}
+
+/// One guest per address on `cards`, named by their card.
+pub fn guests(cards: &[Card]) -> Vec<Guest> {
+    cards
+        .iter()
+        .flat_map(|c| {
+            c.emails.iter().map(|(email, _)| Guest {
+                email: email.clone(),
+                name: c.name.clone(),
+            })
+        })
+        .collect()
+}
+
+/// The contacts in vCard text (vCard 2.1, 3.0 or 4.0).
+fn parse_cards(text: &str, path: &Path) -> Vec<Card> {
     // unfold continuation lines first
     let unfolded = text
         .replace("\r\n ", "")
         .replace("\n ", "")
         .replace("\r\n\t", "");
     let mut out = Vec::new();
-    let mut name = None;
-    let mut emails = Vec::new();
+    let mut card = Card::default();
     for line in unfolded.lines() {
         let Some((head, value)) = line.split_once(':') else {
             continue;
         };
-        // "item1.EMAIL;TYPE=work" → "EMAIL"
-        let prop = head.split(';').next().unwrap_or("");
+        // "item1.EMAIL;TYPE=work" → "EMAIL", with its labels
+        let mut parts = head.split(';');
+        let prop = parts.next().unwrap_or("");
         let prop = prop.rsplit('.').next().unwrap_or(prop).to_ascii_uppercase();
+        let labels = labels(parts);
+        let value = value.trim();
+        let text = || Some(unescape(value)).filter(|v| !v.is_empty());
         match prop.as_str() {
             "BEGIN" => {
-                name = None;
-                emails.clear();
+                card = Card {
+                    path: path.to_owned(),
+                    ..Card::default()
+                };
             }
-            "FN" => name = Some(unescape(value.trim())).filter(|n| !n.is_empty()),
+            "FN" => card.name = text(),
             "EMAIL" => {
-                let e = value.trim().to_lowercase();
+                let e = value.to_lowercase();
                 if e.contains('@') {
-                    emails.push(e);
+                    card.emails.push((e, labels));
                 }
             }
-            "END" => {
-                for email in emails.drain(..) {
-                    out.push(Guest {
-                        email,
-                        name: name.clone(),
-                    });
+            "TEL" => {
+                // vCard 4 may write it as a URI
+                let number = value.strip_prefix("tel:").unwrap_or(value).trim();
+                if !number.is_empty() {
+                    card.phones.push((number.to_owned(), labels));
                 }
             }
+            "ADR" => {
+                // PO box; extended; street; locality; region; code; country
+                let address = split_unescaped(value)
+                    .into_iter()
+                    .map(|p| p.trim().replace('\n', ", "))
+                    .filter(|p| !p.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if !address.is_empty() {
+                    card.addresses.push((address, labels));
+                }
+            }
+            "ORG" => {
+                card.org = Some(
+                    split_unescaped(value)
+                        .into_iter()
+                        .filter(|p| !p.trim().is_empty())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                )
+                .filter(|o| !o.is_empty())
+            }
+            "TITLE" => card.title = text(),
+            "BDAY" => card.birthday = Some(value.to_owned()).filter(|v| !v.is_empty()),
+            "URL" => card.urls.push(value.to_owned()),
+            "NOTE" => card.note = text(),
+            "END" => out.push(std::mem::take(&mut card)),
             _ => {}
         }
     }
     out
+}
+
+/// The kinds a property is labelled with ("TYPE=work,voice" or 2.1's bare
+/// "CELL"), leaving out ones that say nothing to a reader.
+fn labels<'a>(params: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let mut out = Vec::new();
+    for p in params {
+        let values = match p.split_once('=') {
+            Some((k, v)) if k.eq_ignore_ascii_case("TYPE") => v,
+            Some(_) => continue,
+            None => p,
+        };
+        for v in values.trim_matches('"').split(',') {
+            let v = v.trim().to_lowercase();
+            // "cell" is the vCard word; people say mobile
+            let v = if v == "cell" { "mobile".to_owned() } else { v };
+            if !v.is_empty()
+                && !["pref", "voice", "internet", "x400", "other"].contains(&v.as_str())
+                && !out.contains(&v)
+            {
+                out.push(v);
+            }
+        }
+    }
+    out
+}
+
+/// A structured value split at `;` that is not escaped, each part
+/// unescaped.
+fn split_unescaped(value: &str) -> Vec<String> {
+    let mut parts = vec![String::new()];
+    let mut chars = value.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                parts.last_mut().unwrap().push('\\');
+                if let Some(next) = chars.next() {
+                    parts.last_mut().unwrap().push(next);
+                }
+            }
+            ';' => parts.push(String::new()),
+            c => parts.last_mut().unwrap().push(c),
+        }
+    }
+    parts.iter().map(|p| unescape(p)).collect()
 }
 
 /// The best matches for what was typed: by name or address, words that
@@ -197,6 +317,7 @@ fn unescape(s: &str) -> String {
     }
     out
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,5 +400,36 @@ mod tests {
         let after = contacts_fingerprint(dir.path());
         assert_eq!(after.0, 2);
         assert_ne!(before, after);
+    }
+
+    #[test]
+    fn reads_a_whole_card() {
+        let text = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Priya Shah\r\nORG:Acme\\, Inc;Platform\r\n\
+                    TITLE:Engineering lead\r\nEMAIL;TYPE=INTERNET,WORK:Priya@Example.com\r\n\
+                    TEL;TYPE=CELL,VOICE:+44 7700 900123\r\nTEL;HOME:0113 496 0000\r\n\
+                    item1.ADR;TYPE=home:;;1 Park Row;Leeds;;LS1 5HN;UK\r\nBDAY:--0131\r\n\
+                    URL:https://priya.example\r\nEND:VCARD\r\n";
+        let card = &parse_cards(text, Path::new("p.vcf"))[0];
+        assert_eq!(card.name.as_deref(), Some("Priya Shah"));
+        assert_eq!(card.org.as_deref(), Some("Acme, Inc, Platform"));
+        assert_eq!(card.title.as_deref(), Some("Engineering lead"));
+        assert_eq!(
+            card.emails,
+            [("priya@example.com".into(), vec!["work".into()])]
+        );
+        assert_eq!(
+            card.phones,
+            [
+                ("+44 7700 900123".into(), vec!["mobile".into()]),
+                ("0113 496 0000".into(), vec!["home".into()])
+            ]
+        );
+        assert_eq!(
+            card.addresses,
+            [("1 Park Row, Leeds, LS1 5HN, UK".into(), vec!["home".into()])]
+        );
+        assert_eq!(card.birthday.as_deref(), Some("--0131"));
+        assert_eq!(card.urls, ["https://priya.example"]);
+        assert_eq!(card.path, Path::new("p.vcf"));
     }
 }
