@@ -1105,50 +1105,20 @@ impl Window {
     /// a bug report.
     pub(super) fn show_about(self: &Rc<Self>) {
         crate::details::close();
-        let log = crate::logfile::path();
-        let debug = {
+        let details = {
             let s = self.state.borrow();
             format!(
-                "rical {}\nGTK {}.{}.{}, libadwaita {}.{}.{}\nrenderer: {}\nconfig: {}\nvdir: {}\n\
-                 calendars: {}\ntime zone: {}\nlog: {}\n\nThe end of the log:\n{}\n",
-                env!("CARGO_PKG_VERSION"),
-                gtk::major_version(),
-                gtk::minor_version(),
-                gtk::micro_version(),
-                adw::major_version(),
-                adw::minor_version(),
-                adw::micro_version(),
-                std::env::var("GSK_RENDERER").unwrap_or_else(|_| "auto".into()),
-                crate::config::config_path().map_or("none".into(), |p| p.display().to_string()),
+                "vdir: {}\ncalendars: {}\ntime zone: {}\n",
                 s.vdir.root.display(),
                 s.vdir.calendars.len(),
                 s.local.name(),
-                log.as_deref()
-                    .map_or("none".into(), |p| p.display().to_string()),
-                crate::logfile::tail(40),
             )
         };
-        let about = adw::AboutDialog::builder()
-            .application_name(crate::APP_FULL_NAME)
-            .application_icon(crate::APP_ID)
-            .version(env!("CARGO_PKG_VERSION"))
-            .comments(
-                "A keyboard-first calendar, task list and journal for a folder of \
-                 iCalendar files, such as one vdirsyncer keeps in sync.",
-            )
-            .developer_name("Andrew Jeffery")
-            .developers(["Andrew Jeffery"])
-            .copyright("© 2025–2026 Andrew Jeffery")
-            .license_type(gtk::License::MitX11)
-            .website("https://github.com/jeffa5/rical")
-            .issue_url("https://github.com/jeffa5/rical/issues")
-            .debug_info(debug)
-            .debug_info_filename("rical-debug.txt")
-            .build();
-        // the log itself, opened in the text editor
-        if let Some(p) = log.filter(|p| p.exists()) {
-            about.add_link("Open log file", &gtk::gio::File::for_path(p).uri());
-        }
-        about.present(Some(&self.window));
+        rical_ui::util::about(
+            &self.window,
+            "A keyboard-first calendar, task list and journal for a folder of \
+             iCalendar files, such as one vdirsyncer keeps in sync.",
+            &details,
+        );
     }
 }

@@ -68,8 +68,8 @@ pub struct Window {
     /// The collapsible sidebar sections.
     sections: Rc<RefCell<Vec<Rc<Section>>>>,
     syncing: Cell<bool>,
-    /// A trim of freed memory is due (see [`Window::trim_soon`]).
-    trim_pending: std::rc::Rc<Cell<bool>>,
+    /// Hands freed memory back after big views.
+    trim: rical_ui::util::Trimmer,
     /// First day and number of days the grid last showed.
     last_grid_days: Cell<Option<(chrono::NaiveDate, usize)>>,
     monitors: RefCell<Vec<gio::FileMonitor>>,
@@ -421,7 +421,7 @@ impl Window {
             side_tasks,
             sections,
             syncing: Cell::new(false),
-            trim_pending: Default::default(),
+            trim: Default::default(),
             last_grid_days: Cell::new(None),
             monitors: Default::default(),
             pending: Default::default(),
@@ -632,13 +632,11 @@ impl Window {
             self.calendar_list.remove(&row);
         }
         let state = self.state.borrow();
-        // the menu of each calendar shows on hover or focus, not as a column
-        // of icons; the selection in lists stands out from a hovered row
-        let mut css = String::from(
-            "row:not(:hover):not(:focus-within) .calendar-more > button:not(:checked) { opacity: 0; }\n\
-             .rical-list row:selected { background-color: alpha(@accent_bg_color, 0.16); }\n\
-             .rical-list row:selected:hover { background-color: alpha(@accent_bg_color, 0.22); }\n\
-             button.person-link { padding: 1px 4px; margin: -1px -4px; min-height: 0; font-weight: normal; }\n",
+        // the look the apps share, and the menu of each calendar shown on
+        // hover or focus, not as a column of icons
+        let mut css = format!(
+            "{}row:not(:hover):not(:focus-within) .calendar-more > button:not(:checked) {{ opacity: 0; }}\n",
+            rical_ui::util::SHARED_CSS
         );
         for (i, cal) in state.vdir.calendars.iter().enumerate() {
             let check = gtk::CheckButton::builder()
@@ -727,26 +725,8 @@ impl Window {
         self.syncing.set(false);
     }
 
-    /// Bring every part of the window in line with the state.
-    /// Hand freed memory back to the system once things settle. A view
-    /// change frees thousands of occurrences, and glibc keeps that memory
-    /// for itself unless asked, so the app grows to its largest view and
-    /// stays there.
-    fn trim_soon(&self) {
-        if self.trim_pending.replace(true) {
-            return;
-        }
-        let pending = self.trim_pending.clone();
-        glib::timeout_add_local_once(Duration::from_secs(2), move || {
-            pending.set(false);
-            // SAFETY: malloc_trim only releases free memory; no Rust
-            // object is touched
-            unsafe { libc::malloc_trim(0) };
-        });
-    }
-
     pub fn refresh(&self) {
-        self.trim_soon();
+        self.trim.soon();
         details::close();
         self.side_tasks.refresh();
         self.syncing.set(true);

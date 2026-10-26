@@ -552,14 +552,7 @@ fn row(icon: &str, text: &str) -> gtk::Box {
 }
 
 /// Open a link in the default browser.
-pub fn open_uri(parent: Option<&gtk::Window>, uri: &str) {
-    log::info!("opening {uri}");
-    gtk::UriLauncher::new(uri).launch(parent, None::<&gtk::gio::Cancellable>, |r| {
-        if let Err(e) = r {
-            log::warn!("could not open link: {e}");
-        }
-    });
-}
+pub use rical_ui::util::open_uri;
 
 /// Whether `occ` has a day to show it on: undated tasks and notes do not.
 fn has_day(occ: &Occurrence, state: &State) -> bool {

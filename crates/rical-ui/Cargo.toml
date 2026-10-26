@@ -6,6 +6,7 @@ edition.workspace = true
 
 [dependencies]
 rical-core.workspace = true
+rical-cards.workspace = true
 chrono.workspace = true
 env_filter = "0.1"
 libc = "0.2"

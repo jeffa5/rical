@@ -296,19 +296,7 @@ pub fn first_url(text: &str) -> Option<String> {
 }
 
 /// A link to look `place` up on a map.
-pub fn map_url(place: &str) -> String {
-    let mut q = String::new();
-    for b in place.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                q.push(b as char)
-            }
-            b' ' => q.push('+'),
-            b => q.push_str(&format!("%{b:02X}")),
-        }
-    }
-    format!("https://www.openstreetmap.org/search?query={q}")
-}
+pub use rical_ui::util::map_url;
 
 /// Where to join `o` online: its video conference, else any conference
 /// that opens in a browser (RFC 7986), else a link in its location or
