@@ -663,3 +663,70 @@ mod tests {
         assert_eq!(names.len(), len);
     }
 }
+
+/// The reference docs keep up with the code: every command, setting and
+/// default key binding is in them.
+#[cfg(test)]
+mod docs {
+    const COMMANDS: &str = include_str!("../../../docs/commands.md");
+    const CONFIGURATION: &str = include_str!("../../../docs/configuration.md");
+    const KEYS: &str = include_str!("../../../docs/keys.md");
+
+    #[test]
+    fn every_command_is_documented() {
+        for s in super::SPECS {
+            for name in s.names() {
+                assert!(
+                    COMMANDS.contains(&format!("`:{name}")),
+                    ":{name} is missing from docs/commands.md"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_setting_is_documented() {
+        for (name, _) in crate::config::SETTINGS {
+            assert!(
+                CONFIGURATION.contains(&format!("| `{name}` |"))
+                    && CONFIGURATION.contains(&format!("### `{name}`")),
+                "{name} is missing from docs/configuration.md"
+            );
+        }
+    }
+
+    #[test]
+    fn every_default_key_is_documented() {
+        let mut section = "";
+        for line in crate::binds::DEFAULTS.lines() {
+            let line = line.trim();
+            if line.starts_with('[') && line.ends_with(']') && line.len() > 2 {
+                section = line;
+                assert!(
+                    KEYS.contains(&format!("### `{section}`")),
+                    "{section} is missing from docs/keys.md"
+                );
+                continue;
+            }
+            let Some((key, value)) = line.split_once(" =") else {
+                continue;
+            };
+            if line.starts_with('#') {
+                continue;
+            }
+            let shown = value
+                .trim()
+                .trim_end_matches("<Enter>")
+                .trim_end_matches("<space>");
+            let row = if shown.is_empty() {
+                format!("| `{key}` |")
+            } else {
+                format!("| `{key}` | `{}", shown.replace('|', "\\|"))
+            };
+            assert!(
+                KEYS.contains(&row),
+                "{section} {key} is missing from docs/keys.md"
+            );
+        }
+    }
+}

@@ -1,12 +1,12 @@
 # rical
 
-A keyboard-driven calendar and task list for a [vdir](https://vdirsyncer.pimutils.org/en/stable/vdir.html)
+A keyboard-driven calendar, task list and journal for a [vdir](https://vdirsyncer.pimutils.org/en/stable/vdir.html)
 of `.ics` files, such as one kept in sync by vdirsyncer. The files are the
 source of truth: rical reads them, writes plain iCalendar back, and picks up
 changes made on disk while it runs.
 
-- `rical-gtk` (“Calendar (rical)” in your app launcher): a GTK4/libadwaita app with
-  day, week, month, year, agenda, task and journal views,
+- `rical-gtk` (“Calendar (rical)” in your app launcher): a GTK4/libadwaita
+  app with day, week, month, year, agenda, task and journal views,
   recurring events, time zones, subtasks, invitations and reminders.
 - `rical`: a CLI for listing, adding, completing and editing items, plus
   `rical remind` for desktop notifications.
@@ -21,6 +21,16 @@ To try it without your own calendars, `scripts/demo-vdir.sh /tmp/demo`
 writes the made-up calendars shown here; then run
 `RICAL_VDIR=/tmp/demo rical-gtk`.
 
+## Documentation
+
+The [documentation](docs/README.md) covers everything; start with
+[Getting started](docs/getting-started.md). Also:
+[Configuration](docs/configuration.md) (every setting) ·
+[Views](docs/views.md) · [Adding things](docs/adding.md) ·
+[Commands](docs/commands.md) · [Keys](docs/keys.md) ·
+[Files and sync](docs/files-and-sync.md) ·
+[Troubleshooting](docs/troubleshooting.md).
+
 ## Install
 
 ```sh
@@ -28,7 +38,8 @@ nix run github:jeffa5/rical           # or: nix profile install github:jeffa5/ri
 cargo install --path crates/rical-gtk  # needs GTK 4 and libadwaita
 ```
 
-The flake also has a Home Manager module (`programs.rical`).
+The flake also has a [Home Manager module](docs/configuration.md#home-manager)
+(`programs.rical`).
 
 ## Configure
 
@@ -43,10 +54,10 @@ contacts = ~/contacts   # vCards: guests suggested and shown by these names
 zones = UK=Europe/London
 ```
 
-Each setting can also come from the environment (`RICAL_VDIR=...`).
-`rical-gtk --help` lists them all. If the config is read-only (say Home
-Manager made it), Preferences save to `local.conf` beside it, which rical
-reads after it, and offer the changes as Home Manager settings to copy.
+Each setting can also come from the environment (`RICAL_VDIR=...`). If the
+config is read-only (say Home Manager made it), Preferences save to
+`local.conf` beside it, which is read after it. See
+[Configuration](docs/configuration.md) for every setting.
 
 ## Use
 
@@ -56,8 +67,7 @@ new event, `e` to edit, `D` to mark a task done. `I` lists invitations
 waiting for your reply; `y`, `Y` and `N` accept, answer maybe, or decline
 (your server, e.g. Nextcloud, tells the organiser). `E` shows the journal
 and `:note` adds to it. From a task, journal entry or agenda item, `v` shows
-it in the calendar; `Ctrl+T` turns an event into a task or back. Change the
-bindings in `~/.config/rical/binds.conf`.
+it in the calendar; `Ctrl+T` turns an event into a task or back.
 
 Add things in plain language; the command line shows what it understood
 before you press Enter, and `rical new` reads the same:
