@@ -47,7 +47,7 @@ impl Window {
         // talking to the notification daemon blocks, so not on this thread
         std::thread::spawn(move || {
             if let Err(e) = notify_rust::Notification::new()
-                .appname("rical")
+                .appname(crate::APP_NAME)
                 .summary(&title)
                 .body(&body)
                 .icon("x-office-calendar")

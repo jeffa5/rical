@@ -5,8 +5,9 @@ of `.ics` files, such as one kept in sync by vdirsyncer. The files are the
 source of truth: rical reads them, writes plain iCalendar back, and picks up
 changes made on disk while it runs.
 
-- `rical-gtk`: a GTK4/libadwaita app with day, week, month, agenda and task
-  views, recurring events, time zones, subtasks, invitations and reminders.
+- `rical-gtk` (“Calendar (rical)” in your app launcher): a GTK4/libadwaita app with
+  day, week, month, year, agenda, task and journal views,
+  recurring events, time zones, subtasks, invitations and reminders.
 - `rical`: a CLI for listing, adding, completing and editing items, plus
   `rical remind` for desktop notifications.
 

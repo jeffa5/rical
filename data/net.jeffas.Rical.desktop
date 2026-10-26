@@ -1,12 +1,12 @@
 [Desktop Entry]
 Type=Application
-Name=rical
+Name=Calendar (rical)
 GenericName=Calendar
 Comment=Calendar and tasks for a vdir of .ics files
 Exec=rical-gtk %U
 Icon=net.jeffas.Rical
 Terminal=false
 Categories=Office;Calendar;GTK;
-Keywords=calendar;events;tasks;todo;vdir;
+Keywords=calendar;events;tasks;todo;journal;vdir;rical;
 StartupNotify=true
 MimeType=text/calendar;application/ics;

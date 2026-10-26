@@ -1129,7 +1129,7 @@ impl Window {
             )
         };
         let about = adw::AboutDialog::builder()
-            .application_name("rical")
+            .application_name(crate::APP_FULL_NAME)
             .application_icon(crate::APP_ID)
             .version(env!("CARGO_PKG_VERSION"))
             .comments(

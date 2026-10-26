@@ -248,7 +248,7 @@ impl Window {
         let app_items = gio::Menu::new();
         app_items.append(Some("_Preferences"), Some("win.run::settings"));
         app_items.append(Some("_Keyboard Shortcuts"), Some("win.run::help"));
-        app_items.append(Some("_About rical"), Some("win.run::about"));
+        app_items.append(Some("_About Calendar"), Some("win.run::about"));
         menu.append_section(None, &app_items);
         let leaving = gio::Menu::new();
         leaving.append(Some("_Quit"), Some("win.run::quit"));
@@ -350,7 +350,7 @@ impl Window {
         let sidebar = adw::ToolbarView::new();
         sidebar.add_top_bar(
             &adw::HeaderBar::builder()
-                .title_widget(&adw::WindowTitle::new("rical", ""))
+                .title_widget(&adw::WindowTitle::new(crate::APP_NAME, ""))
                 .show_end_title_buttons(false)
                 .build(),
         );
@@ -370,7 +370,7 @@ impl Window {
 
         let window = adw::ApplicationWindow::builder()
             .application(app)
-            .title("rical")
+            .title(crate::APP_NAME)
             .default_width(1280)
             .default_height(860)
             .content(&split)

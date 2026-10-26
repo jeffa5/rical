@@ -233,15 +233,9 @@ pub static SPECS: &[Spec] = &[
     },
     Spec {
         aliases: &["preferences", "prefs"],
-        ..spec(
-            "settings",
-            "Change rical's settings (saved to its config file)",
-        )
+        ..spec("settings", "Change the settings (saved to the config file)")
     },
-    spec(
-        "about",
-        "rical's version, licence and details for a bug report",
-    ),
+    spec("about", "The version, licence and details for a bug report"),
     Spec {
         aliases: &["who"],
         args: &[Arg {

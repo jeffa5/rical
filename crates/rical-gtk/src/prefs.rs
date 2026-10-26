@@ -222,7 +222,7 @@ impl Ctx {
                 } else if let Err(e) = (self.on_saved)() {
                     self.toast(&e);
                 } else if AT_START.contains(&name) {
-                    self.toast("Saved: applies next time rical starts");
+                    self.toast("Saved: applies when Calendar next starts");
                 }
             }
         }
@@ -248,7 +248,7 @@ impl Ctx {
             group.set_title("Saving to local.conf");
             group.set_description(Some(&format!(
                 "{} can’t be changed (Nix or another tool made it), so changes go to {} \
-                 beside it, which rical reads after it.",
+                 beside it, which is read after it.",
                 tilde(&self.path),
                 tilde(&local),
             )));

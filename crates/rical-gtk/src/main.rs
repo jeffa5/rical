@@ -41,9 +41,13 @@ mod zonepick;
 mod zones;
 
 pub const APP_ID: &str = "net.jeffas.Rical";
+/// What the app is called: everyday, and where it sits beside others.
+pub const APP_NAME: &str = "Calendar";
+pub const APP_FULL_NAME: &str = "Calendar (rical)";
 
 fn main() -> glib::ExitCode {
     logfile::init();
+    glib::set_application_name(APP_NAME);
     log::info!("rical {} starting", env!("CARGO_PKG_VERSION"));
     let options = match config::Options::load() {
         Ok(o) => o,
