@@ -146,12 +146,24 @@ pub struct Vdir {
     /// its calendar, so queries never compare paths; keyed by the path's raw
     /// text, which orders by plain byte comparison (paths compare piece by
     /// piece, slowly).
-    items: BTreeMap<std::ffi::OsString, (usize, Vec<AnyComponent>)>,
+    items: BTreeMap<std::ffi::OsString, Item>,
     /// The TZIDs each item has a VTIMEZONE for, to copy one into a file
     /// being written; read from the file when needed.
     timezones: BTreeMap<std::ffi::OsString, Vec<String>>,
 }
 
+/// One loaded item: its calendar, when its file last changed (to tell
+/// when it needs reading again), and its parsed components.
+#[derive(Clone)]
+struct Item {
+    calendar: usize,
+    modified: Option<std::time::SystemTime>,
+    components: Vec<AnyComponent>,
+}
+
+fn modified(path: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
 impl fmt::Debug for Vdir {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Vdir")
@@ -209,8 +221,15 @@ impl Vdir {
                     if !tzids.is_empty() {
                         vdir.timezones.insert(path.clone().into_os_string(), tzids);
                     }
-                    vdir.items
-                        .insert(path.into_os_string(), (index, components));
+                    let modified = modified(&path);
+                    vdir.items.insert(
+                        path.into_os_string(),
+                        Item {
+                            calendar: index,
+                            modified,
+                            components,
+                        },
+                    );
                 }
             }
         }
@@ -238,14 +257,16 @@ impl Vdir {
 
     /// The parsed components of one item.
     pub fn get(&self, path: &Path) -> Option<&[AnyComponent]> {
-        self.items.get(path.as_os_str()).map(|(_, c)| c.as_slice())
+        self.items
+            .get(path.as_os_str())
+            .map(|i| i.components.as_slice())
     }
 
     /// Every loaded component, with the calendar it belongs to.
     pub fn components(&self) -> impl Iterator<Item = (&Calendar, &AnyComponent)> {
-        self.items.values().flat_map(|(index, components)| {
-            let calendar = &self.calendars[*index];
-            components.iter().map(move |c| (calendar, c))
+        self.items.values().flat_map(|item| {
+            let calendar = &self.calendars[item.calendar];
+            item.components.iter().map(move |c| (calendar, c))
         })
     }
 
@@ -352,8 +373,14 @@ impl Vdir {
                 } else {
                     self.timezones.insert(path.as_os_str().to_owned(), tzids);
                 }
-                self.items
-                    .insert(path.as_os_str().to_owned(), (index, components));
+                self.items.insert(
+                    path.as_os_str().to_owned(),
+                    Item {
+                        calendar: index,
+                        modified: modified(path),
+                        components,
+                    },
+                );
                 true
             }
             None => {
@@ -361,6 +388,43 @@ impl Vdir {
                 self.items.remove(path.as_os_str()).is_some()
             }
         }
+    }
+
+    /// Catch up with the files: re-read those changed since they were read
+    /// (by their modification time), read new ones and drop removed ones.
+    /// Far cheaper than [`Vdir::reload_all`] when little has changed, which
+    /// is most of the time. Calendars added or removed need `reload_all`.
+    /// Returns whether anything changed.
+    pub fn refresh(&mut self) -> anyhow::Result<bool> {
+        let mut on_disk = std::collections::BTreeSet::new();
+        let mut changed = Vec::new();
+        for calendar in &self.calendars {
+            for path in calendar.item_paths()? {
+                let stale = match self.items.get(path.as_os_str()) {
+                    Some(item) => item.modified.is_none() || item.modified != modified(&path),
+                    None => true,
+                };
+                if stale {
+                    changed.push(path.clone());
+                }
+                on_disk.insert(path.into_os_string());
+            }
+        }
+        let gone: Vec<_> = self
+            .items
+            .keys()
+            .filter(|p| !on_disk.contains(*p))
+            .cloned()
+            .collect();
+        let mut any = !gone.is_empty();
+        for p in gone {
+            self.items.remove(&p);
+            self.timezones.remove(&p);
+        }
+        for path in changed {
+            any |= self.reload(&path);
+        }
+        Ok(any)
     }
 
     /// Re-read everything: calendars, their metadata and items.
@@ -382,8 +446,8 @@ impl Vdir {
             let components = self
                 .items
                 .values()
-                .filter(|(i, _)| *i == index)
-                .flat_map(|(_, c)| c);
+                .filter(|i| i.calendar == index)
+                .flat_map(|i| &i.components);
             out.extend(
                 occurrence::expand(&calendar.id, components, range, local)
                     .into_iter()

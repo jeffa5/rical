@@ -55,7 +55,16 @@ impl SideTasks {
 
     /// Rebuild if the tasks may have changed.
     pub fn refresh(&self) {
-        let (key, tasks, today, local) = {
+        // only when the items or the day changed: working out the list
+        // means going through every task
+        let key = {
+            let s = self.state.borrow();
+            (s.generation(), s.today())
+        };
+        if self.built.get() == Some(key) {
+            return;
+        }
+        let (tasks, today, local) = {
             let s = self.state.borrow();
             let today = s.today();
             let mut tasks = s
@@ -82,11 +91,8 @@ impl SideTasks {
                     t.priority.unwrap_or(10),
                 )
             });
-            ((s.generation(), today), tasks, today, s.local)
+            (tasks, today, s.local)
         };
-        if self.built.get() == Some(key) {
-            return;
-        }
         self.built.set(Some(key));
         while let Some(row) = self.list.row_at_index(0) {
             self.list.remove(&row);

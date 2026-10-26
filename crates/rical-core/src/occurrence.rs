@@ -332,6 +332,11 @@ impl<'a> Fields<'a> {
         })
     }
 
+    /// Whether an occurrence of this starting at `start` overlaps `range`.
+    fn in_range(&self, start: &When, range: &Range<DateTime<Utc>>, local: Tz) -> bool {
+        overlaps(start, &start.add(self.duration), range, local)
+    }
+
     fn recurrence_id(&self) -> Option<(When, bool)> {
         let prop = self.component.prop("RECURRENCE-ID")?;
         let when = When::from_property(prop)?;
@@ -440,18 +445,16 @@ fn expand_series(
         // orphaned overrides are shown as they are
         for o in overrides {
             let rid = o.recurrence_id().map(|(w, _)| w);
-            let occ = o.occurrence(calendar, o.start, rid, true);
-            if occ.overlaps(range, local) {
-                out.push(occ);
+            if o.in_range(&o.start, range, local) {
+                out.push(o.occurrence(calendar, o.start, rid, true));
             }
         }
         return;
     };
 
     if !master.is_recurring() {
-        let occ = master.occurrence(calendar, master.start, None, false);
-        if occ.overlaps(range, local) {
-            out.push(occ);
+        if master.in_range(&master.start, range, local) {
+            out.push(master.occurrence(calendar, master.start, None, false));
         }
         return;
     }
@@ -467,9 +470,8 @@ fn expand_series(
         if future {
             this_and_future.push((rid, o));
         }
-        let occ = o.occurrence(calendar, o.start, Some(rid), true);
-        if occ.overlaps(range, local) {
-            out.push(occ);
+        if o.in_range(&o.start, range, local) {
+            out.push(o.occurrence(calendar, o.start, Some(rid), true));
         }
     }
     this_and_future.sort_by_key(|(rid, _)| rid.to_utc(Tz::UTC));
@@ -486,15 +488,17 @@ fn expand_series(
             .iter()
             .rev()
             .find(|(rid, _)| rid.to_utc(Tz::UTC) < start.to_utc(Tz::UTC));
-        let occ = match latest_future {
+        // what it is built from, and where it starts: checked against the
+        // range before building it (titles, notes and people cost more)
+        let (fields, at) = match latest_future {
             Some((rid, o)) => {
                 let shift = o.start.to_utc(Tz::UTC) - rid.to_utc(Tz::UTC);
-                o.occurrence(calendar, start.add(shift), Some(start), true)
+                (*o, start.add(shift))
             }
-            None => master.occurrence(calendar, start, Some(start), true),
+            None => (master, start),
         };
-        if occ.overlaps(range, local) {
-            out.push(occ);
+        if fields.in_range(&at, range, local) {
+            out.push(fields.occurrence(calendar, at, Some(start), true));
         }
     }
 }
@@ -511,7 +515,11 @@ fn instance_starts(master: &Fields, range: &Range<DateTime<Utc>>) -> Vec<When> {
     starts.push(master.start);
 
     if let Some(rule) = master.component.property_value("RRULE") {
-        match rrule_set(rule, &master.start) {
+        // expanding from DTSTART years back costs thousands of steps per
+        // series; start from just before the range instead, as it gives
+        // the same instances
+        let from = fast_forward(rule, &master.start, earliest).unwrap_or(master.start);
+        match rrule_set(rule, &from) {
             Ok(set) => starts.extend(
                 set.into_iter()
                     .map(|dt| from_rrule(dt, &master.start))
@@ -528,6 +536,91 @@ fn instance_starts(master: &Fields, range: &Range<DateTime<Utc>>) -> Vec<When> {
     starts.sort_by_key(|w| w.to_utc(Tz::UTC));
     starts.dedup();
     starts
+}
+
+/// A start for `rule` later than `start`, whole periods on (days, weeks,
+/// months or years, times the INTERVAL) and still before `earliest`, from
+/// which the rule gives the same instances from `earliest` on. None when
+/// there's nothing to skip or it can't be done safely: a COUNT (it counts
+/// from DTSTART; such rules end soon anyway), a rule by the hour or finer,
+/// or no whole period that keeps the day of the month (or year) and lands
+/// on a wall time that exists once in the zone.
+fn fast_forward(rule: &str, start: &When, earliest: DateTime<Utc>) -> Option<When> {
+    let mut freq = None;
+    let mut interval = 1i64;
+    for part in rule.split(';') {
+        let (k, v) = part.split_once('=')?;
+        match k.to_ascii_uppercase().as_str() {
+            "FREQ" => freq = Some(v.to_ascii_uppercase()),
+            "INTERVAL" => interval = v.parse().ok().filter(|i: &i64| *i > 0)?,
+            "COUNT" => return None,
+            _ => {}
+        }
+    }
+    // the wall time instances are made in, and the range's start in it
+    let (wall, target) = match start {
+        When::Date(d) => (d.and_time(NaiveTime::MIN), earliest.naive_utc()),
+        When::Floating(n) => (*n, earliest.naive_utc()),
+        When::Zoned(z) => (
+            z.naive_local(),
+            earliest.with_timezone(&z.timezone()).naive_local(),
+        ),
+    };
+    if target <= wall {
+        return None;
+    }
+    use chrono::{Datelike as _, Months};
+    let months_between = |a: chrono::NaiveDateTime, b: chrono::NaiveDateTime| -> i64 {
+        (b.year() as i64 * 12 + b.month() as i64) - (a.year() as i64 * 12 + a.month() as i64)
+    };
+    // how many periods to skip, keeping one in hand, and how to skip them
+    let (periods, step): (i64, Box<dyn Fn(i64) -> Option<chrono::NaiveDateTime>>) =
+        match freq.as_deref()? {
+            "DAILY" | "WEEKLY" => {
+                let days = if freq.as_deref() == Some("DAILY") {
+                    1
+                } else {
+                    7
+                } * interval;
+                (
+                    (target - wall).num_days() / days - 1,
+                    Box::new(move |k| wall.checked_add_signed(TimeDelta::days(k * days))),
+                )
+            }
+            "MONTHLY" | "YEARLY" => {
+                let months = if freq.as_deref() == Some("MONTHLY") {
+                    1
+                } else {
+                    12
+                } * interval;
+                (
+                    months_between(wall, target) / months - 1,
+                    Box::new(move |k| {
+                        let shifted = wall.checked_add_months(Months::new((k * months) as u32))?;
+                        // the 31st doesn't become the 30th
+                        (shifted.day() == wall.day()).then_some(shifted)
+                    }),
+                )
+            }
+            _ => return None,
+        };
+    // the nearest whole period back that works
+    (0..4).find_map(|back| {
+        let k = periods - back;
+        if k <= 0 {
+            return None;
+        }
+        let shifted = step(k)?;
+        match start {
+            When::Date(_) => Some(When::Date(shifted.date())),
+            When::Floating(_) => Some(When::Floating(shifted)),
+            When::Zoned(z) => z
+                .timezone()
+                .from_local_datetime(&shifted)
+                .single()
+                .map(When::Zoned),
+        }
+    })
 }
 
 /// The timezone recurrences are expanded in: the zone of a zoned DTSTART,
@@ -681,5 +774,111 @@ impl crate::Vdir {
         self.components()
             .filter_map(|(cal, c)| journal_entry(&cal.id, c))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::NaiveDate;
+
+    /// Instances of `rule` from `start`, expanded from `from`, in the range.
+    fn instances(
+        rule: &str,
+        start: &When,
+        from: &When,
+        range: &Range<DateTime<Utc>>,
+    ) -> Vec<DateTime<Utc>> {
+        rrule_set(rule, from)
+            .unwrap()
+            .into_iter()
+            .map(|dt| from_rrule(dt, start).to_utc(Tz::UTC))
+            .skip_while(|t| *t < range.start)
+            .take_while(|t| *t < range.end)
+            .collect()
+    }
+
+    #[test]
+    fn fast_forward_gives_the_same_instances() {
+        let london = chrono_tz::Europe::London;
+        let at = |y, m, d, h, min| {
+            When::Zoned(
+                london
+                    .with_ymd_and_hms(y, m, d, h, min, 0)
+                    .earliest()
+                    .unwrap(),
+            )
+        };
+        let starts = [
+            at(2016, 1, 31, 9, 0),
+            at(2016, 3, 26, 1, 30),  // the night before the clocks go forward
+            at(2016, 10, 30, 1, 30), // the hour that happens twice
+            When::Date(NaiveDate::from_ymd_opt(2016, 2, 29).unwrap()),
+            When::Floating(
+                NaiveDate::from_ymd_opt(2016, 5, 31)
+                    .unwrap()
+                    .and_hms_opt(10, 0, 0)
+                    .unwrap(),
+            ),
+            When::Zoned(Tz::UTC.with_ymd_and_hms(2016, 8, 15, 23, 45, 0).unwrap()),
+        ];
+        let rules = [
+            "FREQ=DAILY",
+            "FREQ=DAILY;INTERVAL=3",
+            "FREQ=WEEKLY",
+            "FREQ=WEEKLY;BYDAY=MO,WE,FR",
+            "FREQ=WEEKLY;INTERVAL=2;BYDAY=TU",
+            "FREQ=WEEKLY;BYDAY=SA,SU;WKST=SU",
+            "FREQ=MONTHLY",
+            "FREQ=MONTHLY;BYDAY=1TU",
+            "FREQ=MONTHLY;BYDAY=-1FR",
+            "FREQ=MONTHLY;BYMONTHDAY=31",
+            "FREQ=MONTHLY;INTERVAL=3",
+            "FREQ=MONTHLY;BYSETPOS=-1;BYDAY=MO,TU,WE,TH,FR",
+            "FREQ=YEARLY",
+            "FREQ=YEARLY;INTERVAL=2",
+            "FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU",
+            "FREQ=DAILY;UNTIL=20250101T000000Z",
+            "FREQ=WEEKLY;UNTIL=20300101",
+        ];
+        let mut skipped = 0;
+        for start in &starts {
+            for rule in rules {
+                for year in [2016, 2017, 2021, 2026, 2031] {
+                    for month in [1, 3, 10, 12] {
+                        let from = Utc.with_ymd_and_hms(year, month, 20, 0, 0, 0).unwrap();
+                        let range = from..from + TimeDelta::days(40);
+                        let earliest = range.start - TimeDelta::days(2);
+                        let ff = fast_forward(rule, start, earliest);
+                        if ff.is_some() {
+                            skipped += 1;
+                        }
+                        assert_eq!(
+                            instances(rule, start, ff.as_ref().unwrap_or(start), &range),
+                            instances(rule, start, start, &range),
+                            "{rule} from {start:?} in {range:?} (fast-forwarded to {ff:?})"
+                        );
+                    }
+                }
+            }
+        }
+        // and it does skip, mostly
+        assert!(skipped > 300, "only {skipped} fast-forwarded");
+    }
+
+    #[test]
+    fn fast_forward_leaves_counts_and_hours_alone() {
+        let start = When::Date(NaiveDate::from_ymd_opt(2016, 1, 1).unwrap());
+        let later = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        assert_eq!(fast_forward("FREQ=DAILY;COUNT=5000", &start, later), None);
+        assert_eq!(fast_forward("FREQ=HOURLY", &start, later), None);
+        assert_eq!(
+            fast_forward(
+                "FREQ=DAILY",
+                &start,
+                Utc.with_ymd_and_hms(2015, 1, 1, 0, 0, 0).unwrap()
+            ),
+            None
+        );
     }
 }

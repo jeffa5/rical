@@ -6,7 +6,7 @@ use std::{collections::HashSet, path::Path, thread::sleep, time::Duration};
 use anyhow::Context as _;
 use chrono::{TimeDelta, Utc};
 use log::warn;
-use rical_core::{Vdir, input::parse_shift, when::local_timezone};
+use rical_core::{Vdir, alarm::AlarmPlan, input::parse_shift, when::local_timezone};
 
 /// Alarms this long before starting still go off.
 const CATCH_UP: TimeDelta = TimeDelta::minutes(5);
@@ -24,36 +24,50 @@ pub fn remind(vdir: &Path, before: Option<&str>, once: bool) -> anyhow::Result<(
     let local = local_timezone();
     let mut fired = HashSet::new();
     let mut from = Utc::now() - CATCH_UP;
+    // loaded once; after that only files that changed are read again, and
+    // the alarms of the hours ahead are planned once rather than every check
+    let mut vdir = Vdir::load(vdir)?;
+    let mut plan: Option<AlarmPlan> = None;
     loop {
-        // reload each time: vdirsyncer may have changed anything
         let now = Utc::now();
-        match Vdir::load(vdir) {
-            Ok(v) => {
-                for alarm in v.alarms(&(from..now), local, default) {
-                    let o = &alarm.occurrence;
-                    if !fired.insert((o.path.clone(), o.uid.clone(), alarm.at)) {
-                        continue;
-                    }
-                    let (title, body) = alarm.describe(now, local);
-                    println!(
-                        "{} {title}: {}",
-                        alarm.at.with_timezone(&local).format("%H:%M"),
-                        body.replace('\n', "; ")
-                    );
-                    if let Err(e) = notify_rust::Notification::new()
-                        .appname("rical")
-                        .summary(&title)
-                        .body(&body)
-                        .icon("x-office-calendar")
-                        .show()
-                    {
-                        warn!("could not show a notification: {e}");
-                    }
+        match vdir.refresh() {
+            Ok(true) => plan = None,
+            Ok(false) => {}
+            Err(e) => {
+                warn!("could not read {:?}: {e:#}", vdir.root);
+                // calendars come and go too: start again
+                if let Ok(v) = Vdir::load(&vdir.root) {
+                    vdir = v;
+                    plan = None;
                 }
-                from = now;
             }
-            Err(e) => warn!("could not load {vdir:?}: {e:#}"),
         }
+        let window = from..now;
+        if plan.as_ref().is_none_or(|p| !p.covers(&window)) {
+            plan = Some(AlarmPlan::new(&vdir, from, now, local, default));
+        }
+        for alarm in plan.as_ref().unwrap().due(&window) {
+            let o = &alarm.occurrence;
+            if !fired.insert((o.path.clone(), o.uid.clone(), alarm.at)) {
+                continue;
+            }
+            let (title, body) = alarm.describe(now, local);
+            println!(
+                "{} {title}: {}",
+                alarm.at.with_timezone(&local).format("%H:%M"),
+                body.replace('\n', "; ")
+            );
+            if let Err(e) = notify_rust::Notification::new()
+                .appname("Calendar")
+                .summary(&title)
+                .body(&body)
+                .icon("net.jeffas.Rical")
+                .show()
+            {
+                warn!("could not show a notification: {e}");
+            }
+        }
+        from = now;
         if once {
             return Ok(());
         }

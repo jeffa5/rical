@@ -28,17 +28,17 @@ impl When {
     pub fn parse(value: &str, tzid: Option<&str>) -> Option<Self> {
         let value = value.trim();
         if value.len() == 8 {
-            return NaiveDate::parse_from_str(value, "%Y%m%d")
-                .ok()
+            return fast_date(value)
+                .or_else(|| NaiveDate::parse_from_str(value, "%Y%m%d").ok())
                 .map(Self::Date);
         }
 
         if let Some(utc) = value.strip_suffix('Z') {
-            let ndt = NaiveDateTime::parse_from_str(utc, "%Y%m%dT%H%M%S").ok()?;
+            let ndt = date_time(utc)?;
             return Some(Self::Zoned(Tz::UTC.from_utc_datetime(&ndt)));
         }
 
-        let ndt = NaiveDateTime::parse_from_str(value, "%Y%m%dT%H%M%S").ok()?;
+        let ndt = date_time(value)?;
         match tzid {
             None => Some(Self::Floating(ndt)),
             Some(tzid) => match parse_tzid(tzid) {
@@ -153,6 +153,36 @@ impl fmt::Display for When {
 
 /// Map a local wall-clock time to an instant, picking the earlier instant in
 /// a DST overlap and skipping forward over a DST gap.
+/// `YYYYMMDD`, read directly: chrono's format-string parser is much of the
+/// cost of a query when every item's dates are read.
+fn fast_date(s: &str) -> Option<NaiveDate> {
+    let b = s.as_bytes();
+    if b.len() != 8 || !b.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let n = |r: std::ops::Range<usize>| {
+        b[r].iter()
+            .fold(0u32, |acc, d| acc * 10 + (d - b'0') as u32)
+    };
+    NaiveDate::from_ymd_opt(n(0..4) as i32, n(4..6), n(6..8))
+}
+
+/// `YYYYMMDDTHHMMSS`, read directly, else by chrono (which also takes
+/// leap seconds and the like).
+fn date_time(s: &str) -> Option<NaiveDateTime> {
+    let b = s.as_bytes();
+    let fast = (b.len() == 15 && b[8] == b'T' && b[9..].iter().all(u8::is_ascii_digit))
+        .then(|| {
+            let n = |r: std::ops::Range<usize>| {
+                b[r].iter()
+                    .fold(0u32, |acc, d| acc * 10 + (d - b'0') as u32)
+            };
+            fast_date(&s[..8])?.and_hms_opt(n(9..11), n(11..13), n(13..15))
+        })
+        .flatten();
+    fast.or_else(|| NaiveDateTime::parse_from_str(s, "%Y%m%dT%H%M%S").ok())
+}
+
 pub fn resolve_local(tz: Tz, ndt: NaiveDateTime) -> DateTime<Tz> {
     if let Some(dt) = tz.from_local_datetime(&ndt).earliest() {
         return dt;
@@ -169,12 +199,35 @@ pub fn resolve_local(tz: Tz, ndt: NaiveDateTime) -> DateTime<Tz> {
 /// Parse a `TZID`, allowing vendor prefixes such as
 /// `/mozilla.org/20050126_1/Europe/London`.
 pub fn parse_tzid(tzid: &str) -> Option<Tz> {
-    let tzid = tzid.trim_matches('"');
-    if let Ok(tz) = Tz::from_str(tzid) {
-        return Some(tz);
+    // most files name the same few zones: remember the last few lookups,
+    // as finding one among some 600 names is a cost on every date read
+    thread_local! {
+        static RECENT: std::cell::RefCell<Vec<(String, Option<Tz>)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
     }
-    tzid.match_indices('/')
-        .find_map(|(i, _)| Tz::from_str(&tzid[i + 1..]).ok())
+    if let Some(hit) = RECENT.with(|r| {
+        r.borrow()
+            .iter()
+            .find(|(name, _)| name == tzid)
+            .map(|(_, tz)| *tz)
+    }) {
+        return hit;
+    }
+    let found = {
+        let name = tzid.trim_matches('"');
+        Tz::from_str(name).ok().or_else(|| {
+            name.match_indices('/')
+                .find_map(|(i, _)| Tz::from_str(&name[i + 1..]).ok())
+        })
+    };
+    RECENT.with(|r| {
+        let mut r = r.borrow_mut();
+        if r.len() >= 8 {
+            r.remove(0);
+        }
+        r.push((tzid.to_owned(), found));
+    });
+    found
 }
 
 /// The system timezone, falling back to UTC.

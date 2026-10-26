@@ -4,7 +4,7 @@ use std::{collections::HashSet, path::PathBuf, rc::Rc};
 
 use chrono::{DateTime, TimeDelta, Utc};
 use log::{info, warn};
-use rical_core::alarm::Alarm;
+use rical_core::alarm::{Alarm, AlarmPlan};
 
 use super::Window;
 
@@ -13,6 +13,10 @@ pub const CATCH_UP: TimeDelta = TimeDelta::minutes(5);
 
 /// Alarms already shown: (file, UID, when).
 pub type Fired = HashSet<(PathBuf, String, DateTime<Utc>)>;
+
+/// The planned alarms, and what they were planned from: the items'
+/// generation, the default reminder and the time zone.
+pub type Plan = Option<((u64, Option<TimeDelta>, chrono_tz::Tz), AlarmPlan)>;
 
 impl Window {
     /// Show any alarms that went off since the last check.
@@ -23,12 +27,27 @@ impl Window {
             return;
         }
         self.alarm_check.set(now);
-        let alarms = {
+        // the alarms of the hours ahead, planned once (and again when the
+        // items, the default reminder or the time zone change): expanding
+        // every repeating event around now on each check costs more the
+        // bigger the calendar
+        let window = from..now;
+        let alarms: Vec<Alarm> = {
             let s = self.state.borrow();
             if !s.notifications {
                 return;
             }
-            s.vdir.alarms(&(from..now), s.local, s.default_reminder)
+            let key = (s.generation(), s.default_reminder, s.local);
+            let mut plan = self.alarm_plan.borrow_mut();
+            let stale = match &*plan {
+                Some((k, p)) => *k != key || !p.covers(&window),
+                None => true,
+            };
+            if stale {
+                let p = AlarmPlan::new(&s.vdir, from, now, s.local, s.default_reminder);
+                *plan = Some((key, p));
+            }
+            plan.as_ref().unwrap().1.due(&window).cloned().collect()
         };
         for alarm in alarms {
             let o = &alarm.occurrence;
@@ -50,7 +69,7 @@ impl Window {
                 .appname(crate::APP_NAME)
                 .summary(&title)
                 .body(&body)
-                .icon("x-office-calendar")
+                .icon(crate::APP_ID)
                 .show()
             {
                 warn!("could not show a notification: {e}");

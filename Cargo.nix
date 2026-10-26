@@ -4910,6 +4910,10 @@ rec {
             features = [ "v1_8" ];
           }
           {
+            name = "libc";
+            packageId = "libc";
+          }
+          {
             name = "log";
             packageId = "log";
             features = [ "kv" ];

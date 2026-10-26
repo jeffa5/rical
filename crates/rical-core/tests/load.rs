@@ -235,3 +235,44 @@ fn nested_accounts_and_duplicate_names() {
     // items from every calendar are loaded
     assert_eq!(vdir.components().count(), 4);
 }
+
+#[test]
+fn refresh_reads_only_what_changed() {
+    let dir = tempfile::tempdir().unwrap();
+    let cal = dir.path().join("home");
+    std::fs::create_dir(&cal).unwrap();
+    let item = |uid: &str, summary: &str| {
+        format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//t//EN\r\nBEGIN:VEVENT\r\nUID:{uid}\r\n\
+             DTSTAMP:20250101T000000Z\r\nDTSTART:20250101T090000Z\r\nSUMMARY:{summary}\r\n\
+             END:VEVENT\r\nEND:VCALENDAR\r\n"
+        )
+    };
+    std::fs::write(cal.join("a.ics"), item("a", "One")).unwrap();
+    std::fs::write(cal.join("b.ics"), item("b", "Two")).unwrap();
+    let mut vdir = Vdir::load(dir.path()).unwrap();
+    let summaries = |v: &Vdir| {
+        let mut s: Vec<String> = v
+            .components()
+            .map(|(_, c)| c.get_summary().unwrap_or_default().to_owned())
+            .collect();
+        s.sort();
+        s
+    };
+    assert!(!vdir.refresh().unwrap(), "nothing changed yet");
+
+    // changed (with a later time), added and removed
+    std::fs::write(cal.join("a.ics"), item("a", "One again")).unwrap();
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+    std::fs::File::options()
+        .write(true)
+        .open(cal.join("a.ics"))
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+    std::fs::write(cal.join("c.ics"), item("c", "Three")).unwrap();
+    std::fs::remove_file(cal.join("b.ics")).unwrap();
+    assert!(vdir.refresh().unwrap());
+    assert_eq!(summaries(&vdir), ["One again", "Three"]);
+    assert!(!vdir.refresh().unwrap());
+}

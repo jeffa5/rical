@@ -63,6 +63,44 @@ impl Vdir {
     }
 }
 
+/// The alarms of a stretch of time ahead, worked out once, so that checking
+/// every half a minute is a lookup rather than expanding every repeating
+/// event around now (which scales with the whole calendar). Plan again
+/// when it runs out or the items change.
+#[derive(Debug, Clone)]
+pub struct AlarmPlan {
+    covers: Range<DateTime<Utc>>,
+    alarms: Vec<Alarm>,
+}
+
+impl AlarmPlan {
+    /// How far ahead a plan reaches.
+    pub const AHEAD: TimeDelta = TimeDelta::hours(6);
+
+    /// Plan the alarms from `from` to [`Self::AHEAD`] after `now`.
+    pub fn new(
+        vdir: &Vdir,
+        from: DateTime<Utc>,
+        now: DateTime<Utc>,
+        local: Tz,
+        default: Option<TimeDelta>,
+    ) -> Self {
+        let covers = from..now + Self::AHEAD;
+        let alarms = vdir.alarms(&covers, local, default);
+        Self { covers, alarms }
+    }
+
+    /// Whether the plan still covers the window, so it can answer for it.
+    pub fn covers(&self, window: &Range<DateTime<Utc>>) -> bool {
+        self.covers.start <= window.start && window.end <= self.covers.end
+    }
+
+    /// The alarms going off in `window`, which the plan must cover.
+    pub fn due(&self, window: &Range<DateTime<Utc>>) -> impl Iterator<Item = &Alarm> {
+        self.alarms.iter().filter(move |a| window.contains(&a.at))
+    }
+}
+
 impl Alarm {
     /// Notification text: the title, then when (relative and absolute)
     /// and where.

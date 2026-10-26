@@ -1503,6 +1503,7 @@ dependencies = [
  "env_logger",
  "gtk4",
  "libadwaita",
+ "libc",
  "log",
  "notify-rust",
  "nucleo-matcher",
