@@ -1496,6 +1496,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rical-cards"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "compact-ics",
+ "log",
+ "rical-core",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
 name = "rical-core"
 version = "0.1.0"
 dependencies = [

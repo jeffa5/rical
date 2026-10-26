@@ -351,7 +351,18 @@ pub struct Document {
 }
 
 impl Document {
+    /// An iCalendar file: one VCALENDAR.
     pub fn parse(text: &str) -> anyhow::Result<Self> {
+        Self::parse_root(text, "VCALENDAR")
+    }
+
+    /// A vCard file: one VCARD, as an address book keeps them.
+    pub fn parse_card(text: &str) -> anyhow::Result<Self> {
+        Self::parse_root(text, "VCARD")
+    }
+
+    /// A file whose one top-level component is called `expected`.
+    pub fn parse_root(text: &str, expected: &str) -> anyhow::Result<Self> {
         let eol = if text.contains("\r\n") { "\r\n" } else { "\n" };
 
         // group physical lines into logical (unfolded) lines
@@ -404,9 +415,9 @@ impl Document {
         if let Some(c) = stack.pop() {
             anyhow::bail!("BEGIN:{} is never closed", c.name);
         }
-        let root = root.ok_or_else(|| anyhow::anyhow!("no calendar in file"))?;
-        if root.name != "VCALENDAR" {
-            anyhow::bail!("expected VCALENDAR, found {}", root.name);
+        let root = root.ok_or_else(|| anyhow::anyhow!("no {expected} in file"))?;
+        if root.name != expected {
+            anyhow::bail!("expected {expected}, found {}", root.name);
         }
         Ok(Self {
             leading,
@@ -414,6 +425,20 @@ impl Document {
             trailing,
             eol,
         })
+    }
+
+    /// A new vCard 4.0 with `uid`, as written to an address book.
+    pub fn new_card(uid: &str) -> Self {
+        let mut root = Component::new("VCARD");
+        root.insert(Line::new("VERSION:4.0"));
+        root.insert(Line::new("PRODID:-//rical//rical-contacts//EN"));
+        root.insert(Line::property("UID", &[], uid));
+        Self {
+            leading: Vec::new(),
+            root,
+            trailing: String::new(),
+            eol: "\r\n",
+        }
     }
 
     /// A new, empty calendar.

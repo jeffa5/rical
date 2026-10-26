@@ -45,11 +45,15 @@ impl std::error::Error for Error {}
 /// A property or component name, upper-cased; common ones are shared.
 pub type Name = Cow<'static, str>;
 
-/// Names that occur over and over, shared rather than allocated each time.
+/// Names that occur over and over (in calendars and vCards), shared rather
+/// than allocated each time. Sorted, as they are found by binary search.
 const COMMON: &[&str] = &[
     "ACTION",
+    "ADR",
+    "ANNIVERSARY",
     "ATTACH",
     "ATTENDEE",
+    "BDAY",
     "CATEGORIES",
     "CLASS",
     "CN",
@@ -64,36 +68,57 @@ const COMMON: &[&str] = &[
     "DURATION",
     "EMAIL",
     "EXDATE",
+    "FN",
+    "GENDER",
+    "IMPP",
+    "KIND",
+    "LANG",
     "LANGUAGE",
     "LAST-MODIFIED",
     "LOCATION",
+    "MEMBER",
+    "N",
+    "NICKNAME",
+    "NOTE",
+    "ORG",
     "ORGANIZER",
     "PARTSTAT",
     "PERCENT-COMPLETE",
+    "PHOTO",
+    "PREF",
     "PRIORITY",
+    "PRODID",
     "RANGE",
     "RDATE",
     "RECURRENCE-ID",
     "RELATED",
     "RELATED-TO",
     "RELTYPE",
+    "REV",
     "ROLE",
     "RRULE",
     "RSVP",
     "SCHEDULE-STATUS",
     "SEQUENCE",
+    "SOURCE",
     "STATUS",
     "SUMMARY",
+    "TEL",
+    "TITLE",
     "TRANSP",
     "TRIGGER",
+    "TYPE",
     "TZID",
     "UID",
     "URL",
     "VALARM",
     "VALUE",
+    "VCARD",
+    "VERSION",
     "VEVENT",
     "VJOURNAL",
     "VTODO",
+    "X-ABLABEL",
     "X-MOZ-GENERATION",
     "X-MOZ-LASTACK",
 ];
@@ -193,7 +218,16 @@ fn split_line(line: &str) -> Option<Prop> {
     let rest = &head[first.len()..];
     let mut s = rest.strip_prefix(';').unwrap_or(rest);
     while !s.is_empty() {
-        let Some(eq) = s.find('=') else { break };
+        // a parameter without `=` (vCard 2.1's `TEL;CELL;VOICE:`) is a type
+        let segment_end = s.find(';').unwrap_or(s.len());
+        let Some(eq) = s[..segment_end].find('=') else {
+            let bare = s[..segment_end].trim();
+            if !bare.is_empty() {
+                params.push((name("TYPE"), Box::from(bare)));
+            }
+            s = s[segment_end..].strip_prefix(';').unwrap_or("");
+            continue;
+        };
         let key = &s[..eq];
         let after = &s[eq + 1..];
         let (v, next) = if let Some(q) = after.strip_prefix('"') {
@@ -356,5 +390,26 @@ mod tests {
         let p = items[0].prop("X-€").unwrap();
         assert_eq!((p.value(), p.param("A")), ("v", Some("é")));
         assert_eq!(items[0].value("€"), Some("w"));
+    }
+    #[test]
+    fn vcards_parse_too() {
+        let text = "BEGIN:VCARD\r\nVERSION:2.1\r\nN:Lee;Sam;;;\r\nFN:Sam Lee\r\n\
+                    TEL;CELL;VOICE:+44 7700 900123\r\nEMAIL;TYPE=work;PREF=1:sam@example.com\r\n\
+                    item1.EMAIL;TYPE=INTERNET:sam@home.example\r\nitem1.X-ABLabel:Home\r\n\
+                    END:VCARD\r\nBEGIN:VCARD\r\nVERSION:4.0\r\nFN:Jo\r\nEND:VCARD\r\n";
+        let (cards, _) = parse(text).unwrap();
+        assert_eq!(cards.len(), 2);
+        assert_eq!(cards[0].kind, "VCARD");
+        let tel = cards[0].prop("TEL").unwrap();
+        assert_eq!(
+            tel.params().collect::<Vec<_>>(),
+            [("TYPE", "CELL"), ("TYPE", "VOICE")]
+        );
+        let email = cards[0].prop("EMAIL").unwrap();
+        assert_eq!(email.param("type"), Some("work"));
+        assert_eq!(email.param("PREF"), Some("1"));
+        // a vCard group prefix stays on the name, for the caller to read
+        assert!(cards[0].prop("ITEM1.EMAIL").is_some());
+        assert_eq!(cards[1].value("FN"), Some("Jo"));
     }
 }

@@ -73,6 +73,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "rical-cards" = rec {
+      packageId = "rical-cards";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "rical-cards";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "rical-core" = rec {
       packageId = "rical-core";
       build = internal.buildRustCrateWithFeatures {
@@ -4887,6 +4897,48 @@ rec {
           {
             name = "rical-ui";
             packageId = "rical-ui";
+          }
+        ];
+
+      };
+      "rical-cards" = rec {
+        crateName = "rical-cards";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/rical-cards; };
+        libName = "rical_cards";
+        dependencies = [
+          {
+            name = "anyhow";
+            packageId = "anyhow";
+          }
+          {
+            name = "chrono";
+            packageId = "chrono";
+          }
+          {
+            name = "compact-ics";
+            packageId = "compact-ics";
+          }
+          {
+            name = "log";
+            packageId = "log";
+            features = [ "kv" ];
+          }
+          {
+            name = "rical-core";
+            packageId = "rical-core";
+          }
+          {
+            name = "uuid";
+            packageId = "uuid";
+            features = [ "v4" ];
+          }
+        ];
+        devDependencies = [
+          {
+            name = "tempfile";
+            packageId = "tempfile";
           }
         ];
 
