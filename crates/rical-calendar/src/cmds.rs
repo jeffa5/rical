@@ -83,6 +83,21 @@ const DATE: Kind = Kind::Text("date");
 const SHIFT: Kind = Kind::Text("shift");
 const SCOPE: Kind = Kind::Choice(&["this", "all"]);
 
+/// What the help dialog lists: the commands, and the views' binding sections.
+pub const HELP: rical_ui::help::Commands = rical_ui::help::Commands {
+    specs: SPECS,
+    all: ALL,
+    views: &[
+        ("grid", "Day and week"),
+        ("month", "Month"),
+        ("year", "Year"),
+        ("agenda", "Agenda"),
+        ("tasks", "Tasks"),
+        ("invitations", "Invitations"),
+        ("journal", "Journal"),
+    ],
+};
+
 pub static SPECS: &[Spec] = &[
     spec("today", "Go to today"),
     Spec {

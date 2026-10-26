@@ -388,9 +388,12 @@ impl Window {
                 });
             }
             "search" => search::open(self, p.arg(0).unwrap_or_default()),
-            "help" => {
-                help::dialog(&self.binds, self.state.borrow().view).present(Some(&self.window))
-            }
+            "help" => help::dialog(
+                &cmds::HELP,
+                &self.binds,
+                cmds::section(self.state.borrow().view),
+            )
+            .present(Some(&self.window)),
             "quit" => {
                 if let Some(app) = self.window.application() {
                     app.quit();
@@ -915,6 +918,45 @@ fn describe(d: &Draft, calendar: &str, local: chrono_tz::Tz) -> String {
     parts.join(" · ")
 }
 
+/// The command line runs and completes the calendar's commands.
+impl palette::Host for Window {
+    fn anchor(&self) -> gtk::Widget {
+        self.title.clone().upcast()
+    }
+
+    fn window(&self) -> adw::ApplicationWindow {
+        self.window.clone()
+    }
+
+    fn complete(&self, line: &str) -> crate::command::Completion {
+        let state = self.state.borrow();
+        REGISTRY.complete(line, cmds::context(state.view), &cmds::StateValues(&state))
+    }
+
+    fn preview(&self, line: &str) -> Option<String> {
+        self.quick_preview(line)
+    }
+
+    fn execute(self: &Rc<Self>, line: &str) -> Result<(), String> {
+        Window::execute(self, line)
+    }
+
+    fn history(&self) -> &std::cell::RefCell<Vec<String>> {
+        &self.history
+    }
+
+    fn focus_view(&self) {
+        Window::focus_view(self);
+    }
+
+    fn close_popovers(&self) {
+        details::close();
+    }
+
+    fn placeholder(&self) -> &'static str {
+        "command, e.g. view week, goto fri, new --at 14:00 Lunch"
+    }
+}
 #[cfg(test)]
 mod tests {
 

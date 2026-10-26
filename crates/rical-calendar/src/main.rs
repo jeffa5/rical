@@ -6,39 +6,59 @@ use gtk::glib;
 use rical_core::{Vdir, when::local_timezone};
 
 mod agenda;
-mod binds;
 mod cmds;
 mod colors;
-mod command;
 mod config;
 mod details;
-mod draw;
 mod editor;
 mod format;
 mod grid;
 mod guests;
-mod help;
 mod invitations;
 mod journals;
 mod layout;
-mod listhead;
-mod logfile;
 mod minimonth;
 mod month;
 mod person;
 mod prefs;
 mod raw;
 mod repeat;
-
-mod section;
 mod sidetasks;
 mod state;
 mod tasks;
-mod uistate;
 mod window;
 mod year;
 mod zonepick;
 mod zones;
+
+// shared with the other rical apps
+use rical_ui::{command, draw, help, listhead, logfile, section};
+
+/// Key bindings: the shared engine, with the calendar's defaults.
+mod binds {
+    pub use rical_ui::binds::*;
+    pub const DEFAULTS: &str = include_str!("binds.conf");
+
+    #[test]
+    fn defaults_parse() {
+        let binds = Binds::parse(DEFAULTS).unwrap();
+        assert!(binds.sections.contains_key("global"));
+    }
+}
+
+/// What the window remembers: the shared store, and the calendar's own.
+mod uistate {
+    pub use rical_ui::uistate::*;
+
+    /// Whether the extra time zones were left showing (they are by default).
+    pub fn zones_shown() -> bool {
+        get("zones-shown").is_none_or(|v| v != "false")
+    }
+
+    pub fn set_zones_shown(shown: bool) {
+        set("zones-shown", if shown { "true" } else { "false" });
+    }
+}
 
 pub const APP_ID: &str = "net.jeffas.Rical";
 /// What the app is called: everyday, and where it sits beside others.
@@ -46,6 +66,13 @@ pub const APP_NAME: &str = "Calendar";
 pub const APP_FULL_NAME: &str = "Calendar (rical)";
 
 fn main() -> glib::ExitCode {
+    rical_ui::app::init(rical_ui::app::App {
+        id: APP_ID,
+        name: APP_NAME,
+        full_name: APP_FULL_NAME,
+        env_prefix: "RICAL_",
+        folder: None,
+    });
     logfile::init();
     glib::set_application_name(APP_NAME);
     log::info!("rical {} starting", env!("CARGO_PKG_VERSION"));

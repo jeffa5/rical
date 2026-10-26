@@ -20,8 +20,7 @@ mod importer;
 mod notify;
 #[path = "ops.rs"]
 mod ops;
-#[path = "palette.rs"]
-mod palette;
+use rical_ui::palette;
 #[path = "run.rs"]
 mod run;
 #[path = "search.rs"]

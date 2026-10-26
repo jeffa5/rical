@@ -86,10 +86,7 @@ impl Section {
 }
 
 fn state_file() -> Option<PathBuf> {
-    let dir = std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))?;
-    Some(dir.join("rical/collapsed"))
+    crate::app::state_dir().map(|d| d.join("collapsed"))
 }
 
 /// Names of the sections collapsed last time.

@@ -19,8 +19,6 @@
 
 use std::{collections::BTreeMap, fmt, str::FromStr};
 
-pub const DEFAULTS: &str = include_str!("binds.conf");
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Key {
     /// A single character, or a lower-case key name such as "enter".
@@ -410,12 +408,6 @@ mod tests {
             "removed"
         );
         assert_eq!(run(binds.lookup("grid", &k("t"))), "view day");
-    }
-
-    #[test]
-    fn defaults_parse() {
-        let binds = Binds::parse(DEFAULTS).unwrap();
-        assert!(binds.sections.contains_key("global"));
     }
 
     #[test]

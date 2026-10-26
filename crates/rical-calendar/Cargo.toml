@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 rical-core.workspace = true
+rical-ui.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 env_logger.workspace = true

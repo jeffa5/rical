@@ -1492,6 +1492,7 @@ dependencies = [
  "nucleo-matcher",
  "pangocairo",
  "rical-core",
+ "rical-ui",
 ]
 
 [[package]]
@@ -1509,6 +1510,21 @@ dependencies = [
  "serde",
  "tempfile",
  "uuid",
+]
+
+[[package]]
+name = "rical-ui"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "env_filter",
+ "gtk4",
+ "libadwaita",
+ "libc",
+ "log",
+ "nucleo-matcher",
+ "pangocairo",
+ "rical-core",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/compact-ics", "crates/rical-core", "crates/rical", "crates/rical-calendar"]
+members = ["crates/compact-ics", "crates/rical-core", "crates/rical", "crates/rical-calendar", "crates/rical-ui"]
 
 [workspace.package]
 version = "0.1.0"
@@ -8,6 +8,7 @@ edition = "2024"
 
 [workspace.dependencies]
 rical-core = { path = "crates/rical-core" }
+rical-ui = { path = "crates/rical-ui" }
 compact-ics = { path = "crates/compact-ics" }
 anyhow = "1.0.100"
 chrono = "0.4.42"

@@ -1,5 +1,6 @@
 //! The command line: a popover with an entry and completions, opened with
-//! `:` (or by a binding that ends without `<Enter>`).
+//! `:` (or by a binding that ends without `<Enter>`). The app provides
+//! what it runs and completes through [`Host`].
 //!
 //! Typing filters the completions for the word under the cursor. Tab and
 //! Shift+Tab (or Down/Up) cycle through them, filling the word in. Enter
@@ -14,11 +15,33 @@ use std::{
 use adw::prelude::*;
 use gtk::{gdk, glib};
 
-use super::{Window, run::REGISTRY};
-use crate::{
-    cmds::{self, StateValues},
-    command::Completion,
-};
+use crate::command::Completion;
+
+/// What the command line needs from the app it is in.
+pub trait Host {
+    /// The widget the command line opens under (the window's title).
+    fn anchor(&self) -> gtk::Widget;
+    /// The app's window: while it shows a dialog, focus is left alone.
+    fn window(&self) -> adw::ApplicationWindow;
+    /// Completions for the line as typed so far.
+    fn complete(&self, line: &str) -> Completion;
+    /// What the line would do, shown as it is typed (quick add's preview).
+    fn preview(&self, _line: &str) -> Option<String> {
+        None
+    }
+    /// Run a line.
+    fn execute(self: &Rc<Self>, line: &str) -> Result<(), String>;
+    /// Lines run before, oldest first.
+    fn history(&self) -> &RefCell<Vec<String>>;
+    /// Give the main view keyboard focus again.
+    fn focus_view(&self);
+    /// Close whatever popover is open, before the command line opens.
+    fn close_popovers(&self) {}
+    /// The hint in the empty entry.
+    fn placeholder(&self) -> &'static str {
+        "a command; Tab completes"
+    }
+}
 
 const MAX_ROWS: usize = 40;
 
@@ -38,15 +61,15 @@ struct Palette {
 }
 
 /// Open the command line with `text` typed in.
-pub fn open(window: &Rc<Window>, text: &str) {
+pub fn open<H: Host + 'static>(window: &Rc<H>, text: &str) {
     show(window, text, None);
 }
 
-fn show(window: &Rc<Window>, text: &str, problem: Option<&str>) {
-    crate::details::close();
+fn show<H: Host + 'static>(window: &Rc<H>, text: &str, problem: Option<&str>) {
+    window.close_popovers();
     let entry = gtk::Entry::builder()
         .hexpand(true)
-        .placeholder_text("command, e.g. view week, goto fri, new --at 14:00 Lunch")
+        .placeholder_text(window.placeholder())
         .primary_icon_name("utilities-terminal-symbolic")
         .build();
     entry.update_property(&[gtk::accessible::Property::Label("Command")]);
@@ -88,12 +111,12 @@ fn show(window: &Rc<Window>, text: &str, problem: Option<&str>) {
         .position(gtk::PositionType::Bottom)
         .has_arrow(false)
         .build();
-    popover.set_parent(&window.title);
+    popover.set_parent(&window.anchor());
     let w = Rc::downgrade(window);
     popover.connect_closed(move |p| {
         // back to the calendar, unless a command opened a dialog
         if let Some(w) = w.upgrade()
-            && w.window.visible_dialog().is_none()
+            && w.window().visible_dialog().is_none()
         {
             w.focus_view();
         }
@@ -159,19 +182,16 @@ fn show(window: &Rc<Window>, text: &str, problem: Option<&str>) {
 }
 
 impl Palette {
-    fn update(&self, w: &Rc<Window>) {
+    fn update<H: Host>(&self, w: &Rc<H>) {
         let text = self.entry.text().to_string();
-        match w.quick_preview(&text) {
+        match w.preview(&text) {
             Some(p) => {
                 self.preview.set_label(&format!("→ {p}"));
                 self.preview.set_visible(true);
             }
             None => self.preview.set_visible(false),
         }
-        let completion = {
-            let state = w.state.borrow();
-            REGISTRY.complete(&text, cmds::context(state.view), &StateValues(&state))
-        };
+        let completion = w.complete(&text);
         while let Some(row) = self.list.row_at_index(0) {
             self.list.remove(&row);
         }
@@ -237,7 +257,7 @@ impl Palette {
         }
     }
 
-    fn step(&self, w: &Rc<Window>, forward: bool) {
+    fn step<H: Host>(&self, w: &Rc<H>, forward: bool) {
         let n = self.completion.borrow().candidates.len().min(MAX_ROWS);
         if n == 0 {
             return;
@@ -258,8 +278,8 @@ impl Palette {
         self.choose(next);
     }
 
-    fn history(&self, w: &Rc<Window>, back: bool) -> bool {
-        let history = w.history.borrow();
+    fn history<H: Host>(&self, w: &Rc<H>, back: bool) -> bool {
+        let history = w.history().borrow();
         if history.is_empty() {
             return false;
         }
@@ -286,7 +306,12 @@ impl Palette {
         self.programmatic.set(false);
     }
 
-    fn key(&self, w: &Rc<Window>, key: gdk::Key, mods: gdk::ModifierType) -> glib::Propagation {
+    fn key<H: Host + 'static>(
+        &self,
+        w: &Rc<H>,
+        key: gdk::Key,
+        mods: gdk::ModifierType,
+    ) -> glib::Propagation {
         use gdk::Key as K;
         use glib::Propagation::{Proceed, Stop};
         let ctrl = mods.contains(gdk::ModifierType::CONTROL_MASK);
@@ -315,7 +340,7 @@ impl Palette {
         Stop
     }
 
-    fn submit(&self, w: &Rc<Window>) {
+    fn submit<H: Host + 'static>(&self, w: &Rc<H>) {
         // fill in a single unambiguous completion of a half-typed word
         {
             let completion = self.completion.borrow();
@@ -337,13 +362,13 @@ impl Palette {
         self.popover.popdown();
         match w.execute(&line) {
             Ok(()) => {
-                let mut history = w.history.borrow_mut();
+                let mut history = w.history().borrow_mut();
                 history.retain(|h| *h != line);
                 history.push(line);
                 drop(history);
                 // unless the command opened something else (a dialog), go back to
                 // the calendar
-                if w.window.visible_dialog().is_none() {
+                if w.window().visible_dialog().is_none() {
                     w.focus_view();
                 }
             }

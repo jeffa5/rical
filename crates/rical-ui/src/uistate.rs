@@ -4,13 +4,10 @@
 
 use std::path::PathBuf;
 
-/// `$XDG_STATE_HOME/rical`, by default `~/.local/state/rical`.
+/// The app's state folder: `$XDG_STATE_HOME/rical[/app]`, by default
+/// `~/.local/state/rical` for the calendar.
 pub fn dir() -> Option<PathBuf> {
-    std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
-        .map(|d| d.join("rical"))
+    crate::app::state_dir()
 }
 
 fn file() -> Option<PathBuf> {
@@ -34,13 +31,4 @@ pub fn set(name: &str, value: &str) {
     if let Err(e) = crate::config::edit_file(&path, name, Some(value)) {
         log::warn!("could not remember {name}: {e}");
     }
-}
-
-/// Whether the extra time zones were left showing (they are by default).
-pub fn zones_shown() -> bool {
-    get("zones-shown").is_none_or(|v| v != "false")
-}
-
-pub fn set_zones_shown(shown: bool) {
-    set("zones-shown", if shown { "true" } else { "false" });
 }

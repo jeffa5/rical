@@ -83,6 +83,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "rical-ui" = rec {
+      packageId = "rical-ui";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "rical-ui";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
   };
 
 
@@ -4874,6 +4884,10 @@ rec {
             name = "rical-core";
             packageId = "rical-core";
           }
+          {
+            name = "rical-ui";
+            packageId = "rical-ui";
+          }
         ];
 
       };
@@ -4933,6 +4947,57 @@ rec {
           {
             name = "tempfile";
             packageId = "tempfile";
+          }
+        ];
+
+      };
+      "rical-ui" = rec {
+        crateName = "rical-ui";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/rical-ui; };
+        libName = "rical_ui";
+        dependencies = [
+          {
+            name = "chrono";
+            packageId = "chrono";
+          }
+          {
+            name = "env_filter";
+            packageId = "env_filter";
+          }
+          {
+            name = "gtk4";
+            packageId = "gtk4";
+            rename = "gtk";
+            features = [ "v4_18" ];
+          }
+          {
+            name = "libadwaita";
+            packageId = "libadwaita";
+            rename = "adw";
+            features = [ "v1_8" ];
+          }
+          {
+            name = "libc";
+            packageId = "libc";
+          }
+          {
+            name = "log";
+            packageId = "log";
+            features = [ "kv" ];
+          }
+          {
+            name = "nucleo-matcher";
+            packageId = "nucleo-matcher";
+          }
+          {
+            name = "pangocairo";
+            packageId = "pangocairo";
+          }
+          {
+            name = "rical-core";
+            packageId = "rical-core";
           }
         ];
 
