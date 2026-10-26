@@ -239,11 +239,20 @@ impl Window {
         nav.append(&prev);
         nav.append(&next);
 
+        // grouped as GNOME apps do: doing, setting up, leaving
         let menu = gio::Menu::new();
-        menu.append(Some("_Command Line"), Some("win.palette"));
-        menu.append(Some("_Reload"), Some("win.run::reload"));
-        menu.append(Some("_Keyboard Shortcuts"), Some("win.run::help"));
-        menu.append(Some("_Quit"), Some("win.run::quit"));
+        let doing = gio::Menu::new();
+        doing.append(Some("_Command Line"), Some("win.palette"));
+        doing.append(Some("_Reload"), Some("win.run::reload"));
+        menu.append_section(None, &doing);
+        let app_items = gio::Menu::new();
+        app_items.append(Some("_Preferences"), Some("win.run::settings"));
+        app_items.append(Some("_Keyboard Shortcuts"), Some("win.run::help"));
+        app_items.append(Some("_About rical"), Some("win.run::about"));
+        menu.append_section(None, &app_items);
+        let leaving = gio::Menu::new();
+        leaving.append(Some("_Quit"), Some("win.run::quit"));
+        menu.append_section(None, &leaving);
         let menu_button = gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
             .menu_model(&menu)

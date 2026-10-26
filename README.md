@@ -31,7 +31,8 @@ The flake also has a Home Manager module (`programs.rical`).
 
 ## Configure
 
-`~/.config/rical/config`, as `name = value` lines:
+Preferences (`Ctrl+,` or `:settings`) edit `~/.config/rical/config`, a file of
+`name = value` lines:
 
 ```ini
 vdir = ~/calendars
@@ -42,7 +43,9 @@ zones = UK=Europe/London
 ```
 
 Each setting can also come from the environment (`RICAL_VDIR=...`).
-`rical-gtk --help` lists them all.
+`rical-gtk --help` lists them all. If the config is read-only (say Home
+Manager made it), Preferences save to `local.conf` beside it, which rical
+reads after it, and offer the changes as Home Manager settings to copy.
 
 ## Use
 

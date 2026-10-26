@@ -1037,4 +1037,110 @@ impl Window {
         crate::person::show(&self.window, &state, person);
         Ok(())
     }
+
+    /// `:settings`: the preferences dialog over the config file.
+    pub(super) fn show_settings(self: &Rc<Self>) {
+        crate::details::close();
+        let calendars = self
+            .state
+            .borrow()
+            .vdir
+            .calendars
+            .iter()
+            .map(|c| (c.id.clone(), c.name.clone()))
+            .collect();
+        let weak = Rc::downgrade(self);
+        crate::prefs::show(
+            &self.window,
+            calendars,
+            Rc::new(move || match weak.upgrade() {
+                Some(w) => w.apply_settings(),
+                None => Ok(()),
+            }),
+        );
+    }
+
+    /// Read the settings again and apply those that can change while
+    /// running; the rest (the vdir, the view to open on, bindings, the
+    /// renderer) wait for the next start.
+    pub(super) fn apply_settings(self: &Rc<Self>) -> Result<(), String> {
+        let o = crate::config::Options::load()?;
+        let week = o.week.as_deref().unwrap_or("fullweek");
+        let week_view = ViewKind::from_name(week)
+            .filter(|v| matches!(v, ViewKind::Week | ViewKind::WorkWeek | ViewKind::Days(_)))
+            .ok_or(format!("week: “{week}” is not fullweek, workweek or Ndays"))?;
+        let reminder = match &o.remind {
+            Some(text) => Some(
+                rical_core::input::parse_shift(text)
+                    .filter(|d| *d > TimeDelta::zero())
+                    .ok_or(format!("remind: not a duration: “{text}”"))?,
+            ),
+            None => None,
+        };
+        {
+            let mut s = self.state.borrow_mut();
+            // showing the week as it was: show it as it is now
+            if s.view == s.week_view {
+                s.view = week_view;
+            }
+            if s.calendar_view == s.week_view {
+                s.calendar_view = week_view;
+            }
+            s.week_view = week_view;
+            if o.calendar.is_some() {
+                s.last_calendar = o.calendar;
+            }
+            s.notifications = !o.no_notifications;
+            s.me = o.me;
+            s.contacts = o.contacts;
+            s.zones = o.zones;
+            s.default_reminder = reminder;
+            s.invalidate();
+        }
+        self.refresh();
+        Ok(())
+    }
+
+    /// `:about`: who made rical, its version and licence, and details for
+    /// a bug report.
+    pub(super) fn show_about(self: &Rc<Self>) {
+        crate::details::close();
+        let debug = {
+            let s = self.state.borrow();
+            format!(
+                "rical {}\nGTK {}.{}.{}, libadwaita {}.{}.{}\nrenderer: {}\nconfig: {}\nvdir: {}\n\
+                 calendars: {}\ntime zone: {}\n",
+                env!("CARGO_PKG_VERSION"),
+                gtk::major_version(),
+                gtk::minor_version(),
+                gtk::micro_version(),
+                adw::major_version(),
+                adw::minor_version(),
+                adw::micro_version(),
+                std::env::var("GSK_RENDERER").unwrap_or_else(|_| "auto".into()),
+                crate::config::config_path().map_or("none".into(), |p| p.display().to_string()),
+                s.vdir.root.display(),
+                s.vdir.calendars.len(),
+                s.local.name(),
+            )
+        };
+        adw::AboutDialog::builder()
+            .application_name("rical")
+            .application_icon(crate::APP_ID)
+            .version(env!("CARGO_PKG_VERSION"))
+            .comments(
+                "A keyboard-first calendar, task list and journal for a folder of \
+                 iCalendar files, such as one vdirsyncer keeps in sync.",
+            )
+            .developer_name("Andrew Jeffery")
+            .developers(["Andrew Jeffery"])
+            .copyright("© 2025–2026 Andrew Jeffery")
+            .license_type(gtk::License::MitX11)
+            .website("https://github.com/jeffa5/rical")
+            .issue_url("https://github.com/jeffa5/rical/issues")
+            .debug_info(debug)
+            .debug_info_filename("rical-debug.txt")
+            .build()
+            .present(Some(&self.window));
+    }
 }

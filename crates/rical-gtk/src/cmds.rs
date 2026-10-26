@@ -232,6 +232,17 @@ pub static SPECS: &[Spec] = &[
         ..spec("resize", "Change the selected event's end, e.g. +15m")
     },
     Spec {
+        aliases: &["preferences", "prefs"],
+        ..spec(
+            "settings",
+            "Change rical's settings (saved to its config file)",
+        )
+    },
+    spec(
+        "about",
+        "rical's version, licence and details for a bug report",
+    ),
+    Spec {
         aliases: &["who"],
         args: &[Arg {
             name: "who",

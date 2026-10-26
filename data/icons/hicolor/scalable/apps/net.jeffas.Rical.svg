@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="head" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#62a0ea"/>
+      <stop offset="1" stop-color="#3584e4"/>
+    </linearGradient>
+    <linearGradient id="page" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#f6f5f4"/>
+    </linearGradient>
+    <clipPath id="card"><rect x="12" y="20" width="104" height="92" rx="14"/></clipPath>
+  </defs>
+  <!-- the page, standing on a darker edge -->
+  <rect x="12" y="24" width="104" height="92" rx="14" fill="#c0bfbc"/>
+  <rect x="12" y="20" width="104" height="92" rx="14" fill="url(#page)"/>
+  <g clip-path="url(#card)">
+    <!-- the header band, with rical's ":" -->
+    <rect x="12" y="20" width="104" height="30" fill="url(#head)"/>
+    <rect x="12" y="48" width="104" height="2" fill="#1c71d8" opacity="0.5"/>
+  </g>
+  <circle cx="64" cy="29.5" r="3.6" fill="#ffffff"/>
+  <circle cx="64" cy="40.5" r="3.6" fill="#ffffff"/>
+  <!-- binding rings -->
+  <rect x="33" y="12" width="7" height="17" rx="3.5" fill="#5e5c64"/>
+  <rect x="88" y="12" width="7" height="17" rx="3.5" fill="#5e5c64"/>
+  <!-- days: a week of dots, an event, and a task done -->
+  <g fill="#deddda">
+    <rect x="24" y="60" width="12" height="12" rx="3"/>
+    <rect x="42" y="60" width="12" height="12" rx="3"/>
+    <rect x="60" y="60" width="12" height="12" rx="3"/>
+    <rect x="78" y="60" width="12" height="12" rx="3"/>
+    <rect x="96" y="60" width="9" height="12" rx="3"/>
+    <rect x="24" y="78" width="12" height="12" rx="3"/>
+    <rect x="96" y="78" width="9" height="12" rx="3"/>
+    <rect x="24" y="96" width="12" height="9" rx="3"/>
+    <rect x="42" y="96" width="12" height="9" rx="3"/>
+    <rect x="60" y="96" width="12" height="9" rx="3"/>
+    <rect x="96" y="96" width="9" height="9" rx="3"/>
+  </g>
+  <rect x="42" y="78" width="48" height="12" rx="3" fill="#ff7800"/>
+  <rect x="42" y="78" width="4" height="12" rx="2" fill="#c64600"/>
+  <rect x="78" y="96" width="12" height="9" rx="3" fill="#33d17a"/>
+  <path d="M80.8 100.4l2.2 2.2 4.2-4.4" fill="none" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

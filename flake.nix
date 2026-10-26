@@ -46,6 +46,8 @@
         cp ${cargoNix.workspaceMembers.rical.build}/bin/rical $out/bin/
         cp ${cargoNix.workspaceMembers.rical-gtk.build}/bin/rical-gtk $out/bin/
         install -Dm644 ${./data/net.jeffas.Rical.desktop} $out/share/applications/net.jeffas.Rical.desktop
+        install -Dm644 ${./data/icons/hicolor/scalable/apps/net.jeffas.Rical.svg} $out/share/icons/hicolor/scalable/apps/net.jeffas.Rical.svg
+        install -Dm644 ${./data/icons/hicolor/symbolic/apps/net.jeffas.Rical-symbolic.svg} $out/share/icons/hicolor/symbolic/apps/net.jeffas.Rical-symbolic.svg
       '';
       meta = {
         description = "Calendar and tasks over a vdir of .ics files";
@@ -147,21 +149,10 @@
       };
 
       config = lib.mkIf cfg.enable {
-        home.packages = [
-          (pkgs.symlinkJoin {
-            name = "rical-configured";
-            paths = [cfg.package];
-            nativeBuildInputs = [pkgs.makeWrapper];
-            postBuild = ''
-              wrapProgram $out/bin/rical-gtk \
-                ${lib.optionalString (cfg.vdir != null) "--set-default RICAL_VDIR ${lib.escapeShellArg vdirPath}"} \
-                ${lib.optionalString (cfg.calendar != null) "--set-default RICAL_CALENDAR ${lib.escapeShellArg cfg.calendar}"} \
-                ${lib.optionalString (cfg.remind != null) "--set-default RICAL_REMIND ${lib.escapeShellArg cfg.remind}"} \
-                ${lib.optionalString (cfg.week != null) "--set-default RICAL_WEEK ${lib.escapeShellArg cfg.week}"} \
-                ${lib.optionalString cfg.reminders "--set-default RICAL_NO_NOTIFICATIONS true"}
-            '';
-          })
-        ];
+        # settings go in the config file rather than the environment, so
+        # rical-gtk's Preferences can override them (in local.conf, as
+        # this file is read-only)
+        home.packages = [cfg.package];
         assertions = [
           {
             assertion = cfg.reminders -> cfg.vdir != null;
@@ -190,18 +181,30 @@
         xdg.configFile."rical/binds.conf" = lib.mkIf (cfg.binds != "") {
           text = cfg.binds;
         };
-        xdg.configFile."rical/config" = lib.mkIf (cfg.settings != {} || cfg.extraConfig != "") {
-          text = let
-            value = v:
-              if builtins.isBool v
-              then lib.boolToString v
-              else if builtins.isList v
-              then lib.concatStringsSep ", " v
-              else toString v;
-          in
-            lib.concatStrings (lib.mapAttrsToList (k: v: "${k} = ${value v}\n") cfg.settings)
-            + cfg.extraConfig;
-        };
+        xdg.configFile."rical/config" = let
+          # the named options, then `settings` (which can override them)
+          named = lib.filterAttrs (_: v: v != null) {
+            vdir = vdirPath;
+            inherit (cfg) calendar remind week;
+            no-notifications =
+              if cfg.reminders
+              then true
+              else null;
+          };
+          all = named // cfg.settings;
+        in
+          lib.mkIf (all != {} || cfg.extraConfig != "") {
+            text = let
+              value = v:
+                if builtins.isBool v
+                then lib.boolToString v
+                else if builtins.isList v
+                then lib.concatStringsSep ", " v
+                else toString v;
+            in
+              lib.concatStrings (lib.mapAttrsToList (k: v: "${k} = ${value v}\n") all)
+              + cfg.extraConfig;
+          };
       };
     };
 

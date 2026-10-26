@@ -25,6 +25,7 @@ mod listhead;
 mod minimonth;
 mod month;
 mod person;
+mod prefs;
 mod raw;
 mod repeat;
 
@@ -37,7 +38,7 @@ mod year;
 mod zonepick;
 mod zones;
 
-const APP_ID: &str = "net.jeffas.Rical";
+pub const APP_ID: &str = "net.jeffas.Rical";
 
 fn main() -> glib::ExitCode {
     env_logger::Builder::from_default_env()
@@ -72,6 +73,15 @@ fn main() -> glib::ExitCode {
          replies, cancellations, exports).",
     ));
     app.set_option_context_description(Some(&config::help()));
+    app.connect_startup(|_| {
+        // run from the source tree, the icon isn't installed yet: find it
+        // in data/ (an installed one, from the package, comes first)
+        if let Some(display) = gtk::gdk::Display::default() {
+            gtk::IconTheme::for_display(&display)
+                .add_search_path(concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/icons"));
+        }
+        gtk::Window::set_default_icon_name(APP_ID);
+    });
 
     let quit = gtk::gio::SimpleAction::new("quit", None);
     let a = app.clone();
