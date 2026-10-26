@@ -37,6 +37,7 @@ The flake also has a Home Manager module (`programs.rical`).
 vdir = ~/calendars
 week = workweek
 remind = 10m
+contacts = ~/contacts   # vCards: guests suggested and shown by these names
 zones = UK=Europe/London
 ```
 

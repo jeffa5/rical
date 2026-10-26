@@ -249,12 +249,20 @@ impl GuestsEditor {
         if self.guests.borrow().iter().any(|g| g.email == guest.email) {
             return;
         }
+        // shown by the name you know them by (a contact's, which `known`
+        // has in place of an event's); what is written stays as it was
+        let shown = self
+            .known
+            .iter()
+            .find(|k| k.guest.email.eq_ignore_ascii_case(&guest.email))
+            .and_then(|k| k.guest.name.clone())
+            .or_else(|| guest.name.clone());
         let row = adw::ActionRow::builder()
             .title(glib::markup_escape_text(
-                guest.name.as_deref().unwrap_or(&guest.email),
+                shown.as_deref().unwrap_or(&guest.email),
             ))
             .build();
-        if guest.name.is_some() {
+        if shown.is_some() {
             row.set_subtitle(&glib::markup_escape_text(&guest.email));
         }
         row.add_prefix(&gtk::Image::from_icon_name("avatar-default-symbolic"));

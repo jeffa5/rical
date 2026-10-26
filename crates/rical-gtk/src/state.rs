@@ -79,7 +79,11 @@ pub struct State {
     /// Extra time zones beside the grid's hour labels, and whether shown.
     pub zones: Vec<crate::zones::Zone>,
     pub zones_shown: bool,
-    people: RefCell<(Option<u64>, Rc<Vec<Known>>)>,
+    /// Everyone known, by the generation and contacts they were read from.
+    people: RefCell<(Option<PeopleKey>, Rc<People>)>,
+    /// The contacts read, by what the folder looked like then; and their
+    /// names by address (lower case).
+    contact_cache: RefCell<(Option<ContactsSeen>, Rc<Contacts>)>,
 }
 
 /// An event someone else organised, with me (perhaps) invited.
@@ -132,6 +136,7 @@ impl State {
             zones: Vec::new(),
             zones_shown: true,
             people: RefCell::new((None, Rc::new(Vec::new()))),
+            contact_cache: RefCell::new((None, Rc::default())),
         }
     }
 
@@ -242,22 +247,67 @@ impl State {
 
     /// People to invite: from events (most frequent first), then contacts.
     pub fn people(&self) -> Rc<Vec<Known>> {
+        let (seen, contacts) = self.contacts();
         let mut cache = self.people.borrow_mut();
-        if cache.0 != Some(self.generation) {
+        if cache.0 != Some((self.generation, seen)) {
             let mut known = self.vdir.people(&self.my_addresses());
-            if let Some(dir) = &self.contacts {
-                for guest in rical_core::people::contacts(dir) {
-                    match known.iter_mut().find(|k| k.guest.email == guest.email) {
-                        // a contact's name beats one from an invitation
-                        Some(k) if guest.name.is_some() => k.guest.name = guest.name,
-                        Some(_) => {}
-                        None => known.push(Known { guest, count: 0 }),
-                    }
+            for guest in &contacts.guests {
+                match known.iter_mut().find(|k| k.guest.email == guest.email) {
+                    // a contact's name beats one from an invitation
+                    Some(k) if guest.name.is_some() => k.guest.name = guest.name.clone(),
+                    Some(_) => {}
+                    None => known.push(Known {
+                        guest: guest.clone(),
+                        count: 0,
+                    }),
                 }
             }
-            *cache = (Some(self.generation), Rc::new(known));
+            *cache = (Some((self.generation, seen)), Rc::new(known));
         }
         cache.1.clone()
+    }
+
+    /// The contacts folder's vCards, read again only when a file in it
+    /// has changed (looking costs a few hundred stats, reading megabytes).
+    fn contacts(&self) -> (ContactsSeen, Rc<Contacts>) {
+        let Some(dir) = &self.contacts else {
+            return ((0, None), Rc::default());
+        };
+        let seen = rical_core::people::contacts_fingerprint(dir);
+        let mut cache = self.contact_cache.borrow_mut();
+        if cache.0 != Some(seen) {
+            let guests = rical_core::people::contacts(dir);
+            let names = guests
+                .iter()
+                .filter_map(|g| Some((g.email.to_lowercase(), g.name.clone()?)))
+                .collect();
+            *cache = (Some(seen), Rc::new(Contacts { guests, names }));
+        }
+        (seen, cache.1.clone())
+    }
+
+    /// Who someone on an event is, by the name you know them by: your
+    /// contact's name, else the name the event gives, else one they go by
+    /// on other events, else their address.
+    pub fn name_of(&self, p: &rical_core::Person) -> String {
+        let email = p.email.as_deref().map(str::to_lowercase);
+        if let Some(name) = email
+            .as_ref()
+            .and_then(|e| self.contacts().1.names.get(e).cloned())
+        {
+            return name;
+        }
+        if let Some(name) = &p.name {
+            return name.clone();
+        }
+        let Some(email) = email else {
+            return "someone".into();
+        };
+        self.people()
+            .iter()
+            .find(|k| k.guest.email == email)
+            .and_then(|k| k.guest.name.clone())
+            .unwrap_or(email)
     }
 
     /// The days on screen. The N-day view keeps its first day while the
@@ -486,4 +536,20 @@ impl State {
             _ => ViewKind::from_name(name),
         }
     }
+}
+
+/// What a contacts folder looked like: how many vCards, newest change.
+type ContactsSeen = (usize, Option<std::time::SystemTime>);
+
+type People = Vec<Known>;
+
+/// What `People` were read from: the vdir's generation and the contacts.
+type PeopleKey = (u64, ContactsSeen);
+
+/// The contacts read from the folder.
+#[derive(Default)]
+struct Contacts {
+    guests: Vec<rical_core::write::Guest>,
+    /// Each address (lower case) with its contact's name.
+    names: std::collections::HashMap<String, String>,
 }

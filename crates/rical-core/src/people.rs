@@ -79,6 +79,35 @@ pub fn contacts(dir: &Path) -> Vec<Guest> {
     out
 }
 
+/// What the `.vcf` files under `dir` look like from outside: how many,
+/// and the newest change. Cheap next to reading them, so a caller can
+/// tell when to read them again.
+pub fn contacts_fingerprint(dir: &Path) -> (usize, Option<std::time::SystemTime>) {
+    let (mut count, mut newest) = (0, None);
+    let mut stack = vec![dir.to_owned()];
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        // a folder's own time changes when files come or go
+        if let Ok(t) = std::fs::metadata(&d).and_then(|m| m.modified()) {
+            newest = newest.max(Some(t));
+        }
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("vcf")) {
+                count += 1;
+                if let Ok(t) = e.metadata().and_then(|m| m.modified()) {
+                    newest = newest.max(Some(t));
+                }
+            }
+        }
+    }
+    (count, newest)
+}
+
 /// The addresses in vCard text, each with its card's `FN`.
 fn parse_vcards(text: &str) -> Vec<Guest> {
     // unfold continuation lines first
@@ -101,7 +130,7 @@ fn parse_vcards(text: &str) -> Vec<Guest> {
                 name = None;
                 emails.clear();
             }
-            "FN" => name = Some(value.trim().replace("\\,", ",")).filter(|n| !n.is_empty()),
+            "FN" => name = Some(unescape(value.trim())).filter(|n| !n.is_empty()),
             "EMAIL" => {
                 let e = value.trim().to_lowercase();
                 if e.contains('@') {
@@ -151,6 +180,23 @@ pub fn suggest<'a>(
     hits.into_iter().take(limit).map(|(_, k)| k).collect()
 }
 
+/// A vCard text value as written: `\,` `\;` `\\` and `\n` undone.
+fn unescape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n' | 'N') => out.push(' '),
+            Some(other) => out.push(other),
+            None => {}
+        }
+    }
+    out
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +255,29 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn vcard_names_are_unescaped() {
+        let text =
+            "BEGIN:VCARD\r\nFN:Lee\\, Sam\\; Jr\\\\\r\nEMAIL:sam@example.com\r\nEND:VCARD\r\n";
+        assert_eq!(
+            parse_vcards(text)[0].name.as_deref(),
+            Some("Lee, Sam; Jr\\")
+        );
+    }
+
+    #[test]
+    fn the_fingerprint_changes_with_the_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let card = |name: &str| format!("BEGIN:VCARD\r\nFN:{name}\r\nEMAIL:a@b.c\r\nEND:VCARD\r\n");
+        std::fs::write(dir.path().join("a.vcf"), card("A")).unwrap();
+        let before = contacts_fingerprint(dir.path());
+        assert_eq!(before.0, 1);
+        std::fs::create_dir(dir.path().join("book")).unwrap();
+        std::fs::write(dir.path().join("book/b.vcf"), card("B")).unwrap();
+        let after = contacts_fingerprint(dir.path());
+        assert_eq!(after.0, 2);
+        assert_ne!(before, after);
     }
 }

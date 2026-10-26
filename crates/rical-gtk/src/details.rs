@@ -177,7 +177,7 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
         }
     }
     if let Some(invite) = state.invitation(occ) {
-        let mut text = format!("Invitation from {}", invite.from.display());
+        let mut text = format!("Invitation from {}", state.name_of(invite.from));
         if let Some(reply) = invite.reply {
             text += &format!(" · you: {}", format::reply(reply));
         }
@@ -215,11 +215,11 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
     {
         content.append(&row(
             "avatar-default-symbolic",
-            &format!("Organised by {}", organizer.display()),
+            &format!("Organised by {}", state.name_of(organizer)),
         ));
     }
     if !occ.attendees.is_empty() {
-        content.append(&people(occ, &state.my_addresses()));
+        content.append(&people(occ, state));
     }
     // joining and the map go with the other actions at the bottom
     let window = parent.as_ref().root().and_downcast::<gtk::Window>();
@@ -422,7 +422,8 @@ pub fn close() -> bool {
 
 /// Who is invited and how they replied: a count by reply, then a line per
 /// person (the first few, unless expanded).
-fn people(occ: &Occurrence, me: &[String]) -> gtk::Box {
+fn people(occ: &Occurrence, state: &State) -> gtk::Box {
+    let me = &state.my_addresses();
     const SHOWN: usize = 6;
     let attendees = &occ.attendees;
     let count = |s: &str| {
@@ -464,7 +465,7 @@ fn people(occ: &Occurrence, me: &[String]) -> gtk::Box {
         let icon = gtk::Image::from_icon_name(format::reply_icon(status));
         icon.set_tooltip_text(Some(format::reply(status)));
         l.append(&icon);
-        let mut name = a.display().to_owned();
+        let mut name = state.name_of(a);
         if a.is_any_of(me) {
             name += " (you)";
         }
@@ -487,7 +488,8 @@ fn people(occ: &Occurrence, me: &[String]) -> gtk::Box {
         if let Some(email) = a
             .email
             .as_deref()
-            .filter(|e| a.name.is_some() && *e != a.display())
+            // the address, when a name is shown in its place
+            .filter(|e| !name.to_lowercase().starts_with(&e.to_lowercase()))
         {
             label.set_tooltip_text(Some(email));
         }

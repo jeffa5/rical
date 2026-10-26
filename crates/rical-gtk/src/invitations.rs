@@ -233,7 +233,7 @@ impl InvitationsView {
             sub += " · repeats";
         }
         if let Some(invite) = state.invitation(o) {
-            sub = format!("{sub} · from {}", invite.from.display());
+            sub = format!("{sub} · from {}", state.name_of(invite.from));
         }
         text.append(
             &gtk::Label::builder()
