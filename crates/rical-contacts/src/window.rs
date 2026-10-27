@@ -32,6 +32,8 @@ pub struct Window {
     pub selection: gtk::SingleSelection,
     pub list: gtk::ListView,
     pub dup_list: gtk::ListBox,
+    /// The headings over the duplicates: likely ones, then same names.
+    dup_headings: rical_ui::listhead::Headings,
     detail: adw::NavigationPage,
     pub toasts: adw::ToastOverlay,
     pub history: RefCell<Vec<String>>,
@@ -199,6 +201,7 @@ impl Window {
             model,
             selection,
             list,
+            dup_headings: rical_ui::listhead::install(&dup_list),
             dup_list,
             detail,
             toasts,
@@ -589,6 +592,25 @@ impl Window {
             self.dup_list.remove(&row);
         }
         let s = self.state.borrow();
+        // a heading where the likely ones start, and where those that only
+        // share a name do (strong groups come first)
+        *self.dup_headings.borrow_mut() = groups
+            .iter()
+            .enumerate()
+            .map(|(i, g)| {
+                let starts = i == 0 || groups[i - 1].is_strong() != g.is_strong();
+                starts.then(|| {
+                    let heading = rical_ui::listhead::label(if g.is_strong() {
+                        "Likely the same"
+                    } else {
+                        "Same name only"
+                    });
+                    // in line with the rows' text
+                    heading.set_margin_start(20);
+                    heading.upcast()
+                })
+            })
+            .collect();
         for g in groups.iter() {
             let names: Vec<String> = g
                 .cards
@@ -613,14 +635,6 @@ impl Window {
                 .subtitle(gtk::glib::markup_escape_text(&why))
                 .activatable(true)
                 .build();
-            if !g.is_strong() {
-                row.add_suffix(
-                    &gtk::Label::builder()
-                        .label("maybe")
-                        .css_classes(["dim-label", "caption"])
-                        .build(),
-                );
-            }
             self.dup_list.append(&row);
         }
         if let Some(i) = s.selected_group

@@ -147,16 +147,16 @@ To make Contacts open `.vcf` files by default, set
 ## Tidying up duplicates
 
 `2` (or the Duplicates switch) lists the cards that look like one person,
-with the count on the switch. Two cards are grouped when they have:
+with the count on the switch. Under **Likely the same** are cards that have:
 
 - the same email address (ignoring case),
 - the same number (by its last nine digits, so `07700 900456` and
   `+44 7700 900456` match), or
 - the same UID within one address book.
 
-Cards that only share a name are listed separately and marked “maybe”: two
-Alex Morgans may be two people. The same card in two address books (two
-synced accounts) is a copy, not a duplicate, and isn't listed.
+Below them, under **Same name only**, are cards that share nothing but a
+name: two Alex Morgans may be two people. The same card in two address
+books (two synced accounts) is a copy, not a duplicate, and isn't listed.
 
 ![Two cards for Sam, side by side](duplicates.png)
 
