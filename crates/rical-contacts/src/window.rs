@@ -353,9 +353,11 @@ impl Window {
             w.show_detail();
         });
         let weak = Rc::downgrade(self);
+        // a click shows the group (on a narrow window, its own page); merging
+        // is the button, m or Enter, never a stray click
         self.dup_list.connect_row_activated(move |_, _| {
             if let Some(w) = weak.upgrade() {
-                let _ = w.execute("merge");
+                w.split.set_show_content(true);
             }
         });
         // empty states
