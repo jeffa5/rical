@@ -1,19 +1,30 @@
 # rical
 
-A keyboard-driven calendar, task list and journal for a [vdir](https://vdirsyncer.pimutils.org/en/stable/vdir.html)
-of `.ics` files, such as one kept in sync by vdirsyncer. The files are the
-source of truth: rical reads them, writes plain iCalendar back, and picks up
-changes made on disk while it runs.
+Keyboard-driven apps for your calendars and contacts, kept as plain files:
+
+- **Calendar:** events, tasks and a journal, from a
+  [vdir](https://vdirsyncer.pimutils.org/en/stable/vdir.html) of `.ics` files.
+- **Contacts:** address books, from folders of `.vcf` files.
+
+These are the folders vdirsyncer keeps in sync with a CalDAV or CardDAV
+server such as Nextcloud. The files are the source of truth: rical reads
+them, writes plain iCalendar and vCard back, and picks up changes made on
+disk while it runs.
 
 - `rical-calendar` (“Calendar (rical)” in your app launcher): a GTK4/libadwaita
   app with day, week, month, year, agenda, task and journal views,
   recurring events, time zones, subtasks, invitations and reminders.
-- `rical-contacts` (“Contacts (rical)”): an address book for folders of
-  vCards in the same style, with search across every field, contacts
-  opened from other apps matched by UID, and merging of duplicates. See
+- `rical-contacts` (“Contacts (rical)”): an address book in the same style.
+  It searches every field, numbers however they're written. Contacts
+  opened from other apps are matched by UID, and it merges duplicates. See
   [Contacts](docs/contacts.md).
 - `rical`: a CLI for listing, adding, completing and editing items, plus
   `rical remind` for desktop notifications.
+
+The two apps work together. The calendar names guests from your contacts,
+and clicking someone on an event shows their contact card. From there,
+**Open in Contacts** opens it in the Contacts app, or **Add to Contacts**
+adds them.
 
 ![Week view, with Singapore time beside the hours](docs/week.png)
 
@@ -21,9 +32,14 @@ changes made on disk while it runs.
 |---|---|
 | ![Month view](docs/month.png) | ![Tasks with subtasks](docs/tasks.png) |
 
-To try it without your own calendars, `scripts/demo-vdir.sh /tmp/demo`
-writes the made-up calendars shown here; then run
-`RICAL_VDIR=/tmp/demo rical-calendar`.
+| Contacts | Tidying up duplicates |
+|---|---|
+| ![A contact, with every way to reach them](docs/contacts.png) | ![Two cards for one person, side by side, to merge](docs/duplicates.png) |
+
+To try them without your own data, run `scripts/demo-vdir.sh /tmp/demo` and
+`scripts/demo-contacts.sh /tmp/contacts`. They write the made-up calendars
+and contacts shown here. Then run `RICAL_VDIR=/tmp/demo rical-calendar` and
+`RICAL_CONTACTS_CONTACTS=/tmp/contacts rical-contacts`.
 
 ## Documentation
 
@@ -38,18 +54,19 @@ The [documentation](docs/README.md) covers everything; start with
 ## Install
 
 ```sh
-nix run github:jeffa5/rical           # or: nix profile install github:jeffa5/rical
+nix profile install github:jeffa5/rical   # both apps and the CLI; or: nix run github:jeffa5/rical
 cargo install --path crates/rical-calendar  # needs GTK 4 and libadwaita
 cargo install --path crates/rical-contacts
 ```
 
 The flake also has a [Home Manager module](docs/configuration.md#home-manager)
-(`programs.rical`).
+(`programs.rical`). Its `openCalendarFiles` and `openContactFiles` make the
+apps open `.ics` and `.vcf` files from other apps.
 
 ## Configure
 
-Preferences (`Ctrl+,` or `:settings`) edit `~/.config/rical/config`, a file of
-`name = value` lines:
+Calendar's Preferences (`Ctrl+,` or `:settings`) edit
+`~/.config/rical/config`, a file of `name = value` lines:
 
 ```ini
 vdir = ~/calendars
@@ -64,15 +81,27 @@ config is read-only (say Home Manager made it), Preferences save to
 `local.conf` beside it, which is read after it. See
 [Configuration](docs/configuration.md) for every setting.
 
+Contacts has its own, smaller config in `~/.config/rical/contacts/config`
+(`RICAL_CONTACTS_...` in the environment). Without one, it opens
+`~/contacts`:
+
+```ini
+contacts = ~/contacts   # a folder of address books
+book = personal         # where new contacts go
+```
+
 ## Use
 
-Every action is a `:command` with completion, and keys are bound to
-commands (aerc style). Press `?` for help, `:` for the command line, `c` for a
-new event, `e` to edit, `D` to mark a task done. `I` lists invitations
-waiting for your reply; `y`, `Y` and `N` accept, answer maybe, or decline
-(your server, e.g. Nextcloud, tells the organiser). `E` shows the journal
-and `:note` adds to it. From a task, journal entry or agenda item, `v` shows
-it in the calendar; `Ctrl+T` turns an event into a task or back.
+Both apps work the same way. Every action is a `:command` with
+completion, and keys are bound to commands (aerc style): `?` for help and
+`:` for the command line.
+
+In Calendar, `c` makes a new event, `e` edits, and `D` marks a task done.
+`I` lists invitations waiting for your reply; `y`, `Y` and `N` accept,
+answer maybe, or decline (your server, e.g. Nextcloud, tells the
+organiser). `E` shows the journal and `:note` adds to it. From a task,
+journal entry or agenda item, `v` shows it in the calendar; `Ctrl+T` turns
+an event into a task or back.
 
 Add things in plain language; the command line shows what it understood
 before you press Enter, and `rical new` reads the same:
@@ -85,6 +114,17 @@ before you press Enter, and `rical new` reads the same:
 :task Submit expenses by fri 5pm !
 :note Ran 5k along the canal yesterday
 ```
+
+In Contacts:
+
+- `/` searches every field, words and numbers alike (`07700 9` finds
+  `+44 7700 900123`).
+- `c` adds someone, and `C` adds in one line (`:new Jo Park jo@example.com
+  07700 900123`).
+- `e` edits, and `M`, `P` and `A` write to, call or map the person.
+- `2` lists likely duplicates, and `m` merges them: you choose where they
+  disagree, and the leftovers are deleted after asking.
+- `u` undoes anything, a merge included.
 
 ## License
 
