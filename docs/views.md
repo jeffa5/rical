@@ -32,7 +32,12 @@ Events sit at their times, side by side when they start together; one that
 starts later than another is drawn over it, set in, leaving the earlier
 one's title showing. All-day events, tasks with a due date, and dated
 journal entries (marked ✎) sit in the row above the hours. Tasks overdue
-from earlier days are carried to today, in red.
+from earlier days are carried to today, in red. When there are more than
+three rows of them, the row folds: two rows show, then “+N more” under
+each day with more. Click a “+N more”, or “▾ more” under “all day”, or
+press `X` (`:all-day`), to show them all; “▴ less” (or `X` again) folds
+them back. Selecting something folded away shows it, and the choice is
+remembered.
 
 - **Select** with `j`/`k` or a click; `Enter` (or a click) shows the
   details; a double click edits.

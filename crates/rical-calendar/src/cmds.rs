@@ -496,6 +496,19 @@ pub static SPECS: &[Spec] = &[
              (NYC=America/New_York, Asia/Taipei) to set them; add, remove, none",
         )
     },
+    Spec {
+        args: &[Arg {
+            name: "how",
+            kind: Kind::Choice(&["toggle", "show", "hide"]),
+            optional: true,
+            rest: false,
+        }],
+        ..spec(
+            "all-day",
+            "Show every all-day item in the day and week views, or fold those past three \
+             rows behind \"+N more\"",
+        )
+    },
     spec("reload", "Reload the vdir from disk"),
     Spec {
         aliases: &["shortcuts"],

@@ -55,6 +55,15 @@ mod uistate {
         get("zones-shown").is_none_or(|v| v != "false")
     }
 
+    /// Whether the all-day row was left showing every lane.
+    pub fn all_day_expanded() -> bool {
+        get("all-day-expanded").is_some_and(|v| v == "true")
+    }
+
+    pub fn set_all_day_expanded(expanded: bool) {
+        set("all-day-expanded", if expanded { "true" } else { "false" });
+    }
+
     pub fn set_zones_shown(shown: bool) {
         set("zones-shown", if shown { "true" } else { "false" });
     }
@@ -207,6 +216,7 @@ fn setup(o: config::Options) -> Result<(state::SharedState, binds::Binds), Strin
     state.contacts = o.contacts;
     state.zones = o.zones;
     state.zones_shown = uistate::zones_shown();
+    state.all_day_expanded = uistate::all_day_expanded();
     if let Some(text) = &o.remind {
         match rical_core::input::parse_shift(text) {
             Some(d) if d > chrono::TimeDelta::zero() => state.default_reminder = Some(d),

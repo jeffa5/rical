@@ -87,6 +87,7 @@ out, rical asks.
 | `:sidebar [state]` | Show or hide the sidebar |
 | `:section <section> [state]` | Show or hide a part of the sidebar: month, calendars or tasks |
 | `:zones [zones...]` | Extra time zones beside the hours: nothing to show or hide them; a list (NYC=America/New_York, Asia/Taipei) to set them; add, remove, none |
+| `:all-day [toggle\|show\|hide]` | Show every all-day item in the day and week views, or fold those past three rows behind "+N more" |
 | `:notifications [state]` | Turn reminders on or off |
 | `:remind <before>` | Remind this long before events without alarms of their own, or "none" |
 | `:settings` (also `:preferences`, `:prefs`) | Change the settings (saved to the config file) |

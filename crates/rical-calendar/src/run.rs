@@ -299,6 +299,15 @@ impl Window {
                 };
                 self.split.set_show_sidebar(show);
             }
+            "all-day" => {
+                let expanded = match p.arg(0) {
+                    Some("show") => true,
+                    Some("hide") => false,
+                    _ => !self.state.borrow().all_day_expanded,
+                };
+                self.grid.set_all_day_expanded(expanded);
+                self.refresh();
+            }
             "zones" => {
                 {
                     let mut s = self.state.borrow_mut();

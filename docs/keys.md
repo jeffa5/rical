@@ -80,6 +80,7 @@ x =                        # unbind x
 | `W` | `:view workweek` |
 | `^` | `:up` |
 | `Z` | `:zones` |
+| `X` | `:all-day` |
 | `<C-1>` | `:view day` |
 | `<C-2>` | `:view week` |
 | `<C-3>` | `:view month` |

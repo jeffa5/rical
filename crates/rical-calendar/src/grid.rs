@@ -26,8 +26,11 @@ const ZONE_WIDTH: f64 = 64.0;
 /// Extra time zones show only while the days keep at least this much room.
 const MIN_DAY_WIDTH: f64 = 90.0;
 const LANE_HEIGHT: f64 = 24.0;
-/// The all-day row shows this many lanes before scrolling.
-const MAX_ALL_DAY_LANES: f64 = 4.5;
+/// Unfolded, the all-day row shows this many lanes before scrolling.
+const MAX_ALL_DAY_LANES: f64 = 10.5;
+/// Folded, it shows this many, the last giving way to "+N more" where
+/// there is more.
+const FOLDED_LANES: usize = 3;
 /// Short events are drawn at least this long so their title fits.
 const MIN_EVENT_MINUTES: f64 = 30.0;
 /// Drags snap to this many minutes.
@@ -333,6 +336,25 @@ impl TimeGrid {
             let hit = hit_at(&hits.borrow(), x, y);
             let width = target.width() as f64;
             let day = this.day_at(x, width);
+            // in the all-day row, "▾ more" under its label and "+N more"
+            // fold and unfold it
+            if all_day {
+                let fold = {
+                    let s = this.state.borrow();
+                    let days = s.visible_days();
+                    let row = AllDay::of(&s, &s.occurrences(&days), &days);
+                    let in_gutter = x < this.gutter(width);
+                    let on_more = row.folded
+                        && hit.is_none()
+                        && y >= 3.0 + (FOLDED_LANES - 1) as f64 * LANE_HEIGHT;
+                    (row.foldable() && (in_gutter || on_more)).then_some(row.folded)
+                };
+                if let Some(folded) = fold {
+                    this.set_all_day_expanded(folded);
+                    changed();
+                    return;
+                }
+            }
             let kind = {
                 let mut s = this.state.borrow_mut();
                 if let Some(day) = day {
@@ -579,6 +601,14 @@ impl TimeGrid {
         Some((left, left + GUTTER))
     }
 
+    /// Show every lane of the all-day row, or fold those past a few
+    /// behind "+N more", and remember it.
+    pub fn set_all_day_expanded(&self, expanded: bool) {
+        self.state.borrow_mut().all_day_expanded = expanded;
+        crate::uistate::set_all_day_expanded(expanded);
+        self.refresh();
+    }
+
     /// Fold the extra zones away, or bring them back, and remember it.
     /// Not when they are shown but the window is too narrow for them: then
     /// there is nothing to fold.
@@ -630,7 +660,7 @@ impl TimeGrid {
         let state = self.state.borrow();
         let days = state.visible_days();
         let occ = state.occurrences(&days);
-        let lanes = layout::lanes(&layout::all_day_bars(&occ, &days, state.local)).max(1);
+        let lanes = AllDay::of(&state, &occ, &days).shown_lanes();
         self.all_day
             .set_content_height((lanes as f64 * LANE_HEIGHT) as i32 + 6);
         self.header.queue_draw();
@@ -873,7 +903,8 @@ impl TimeGrid {
 
         let mut hits = self.all_day_hits.borrow_mut();
         hits.clear();
-        for bar in layout::all_day_bars(&occ, &days, state.local) {
+        let all_day = AllDay::of(&state, &occ, &days);
+        for bar in all_day.bars.iter().filter(|b| !all_day.is_hidden(b)) {
             let o = &occ[bar.index];
             let x = g + bar.first as f64 * col_w + 2.0;
             let w = (bar.last - bar.first + 1) as f64 * col_w - 4.0;
@@ -891,6 +922,33 @@ impl TimeGrid {
                 h,
                 target: OccurrenceKey::of(o),
             });
+        }
+
+        // what is folded away, by day: "+3 more" in the last lane shown
+        if all_day.folded {
+            let y = 3.0 + (FOLDED_LANES - 1) as f64 * LANE_HEIGHT;
+            for i in 0..days.len() {
+                let n = all_day.hidden_on(i);
+                if n == 0 {
+                    continue;
+                }
+                let x = g + i as f64 * col_w + 2.0;
+                let w = col_w - 4.0;
+                let text = draw::layout(area, &format!("+{n} more"), &TextStyle::SMALL, w - 8.0, 1);
+                pal.fg(cr, 0.65);
+                draw::show_layout(cr, &text, x + 6.0, y + 3.0);
+            }
+        }
+        // under "all day", which way a click folds it
+        if all_day.foldable() {
+            let mark = if all_day.folded {
+                "▾ more"
+            } else {
+                "▴ less"
+            };
+            let text = draw::layout(area, mark, &TextStyle::SMALL, GUTTER - 8.0, 1);
+            pal.fg(cr, 0.5);
+            draw::show_layout(cr, &text, 4.0, 5.0 + LANE_HEIGHT);
         }
 
         if let Some(ghost) = self.drag_ghost(true) {
@@ -1286,6 +1344,60 @@ fn zone_label<T: chrono::TimeZone>(
 /// so it is the hour itself, whatever the day.
 fn hour_label(hours: i64) -> String {
     format!("{hours:02}:00")
+}
+
+/// The all-day row as laid out: its bars, and whether lanes past
+/// [`FOLDED_LANES`] are folded away behind "+N more".
+struct AllDay {
+    bars: Vec<layout::Bar>,
+    lanes: usize,
+    folded: bool,
+}
+
+impl AllDay {
+    fn of(state: &crate::state::State, occ: &[Occurrence], days: &[NaiveDate]) -> Self {
+        let bars = layout::all_day_bars(occ, days, state.local);
+        let lanes = layout::lanes(&bars).max(1);
+        // something selected where it would be folded away unfolds the
+        // row, to be seen
+        let selected_hidden = bars.iter().any(|b| {
+            b.lane + 1 >= FOLDED_LANES
+                && state
+                    .selected
+                    .as_ref()
+                    .is_some_and(|k| k.matches(&occ[b.index]))
+        });
+        Self {
+            bars,
+            lanes,
+            folded: lanes > FOLDED_LANES && !state.all_day_expanded && !selected_hidden,
+        }
+    }
+
+    /// Whether there is more than fits folded: then it can fold or unfold.
+    fn foldable(&self) -> bool {
+        self.lanes > FOLDED_LANES
+    }
+
+    fn shown_lanes(&self) -> usize {
+        if self.folded {
+            FOLDED_LANES
+        } else {
+            self.lanes
+        }
+    }
+
+    fn is_hidden(&self, bar: &layout::Bar) -> bool {
+        self.folded && bar.lane + 1 >= FOLDED_LANES
+    }
+
+    /// How many bars are folded away on day `i`.
+    fn hidden_on(&self, i: usize) -> usize {
+        self.bars
+            .iter()
+            .filter(|b| self.is_hidden(b) && b.first <= i && i <= b.last)
+            .count()
+    }
 }
 
 #[cfg(test)]

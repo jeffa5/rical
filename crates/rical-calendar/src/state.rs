@@ -79,6 +79,8 @@ pub struct State {
     /// Extra time zones beside the grid's hour labels, and whether shown.
     pub zones: Vec<crate::zones::Zone>,
     pub zones_shown: bool,
+    /// Whether the all-day row shows every lane, or folds those past a few.
+    pub all_day_expanded: bool,
     /// Everyone known, by the generation and contacts they were read from.
     people: RefCell<(Option<PeopleKey>, Rc<People>)>,
     /// The contacts read, by what the folder looked like then; and their
@@ -135,6 +137,7 @@ impl State {
             contacts: None,
             zones: Vec::new(),
             zones_shown: true,
+            all_day_expanded: false,
             people: RefCell::new((None, Rc::new(Vec::new()))),
             contact_cache: RefCell::new((None, Rc::default())),
         }
