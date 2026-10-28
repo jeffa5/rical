@@ -40,6 +40,8 @@ pub struct State {
     pub not_same: BTreeSet<(String, String)>,
     /// Address book new contacts go in, by id or name.
     pub default_book: Option<String>,
+    /// How the list of everyone is sorted.
+    pub sort: rical_cards::search::SortBy,
     pub undo: Vec<Vec<Change>>,
     pub redo: Vec<Vec<Change>>,
 }
@@ -60,6 +62,7 @@ impl State {
             selected_group: None,
             not_same: load_not_same(),
             default_book: None,
+            sort: Default::default(),
             undo: Vec::new(),
             redo: Vec::new(),
         };
@@ -71,7 +74,15 @@ impl State {
     pub fn refresh(&mut self) {
         if self.index.generation != self.books.generation() {
             self.index = Index::build(&self.books);
+            self.index.sort_by(self.sort);
         }
+        self.search();
+    }
+
+    /// Sort everyone by `by` from now on.
+    pub fn set_sort(&mut self, by: rical_cards::search::SortBy) {
+        self.sort = by;
+        self.index.sort_by(by);
         self.search();
     }
 

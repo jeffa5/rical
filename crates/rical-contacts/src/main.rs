@@ -136,6 +136,7 @@ fn setup(o: config::Options) -> Result<(state::SharedState, rical_ui::binds::Bin
     let loaded = started.elapsed();
     let mut state = state::State::new(books);
     state.default_book = o.book;
+    state.set_sort(config::sort_by(o.sort.as_deref()));
     log::info!(
         "{} cards in {} address books: read in {loaded:?}, ready in {:?}",
         state.books.len(),

@@ -25,6 +25,10 @@ pub fn show(win: &Rc<Window>) {
         let o = crate::config::Options::load()?;
         if let Some(w) = weak.upgrade() {
             w.state.borrow_mut().default_book = o.book;
+            w.state
+                .borrow_mut()
+                .set_sort(crate::config::sort_by(o.sort.as_deref()));
+            w.fill_list();
             w.show_detail();
         }
         Ok(())
@@ -52,6 +56,18 @@ pub fn show(win: &Rc<Window>) {
         &names,
         value("book").unwrap_or_default(),
         env("book"),
+    ));
+
+    let orders = [
+        ("", "By name, as shown (the default)"),
+        ("family", "By family name"),
+    ];
+    books_group.add(&ctx.combo_row(
+        "sort",
+        "Sort people",
+        &owned(&orders),
+        value("sort").filter(|v| v != "name").unwrap_or_default(),
+        env("sort"),
     ));
 
     let advanced = ctx.group("Advanced");

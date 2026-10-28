@@ -587,6 +587,14 @@ impl Window {
     /// The duplicates list, and its count on the switch.
     pub fn fill_duplicates(&self) {
         let groups = self.state.borrow_mut().groups();
+        // the selected row stays put; after the last is merged, the new last
+        {
+            let mut s = self.state.borrow_mut();
+            s.selected_group = s
+                .selected_group
+                .filter(|_| !groups.is_empty())
+                .map(|i| i.min(groups.len() - 1));
+        }
         self.syncing.set(true);
         while let Some(row) = self.dup_list.row_at_index(0) {
             self.dup_list.remove(&row);
@@ -783,14 +791,21 @@ impl Window {
                     });
                 }
             }
-            View::Duplicates => match self.dup_list.selected_row() {
-                Some(r) => {
-                    r.grab_focus();
-                }
-                None => {
-                    self.dup_list.grab_focus();
-                }
-            },
+            // now, and again once dialogs closing have put focus back where
+            // it was (a row the list no longer has, so the search box)
+            View::Duplicates => {
+                let list = self.dup_list.clone();
+                let focus = move || match list.selected_row() {
+                    Some(r) => {
+                        r.grab_focus();
+                    }
+                    None => {
+                        list.grab_focus();
+                    }
+                };
+                focus();
+                glib::idle_add_local_once(focus);
+            }
         }
     }
 

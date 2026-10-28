@@ -19,6 +19,10 @@ pub const SETTINGS: &[(&str, &str)] = &[
          with the most contacts.",
     ),
     (
+        "sort",
+        "How the list is sorted: name (as shown, the default) or family (by family name, then given).",
+    ),
+    (
         "binds",
         "Key bindings file. Default ~/.config/rical/contacts/binds.conf if it exists.",
     ),
@@ -34,6 +38,7 @@ pub const SETTINGS: &[(&str, &str)] = &[
 pub struct Options {
     pub contacts: Option<PathBuf>,
     pub book: Option<String>,
+    pub sort: Option<String>,
     pub binds: Option<PathBuf>,
     pub renderer: Option<String>,
 }
@@ -79,6 +84,10 @@ impl Options {
             "contacts" => self.contacts = Some(expand(value, base)),
             "binds" => self.binds = Some(expand(value, base)),
             "book" => self.book = Some(value.to_owned()),
+            "sort" => match value.to_ascii_lowercase().as_str() {
+                "name" | "family" => self.sort = Some(value.to_ascii_lowercase()),
+                _ => return Err(format!("{origin}: sort is name or family, not “{value}”")),
+            },
             "renderer" => {
                 self.renderer = match value.to_ascii_lowercase().as_str() {
                     "auto" => None,
@@ -117,4 +126,12 @@ pub fn help() -> String {
         s += &format!("  {name}  ({})\n      {what}\n", env_name(name));
     }
     s
+}
+
+/// The `sort` setting as an order.
+pub fn sort_by(value: Option<&str>) -> rical_cards::search::SortBy {
+    match value {
+        Some("family") => rical_cards::search::SortBy::Family,
+        _ => rical_cards::search::SortBy::Shown,
+    }
 }

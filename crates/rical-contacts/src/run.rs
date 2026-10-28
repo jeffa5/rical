@@ -142,6 +142,7 @@ impl Window {
                 self.state.borrow_mut().say_different(&group);
                 self.fill_duplicates();
                 self.show_detail();
+                self.focus_view();
                 self.toast("They won't be suggested again");
             }
             "undo" => self.undo(true)?,
@@ -359,6 +360,7 @@ impl Window {
         }
         self.duplicates_soon();
         self.show_detail();
+        self.focus_view();
     }
 
     /// A toast with an Undo button.

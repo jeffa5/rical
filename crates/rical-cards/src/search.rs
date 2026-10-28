@@ -119,12 +119,7 @@ impl Index {
             ta.cmp(tb).then(a.entry.cmp(&b.entry))
         });
         text.shrink_to_fit();
-        let mut by_name: Vec<u32> = (0..entries.len() as u32).collect();
-        by_name.sort_by(|a, b| entries[*a as usize].sort.cmp(&entries[*b as usize].sort));
-        let mut rank = vec![0u32; entries.len()];
-        for (place, e) in by_name.iter().enumerate() {
-            rank[*e as usize] = place as u32;
-        }
+        let rank = ranks(&entries, SortBy::Shown);
         tokens.shrink_to_fit();
         Index {
             generation: books.generation(),
@@ -134,6 +129,11 @@ impl Index {
             tokens,
             phones,
         }
+    }
+
+    /// Put everyone in this order, for lists and ties between matches.
+    pub fn sort_by(&mut self, by: SortBy) {
+        self.rank = ranks(&self.entries, by);
     }
 
     fn token(&self, t: &Token) -> &str {
@@ -212,6 +212,34 @@ impl Index {
                 .sum::<usize>()
             + self.phones.iter().map(|(p, _)| p.len() + 28).sum::<usize>()
     }
+}
+
+/// How the list of everyone is sorted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SortBy {
+    /// By the name as shown ("Sam Lee" under S), as most contact apps do.
+    #[default]
+    Shown,
+    /// By family name, then given ("Sam Lee" under L).
+    Family,
+}
+
+/// Each entry's place in `by` order.
+fn ranks(entries: &[Entry], by: SortBy) -> Vec<u32> {
+    let keys: Vec<String> = entries
+        .iter()
+        .map(|e| match by {
+            SortBy::Shown => fold(e.name.trim()),
+            SortBy::Family => e.sort.clone(),
+        })
+        .collect();
+    let mut order: Vec<u32> = (0..entries.len() as u32).collect();
+    order.sort_by(|a, b| keys[*a as usize].cmp(&keys[*b as usize]));
+    let mut rank = vec![0u32; entries.len()];
+    for (place, e) in order.iter().enumerate() {
+        rank[*e as usize] = place as u32;
+    }
+    rank
 }
 
 /// A word of a query: as the index's words are folded, and, for a
@@ -452,7 +480,14 @@ mod tests {
         // apostrophes either way
         assert_eq!(names(&index, "obrien"), ["Samantha O'Brien"]);
         assert_eq!(names(&index, "o'brien"), ["Samantha O'Brien"]);
-        // everyone, by family name then given, for nothing typed
+        // everyone, by name as shown, for nothing typed
+        assert_eq!(
+            names(&index, ""),
+            ["Priya Shah", "Sam Lee", "Samantha O'Brien", "Zoë Ørsted"]
+        );
+        // or by family name, then given
+        let mut index = index;
+        index.sort_by(SortBy::Family);
         assert_eq!(
             names(&index, ""),
             ["Sam Lee", "Samantha O'Brien", "Priya Shah", "Zoë Ørsted"]

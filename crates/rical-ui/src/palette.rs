@@ -251,9 +251,29 @@ impl Palette {
         self.programmatic.set(false);
         if let Some(row) = self.list.row_at_index(i as i32) {
             self.list.select_row(Some(&row));
-            // keep the chosen row in view
-            row.grab_focus();
-            self.entry.grab_focus_without_selecting();
+            self.reveal(&row);
+        }
+    }
+
+    /// Scroll the completions so `row` shows, as arrows and Tab move past
+    /// the bottom or top (the list never has focus, which would).
+    fn reveal(&self, row: &gtk::ListBoxRow) {
+        let Some(scroller) = self
+            .list
+            .ancestor(gtk::ScrolledWindow::static_type())
+            .and_downcast::<gtk::ScrolledWindow>()
+        else {
+            return;
+        };
+        let Some(bounds) = row.compute_bounds(&self.list) else {
+            return;
+        };
+        let adj = scroller.vadjustment();
+        let (top, bottom) = (bounds.y() as f64, (bounds.y() + bounds.height()) as f64);
+        if top < adj.value() {
+            adj.set_value(top);
+        } else if bottom > adj.value() + adj.page_size() {
+            adj.set_value(bottom - adj.page_size());
         }
     }
 

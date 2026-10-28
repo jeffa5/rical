@@ -52,6 +52,7 @@ with the app's own files and environment prefix:
 |---|---|
 | `contacts` | The folder of address books. Default `~/contacts` if it exists. |
 | `book` | The address book new contacts go in, by folder or display name. Default: the one with the most contacts. |
+| `sort` | How the list is sorted: `name` (as shown, so “Sam Lee” under S; the default) or `family` (by family name, then given). |
 | `binds` | Key bindings file. Default `~/.config/rical/contacts/binds.conf` if it exists. |
 | `renderer` | How GTK draws: `cairo` (the default, least memory), `gl`, `vulkan` or `auto`. |
 
@@ -60,7 +61,8 @@ shows the log's location and the details for a bug report.
 
 ## Finding people
 
-The list shows everyone, sorted by family name. Each row shows an email
+The list shows everyone, sorted by name as shown (or by family name: the
+`sort` setting). Each row shows an email
 address or number to tell people apart.
 
 - `/` (or `Ctrl+F`) moves to the search box. Type any part of any field:
