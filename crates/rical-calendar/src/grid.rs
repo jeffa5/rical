@@ -124,8 +124,15 @@ impl TimeGrid {
             .can_focus(true)
             .build();
         grid.update_property(&[gtk::accessible::Property::Label("Time grid")]);
-        let scroller = gtk::ScrolledWindow::builder()
+        // a viewport of our own, so focusing the grid (a click on it) does
+        // not scroll it: GTK would bring the focused widget into view, which
+        // for the whole day is a jump, read as dragging what was clicked
+        let viewport = gtk::Viewport::builder()
             .child(&grid)
+            .scroll_to_focus(false)
+            .build();
+        let scroller = gtk::ScrolledWindow::builder()
+            .child(&viewport)
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vexpand(true)
             .build();
