@@ -179,16 +179,23 @@ books (two synced accounts) is a copy, not a duplicate, and isn't listed.
 
 Selecting a group shows its cards side by side.
 
-- `m` (or Enter) merges them. Contacts keeps the card that says the most and
-  takes in everything the others add: email addresses, numbers, addresses,
-  websites, nicknames, groups and notes, each once. Where the cards
-  disagree on one value (two names, two birthdays), you choose which to
-  keep, and the merged card updates as you do.
+- `m` (or Enter) merges them. Contacts keeps the card that says the most,
+  unless you choose another under **Keep** (the dialog lists which file is
+  kept and which are deleted). The kept card takes in everything the others
+  add: email addresses, numbers, addresses, websites, nicknames, groups and
+  notes, each once. Where the cards disagree on one value (two names, two
+  birthdays), you choose which to keep, and the merged card updates as you
+  do.
 - After merging, Contacts asks whether to delete the other cards. Deleting
   is the default; choose Keep Them to leave them. Undo brings everything
   back as it was.
 - `i` says the cards are different people. The group isn't suggested again;
   the answer is remembered in `~/.local/state/rical/contacts/state`.
+
+To merge someone the finder didn't suggest (a new address, a nickname),
+select them and press `m` (`:merge-with`), or the link button under their
+name. Search for the other card, and Enter opens the same merge dialog,
+where you choose which card to keep.
 
 ## Keys
 
@@ -208,6 +215,7 @@ Selecting a group shows its cards side by side.
 | `y`, `Y` | `copy email`, `copy phone` | copy |
 | `O` | `open-file` | open in another app |
 | `m`, Enter | `merge` | merge duplicates |
+| `m` (on a person) | `merge-with` | merge with someone you choose |
 | `i` | `not-duplicates` | not the same person |
 | `u`, `U` | `undo`, `redo` | |
 | `Ctrl+H` | `history` | undo anything, even after a restart |

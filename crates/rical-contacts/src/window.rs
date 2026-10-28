@@ -758,6 +758,15 @@ impl Window {
             ));
         }
         b.append(&button("Edit", "Edit (e)", "edit", false));
+        b.append(
+            &gtk::Button::builder()
+                .icon_name("insert-link-symbolic")
+                .tooltip_text("Merge with someone else (m)")
+                .action_name("win.run")
+                .action_target(&"merge-with".to_variant())
+                .css_classes(["flat"])
+                .build(),
+        );
         let more = gtk::Button::builder()
             .icon_name("document-open-symbolic")
             .tooltip_text("Open in another app (O)")
@@ -907,4 +916,26 @@ fn where_kept(s: &crate::state::State, id: &CardId) -> adw::PreferencesGroup {
         ));
     }
     group
+}
+
+/// Scroll a list so `row` shows, as the selection moves past an edge
+/// without the list having focus.
+pub fn reveal_row(row: &gtk::ListBoxRow) {
+    let Some(scroller) = row
+        .ancestor(gtk::ScrolledWindow::static_type())
+        .and_downcast::<gtk::ScrolledWindow>()
+    else {
+        return;
+    };
+    let Some(list) = row.parent() else { return };
+    let Some(b) = row.compute_bounds(&list) else {
+        return;
+    };
+    let adj = scroller.vadjustment();
+    let (top, bottom) = (b.y() as f64, (b.y() + b.height()) as f64);
+    if top < adj.value() {
+        adj.set_value(top);
+    } else if bottom > adj.value() + adj.page_size() {
+        adj.set_value(bottom - adj.page_size());
+    }
 }

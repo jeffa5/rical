@@ -197,39 +197,92 @@ pub fn merge_group(
         .content_height(640)
         .build();
     let page = adw::PreferencesPage::new();
-    // where it goes: the kept card's file, and the others' (deleted after
-    // asking; an imported copy goes without)
-    let files = adw::PreferencesGroup::builder().title("Files").build();
-    {
+    // which card is kept (its file, version and anything this doesn't
+    // show), and so which are deleted (after asking; an imported copy
+    // goes without)
+    let files = adw::PreferencesGroup::builder()
+        .title("Files")
+        .description("The kept card takes everything merged in")
+        .build();
+    let places: Vec<String> = {
         let s = win.state.borrow();
-        let p = plan.borrow();
-        let row = |place: String, what: &str, icon: &str| {
-            let r = adw::ActionRow::builder()
-                .title(escape(&place))
-                .subtitle(what)
-                .title_selectable(true)
-                .build();
-            r.add_prefix(&gtk::Image::from_icon_name(icon));
-            r
-        };
-        files.add(&row(
-            s.books.place(&p.keep.path),
-            "saved here, as the merged card",
-            "document-save-symbolic",
-        ));
+        group
+            .cards
+            .iter()
+            .map(|id| {
+                let book = s.books.book(id).map(|b| b.name.clone()).unwrap_or_default();
+                format!("{} ({book})", s.books.place(&id.path))
+            })
+            .collect()
+    };
+    let file_rows = gtk::ListBox::builder()
+        .css_classes(["boxed-list"])
+        .selection_mode(gtk::SelectionMode::None)
+        .build();
+    let show_files = {
+        let (plan, file_rows, places, cards) = (
+            plan.clone(),
+            file_rows.clone(),
+            places.clone(),
+            group.cards.clone(),
+        );
         let gone = if imported.is_some() {
             "the opened card, not kept"
         } else {
             "deleted afterwards (you're asked first)"
         };
-        for other in &p.others {
-            files.add(&row(
-                s.books.place(&other.path),
-                gone,
-                "user-trash-symbolic",
-            ));
+        move || {
+            file_rows.remove_all();
+            let p = plan.borrow();
+            for (id, place) in cards.iter().zip(&places) {
+                let kept = *id == p.keep;
+                let r = adw::ActionRow::builder()
+                    .title(escape(place))
+                    .subtitle(if kept {
+                        "kept, as the merged card"
+                    } else {
+                        gone
+                    })
+                    .title_selectable(true)
+                    .build();
+                r.add_prefix(&gtk::Image::from_icon_name(if kept {
+                    "document-save-symbolic"
+                } else {
+                    "user-trash-symbolic"
+                }));
+                file_rows.append(&r);
+            }
         }
+    };
+    if imported.is_none() {
+        let refs: Vec<&str> = places.iter().map(String::as_str).collect();
+        let keep_row = adw::ComboRow::builder()
+            .title("Keep")
+            .model(&gtk::StringList::new(&refs))
+            .selected(
+                group
+                    .cards
+                    .iter()
+                    .position(|id| *id == plan.borrow().keep)
+                    .unwrap_or(0) as u32,
+            )
+            .build();
+        let (plan, cards, show_files) = (plan.clone(), group.cards.clone(), show_files.clone());
+        keep_row.connect_selected_notify(move |r| {
+            let Some(keep) = cards.get(r.selected() as usize) else {
+                return;
+            };
+            {
+                let mut p = plan.borrow_mut();
+                p.keep = keep.clone();
+                p.others = cards.iter().filter(|c| *c != keep).cloned().collect();
+            }
+            show_files();
+        });
+        files.add(&keep_row);
     }
+    show_files();
+    files.add(&file_rows);
     page.add(&files);
 
     let merged_group = adw::PreferencesGroup::builder()
@@ -418,4 +471,148 @@ fn finish(win: &Rc<Window>, plan: &dedupe::Merge, mut changes: Vec<Change>, dele
     } else {
         win.undo_toast(&format!("Merged into {name}, keeping the others"));
     }
+}
+
+/// Merge the selected person with someone else, chosen by search: for
+/// duplicates the finder doesn't suggest (a new address, a nickname).
+pub fn merge_with(win: &Rc<Window>, query: &str) -> Result<(), String> {
+    let first = win
+        .state
+        .borrow()
+        .selected
+        .clone()
+        .filter(|id| win.state.borrow().books.get(id).is_some())
+        .ok_or("choose someone to merge first")?;
+    let name = win
+        .state
+        .borrow()
+        .books
+        .get(&first)
+        .map(|c| c.display_name())
+        .unwrap_or_default();
+
+    let search = gtk::SearchEntry::builder()
+        .placeholder_text("Search for who to merge with")
+        .text(query)
+        .build();
+    let list = gtk::ListBox::builder()
+        .css_classes(["boxed-list"])
+        .selection_mode(gtk::SelectionMode::Single)
+        .build();
+    let content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(12)
+        .margin_top(12)
+        .margin_bottom(18)
+        .margin_start(18)
+        .margin_end(18)
+        .build();
+    content.append(&search);
+    content.append(
+        &gtk::ScrolledWindow::builder()
+            .child(&list)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vexpand(true)
+            .build(),
+    );
+    let view = adw::ToolbarView::new();
+    view.add_top_bar(&adw::HeaderBar::new());
+    view.set_content(Some(&content));
+    let dialog = adw::Dialog::builder()
+        .title(format!("Merge {name} With…"))
+        .content_width(480)
+        .content_height(560)
+        .child(&view)
+        .build();
+
+    // the matches, best first, leaving out who is being merged
+    let shown: Rc<RefCell<Vec<rical_cards::CardId>>> = Default::default();
+    let fill = {
+        let (win, list, shown, first) = (win.clone(), list.clone(), shown.clone(), first.clone());
+        move |q: &str| {
+            list.remove_all();
+            let s = win.state.borrow();
+            let found: Vec<usize> = s.index.search(q).into_iter().take(60).collect();
+            let mut ids = Vec::new();
+            for n in found {
+                let e = &s.index.entries[n];
+                if e.id == first {
+                    continue;
+                }
+                let book = s
+                    .books
+                    .books
+                    .get(e.book)
+                    .map(|b| b.name.clone())
+                    .unwrap_or_default();
+                let row = adw::ActionRow::builder()
+                    .title(escape(&e.name))
+                    .subtitle(escape(
+                        &[e.detail.as_str(), book.as_str()]
+                            .iter()
+                            .filter(|x| !x.is_empty())
+                            .copied()
+                            .collect::<Vec<_>>()
+                            .join(" · "),
+                    ))
+                    .activatable(true)
+                    .build();
+                row.add_prefix(&adw::Avatar::new(32, Some(&e.name), true));
+                list.append(&row);
+                ids.push(e.id.clone());
+            }
+            *shown.borrow_mut() = ids;
+            if let Some(row) = list.row_at_index(0) {
+                list.select_row(Some(&row));
+            }
+        }
+    };
+    fill(query);
+    let f = fill.clone();
+    search.connect_search_changed(move |e| f(&e.text()));
+    let choose = {
+        let (win, dialog, shown, first) =
+            (win.clone(), dialog.clone(), shown.clone(), first.clone());
+        move |i: usize| {
+            let Some(other) = shown.borrow().get(i).cloned() else {
+                return;
+            };
+            dialog.close();
+            let group = dedupe::Group {
+                cards: vec![first.clone(), other],
+                reasons: Vec::new(),
+            };
+            if let Err(e) = merge_group(&win, group, None) {
+                win.toast(&e);
+            }
+        }
+    };
+    let c = choose.clone();
+    list.connect_row_activated(move |_, row| c(row.index() as usize));
+    // Enter takes the selected match; Down and Up move it, typing on
+    let l = list.clone();
+    search.connect_activate(move |_| {
+        if let Some(row) = l.selected_row() {
+            choose(row.index() as usize);
+        }
+    });
+    let keys = gtk::EventControllerKey::new();
+    let l = list.clone();
+    keys.connect_key_pressed(move |_, key, _, _| {
+        let step = match key {
+            gtk::gdk::Key::Down => 1,
+            gtk::gdk::Key::Up => -1,
+            _ => return gtk::glib::Propagation::Proceed,
+        };
+        let at = l.selected_row().map_or(-1, |r| r.index());
+        if let Some(row) = l.row_at_index((at + step).max(0)) {
+            l.select_row(Some(&row));
+            crate::window::reveal_row(&row);
+        }
+        gtk::glib::Propagation::Stop
+    });
+    search.add_controller(keys);
+    dialog.set_focus(Some(&search));
+    dialog.present(Some(&win.window));
+    Ok(())
 }

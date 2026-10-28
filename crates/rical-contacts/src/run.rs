@@ -136,6 +136,7 @@ impl Window {
                 });
             }
             "merge" => crate::tidy::merge(self)?,
+            "merge-with" => crate::tidy::merge_with(self, p.arg(0).unwrap_or(""))?,
             "not-duplicates" => {
                 let group = self.selected_group().ok_or("no duplicates selected")?;
                 self.state.borrow_mut().say_different(&group);

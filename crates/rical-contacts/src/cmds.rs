@@ -102,6 +102,19 @@ pub static SPECS: &[Spec] = &[
         "Open the selected contact's file in the app that opens vCards",
     ),
     Spec {
+        contexts: PEOPLE,
+        args: &[Arg {
+            name: "who",
+            kind: Kind::Text("who"),
+            optional: true,
+            rest: true,
+        }],
+        ..spec(
+            "merge-with",
+            "Merge the selected contact with someone else, chosen by search",
+        )
+    },
+    Spec {
         contexts: DUPLICATES,
         ..spec("merge", "Merge the selected duplicates into one")
     },
