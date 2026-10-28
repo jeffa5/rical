@@ -81,6 +81,7 @@ fn main() -> glib::ExitCode {
         full_name: APP_FULL_NAME,
         env_prefix: "RICAL_",
         folder: None,
+        dir: "rical-calendar",
     });
     logfile::init();
     glib::set_application_name(APP_NAME);
@@ -217,7 +218,11 @@ fn setup(o: config::Options) -> Result<(state::SharedState, binds::Binds), Strin
     state.zones = o.zones;
     state.zones_shown = uistate::zones_shown();
     state.all_day_expanded = uistate::all_day_expanded();
-    state.history = Some(rical_ui::history::open(o.history.clone(), o.history_days));
+    state.history = Some(rical_ui::history::open(
+        state::APP,
+        o.history.clone(),
+        o.history_days,
+    ));
     if let Some(text) = &o.remind {
         match rical_core::input::parse_shift(text) {
             Some(d) if d > chrono::TimeDelta::zero() => state.default_reminder = Some(d),

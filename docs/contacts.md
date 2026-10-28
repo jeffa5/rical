@@ -57,7 +57,7 @@ with the app's own files and environment prefix:
 | `renderer` | How GTK draws: `cairo` (the default, least memory), `gl`, `vulkan` or `auto`. |
 | `history`, `history-days` | Where the history is kept, and for how many days (30). See [History and undo](history.md). |
 
-The log is `~/.local/state/rical/contacts/rical.log`. About (`:about`)
+The log is `~/.local/state/rical-contacts/rical.log`. About (`:about`)
 shows the log's location and the details for a bug report.
 
 ## Finding people
@@ -190,7 +190,7 @@ Selecting a group shows its cards side by side.
   is the default; choose Keep Them to leave them. Undo brings everything
   back as it was.
 - `i` says the cards are different people. The group isn't suggested again;
-  the answer is remembered in `~/.local/state/rical/contacts/state`.
+  the answer is remembered in `~/.local/state/rical-contacts/state`.
 
 To merge someone the finder didn't suggest (a new address, a nickname),
 select them and press `m` (`:merge-with`), or the link button under their

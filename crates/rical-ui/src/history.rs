@@ -17,7 +17,7 @@ pub const SETTINGS: [(&str, &str); 2] = [
         "history",
         "Folder keeping what was changed and deleted, to undo it later (after a \
          restart too): a log and each file as it was. Default \
-         ~/.local/share/rical/history, shared by the apps.",
+         ~/.local/share/rical-calendar/history (rical-contacts for contacts).",
     ),
     (
         "history-days",
@@ -34,21 +34,22 @@ pub fn parse_days(value: &str) -> Result<u32, String> {
         .map_err(|_| format!("history-days is a number of days, not “{value}”"))
 }
 
-/// The history in `dir` (else the default place), keeping `days`. If it
-/// can't be opened there, one in the runtime folder stands in so undo
-/// still works this session, and the problem is logged.
-pub fn open(dir: Option<PathBuf>, days: Option<u32>) -> History {
+/// `app`'s history in `dir`, else its own folder
+/// (`~/.local/share/rical-calendar/history`), keeping `days`. If it can't
+/// be opened there, one in the runtime folder stands in so undo still
+/// works this session, and the problem is logged.
+pub fn open(app: &str, dir: Option<PathBuf>, days: Option<u32>) -> History {
     let days = days.unwrap_or(DEFAULT_DAYS);
-    let dir = dir.or_else(rical_core::history::default_dir);
+    let dir = dir.or_else(|| crate::app::data_dir().map(|d| d.join("history")));
     if let Some(dir) = &dir {
-        match History::open(dir, days) {
+        match History::open(dir, app, days) {
             Ok(h) => return h,
             Err(e) => log::warn!("cannot keep history in {dir:?}: {e:#}"),
         }
     }
     let fallback =
         gtk::glib::user_runtime_dir().join(format!("rical-history-{}", std::process::id()));
-    History::open(&fallback, days).expect("a history in the runtime folder")
+    History::open(&fallback, app, days).expect("a history in the runtime folder")
 }
 
 /// When, in a few words: "14:05", "yesterday 09:12", "Mon 3 Nov 14:05".

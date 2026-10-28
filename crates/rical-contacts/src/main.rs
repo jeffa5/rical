@@ -30,6 +30,7 @@ fn main() -> glib::ExitCode {
         full_name: APP_FULL_NAME,
         env_prefix: "RICAL_CONTACTS_",
         folder: Some("contacts"),
+        dir: "rical-contacts",
     });
     rical_ui::logfile::init();
     glib::set_application_name(APP_NAME);
@@ -137,7 +138,11 @@ fn setup(o: config::Options) -> Result<(state::SharedState, rical_ui::binds::Bin
     let mut state = state::State::new(books);
     state.default_book = o.book;
     state.set_sort(config::sort_by(o.sort.as_deref()));
-    state.history = Some(rical_ui::history::open(o.history.clone(), o.history_days));
+    state.history = Some(rical_ui::history::open(
+        state::APP,
+        o.history.clone(),
+        o.history_days,
+    ));
     log::info!(
         "{} cards in {} address books: read in {loaded:?}, ready in {:?}",
         state.books.len(),

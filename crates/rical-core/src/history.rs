@@ -2,7 +2,7 @@
 //! several actions back or after a restart.
 //!
 //! Neither iCalendar nor vCard (nor CalDAV and CardDAV) has a rubbish bin,
-//! so this is rical's own: a folder with an append-only log, one JSON
+//! so this is rical's own: a folder (one per app) with an append-only log, one JSON
 //! object per line, and each change's files as they were before and after,
 //! kept as the `.ics` or `.vcf` they are. A deleted file can be fished out
 //! by hand as well as restored by undo.
@@ -79,19 +79,11 @@ pub struct History {
     entries: Vec<Entry>,
 }
 
-/// The default place: `$XDG_DATA_HOME/rical/history`, shared by the apps.
-pub fn default_dir() -> Option<PathBuf> {
-    std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
-        .map(|d| d.join("rical/history"))
-}
-
 impl History {
-    /// Open (or start) the history in `dir`, forgetting entries older than
-    /// `keep_days` and their files.
-    pub fn open(dir: impl Into<PathBuf>, keep_days: u32) -> anyhow::Result<Self> {
+    /// Open (or start) the history in `dir`, forgetting `app`'s entries
+    /// older than `keep_days` and their files (another app's, if the folder
+    /// is shared, are its to prune).
+    pub fn open(dir: impl Into<PathBuf>, app: &str, keep_days: u32) -> anyhow::Result<Self> {
         let dir = dir.into();
         fs::create_dir_all(dir.join("files")).with_context(|| format!("creating {dir:?}"))?;
         let mut h = Self {
@@ -99,7 +91,7 @@ impl History {
             entries: Vec::new(),
         };
         h.reload()?;
-        h.prune(Utc::now() - TimeDelta::days(keep_days.into()))?;
+        h.prune(app, Utc::now() - TimeDelta::days(keep_days.into()))?;
         Ok(h)
     }
 
@@ -298,9 +290,9 @@ impl History {
         self.mark(id, undo)
     }
 
-    /// Forget entries from before `cutoff`, and their files.
-    fn prune(&mut self, cutoff: DateTime<Utc>) -> anyhow::Result<()> {
-        let old = |e: &Entry| e.time().is_some_and(|t| t < cutoff);
+    /// Forget `app`'s entries from before `cutoff`, and their files.
+    fn prune(&mut self, app: &str, cutoff: DateTime<Utc>) -> anyhow::Result<()> {
+        let old = |e: &Entry| e.app == app && e.time().is_some_and(|t| t < cutoff);
         if !self.entries.iter().any(old) {
             return Ok(());
         }
@@ -373,7 +365,7 @@ mod tests {
     fn keeps_undoes_and_survives_reopening() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("lunch.ics");
-        let mut h = History::open(dir.path().join("history"), 30).unwrap();
+        let mut h = History::open(dir.path().join("history"), "calendar", 30).unwrap();
         h.record(
             "calendar",
             "Made “Lunch”",
@@ -401,7 +393,7 @@ mod tests {
         assert_eq!(h.next_undone("calendar").unwrap().id, last.id);
 
         // after a restart, the same
-        let h = History::open(dir.path().join("history"), 30).unwrap();
+        let h = History::open(dir.path().join("history"), "calendar", 30).unwrap();
         assert_eq!(h.entries().len(), 3);
         assert_eq!(h.last_done("calendar").unwrap().what, "Made “Lunch”");
         assert_eq!(h.next_undone("calendar").unwrap().id, last.id);
@@ -415,7 +407,7 @@ mod tests {
     fn redo_goes_back_in_order() {
         let dir = tempfile::tempdir().unwrap();
         let f = dir.path().join("x.ics");
-        let mut h = History::open(dir.path().join("h"), 30).unwrap();
+        let mut h = History::open(dir.path().join("h"), "calendar", 30).unwrap();
         for what in ["one", "two", "three"] {
             h.record("calendar", what, &[change(&f, None, Some(what))])
                 .unwrap();
@@ -429,18 +421,23 @@ mod tests {
     }
 
     #[test]
-    fn old_entries_go_with_their_files() {
+    fn old_entries_go_with_their_files_but_only_their_apps() {
         let dir = tempfile::tempdir().unwrap();
         let f = dir.path().join("x.ics");
-        let mut h = History::open(dir.path().join("h"), 30).unwrap();
+        let mut h = History::open(dir.path().join("h"), "calendar", 30).unwrap();
         h.record("calendar", "old", &[change(&f, Some("A"), None)])
             .unwrap();
+        h.record("contacts", "theirs", &[change(&f, None, Some("B"))])
+            .unwrap();
         let id = h.entries()[0].id.clone();
-        h.prune(Utc::now() + TimeDelta::seconds(1)).unwrap();
-        assert!(h.entries().is_empty());
+        h.prune("calendar", Utc::now() + TimeDelta::seconds(1))
+            .unwrap();
+        // the calendar's goes; the contacts app's, sharing the folder, stays
+        assert_eq!(h.entries().len(), 1);
+        assert_eq!(h.entries()[0].what, "theirs");
         assert!(!h.dir().join("files").join(&id).exists());
-        let h = History::open(dir.path().join("h"), 30).unwrap();
-        assert!(h.entries().is_empty());
+        let h = History::open(dir.path().join("h"), "calendar", 30).unwrap();
+        assert_eq!(h.entries().len(), 1);
     }
 
     /// Writes a change as Vdir::apply does: only over what it expects.
@@ -454,7 +451,7 @@ mod tests {
     fn undoes_any_entry_unless_its_files_changed() {
         let dir = tempfile::tempdir().unwrap();
         let (a, b) = (dir.path().join("a.ics"), dir.path().join("b.ics"));
-        let mut h = History::open(dir.path().join("h"), 30).unwrap();
+        let mut h = History::open(dir.path().join("h"), "calendar", 30).unwrap();
         // two actions: write a, then (later) change b and delete a
         let first = [change(&a, None, Some("A"))];
         first.iter().for_each(|c| apply(c).unwrap());

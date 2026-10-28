@@ -82,7 +82,7 @@ pub fn show(win: &Rc<Window>) {
     advanced.add(&ctx.path_row(
         "history",
         "History folder",
-        "What was changed and deleted, to undo later. Default ~/.local/share/rical/history",
+        "What was changed and deleted, to undo later. Default ~/.local/share/rical-contacts/history",
         value("history"),
         env("history"),
         true,

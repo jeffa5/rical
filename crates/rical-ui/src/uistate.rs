@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 
 /// The app's state folder: `$XDG_STATE_HOME/rical[/app]`, by default
-/// `~/.local/state/rical` for the calendar.
+/// `~/.local/state/rical-calendar` for the calendar.
 pub fn dir() -> Option<PathBuf> {
     crate::app::state_dir()
 }

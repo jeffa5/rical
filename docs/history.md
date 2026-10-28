@@ -25,8 +25,9 @@ back, the others aren't either.
 
 ## What is kept, and where
 
-The history is a folder, by default `~/.local/share/rical/history`, shared
-by the calendar and contacts apps (each lists and undoes only its own):
+Each app keeps its history in its own folder: the calendar in
+`~/.local/share/rical-calendar/history`, contacts in
+`~/.local/share/rical-contacts/history`.
 
 ```text
 history/
@@ -46,13 +47,13 @@ files, when an app starts.
 
 | Setting | Environment | Default |
 |---|---|---|
-| `history` | `RICAL_HISTORY`, `RICAL_CONTACTS_HISTORY` | `~/.local/share/rical/history` |
+| `history` | `RICAL_HISTORY`, `RICAL_CONTACTS_HISTORY` | `~/.local/share/rical-calendar/history`, `~/.local/share/rical-contacts/history` |
 | `history-days` | `RICAL_HISTORY_DAYS`, `RICAL_CONTACTS_HISTORY_DAYS` | `30` |
 
-Both are set in each app's config (`~/.config/rical/config`,
+They are set in each app's config (`~/.config/rical/config`,
 `~/.config/rical/contacts/config`) or in Preferences, and take effect when
-the app next starts. Point both apps at the same folder to keep one
-history.
+the app next starts. Both apps can be pointed at the same folder: each
+still lists, undoes and prunes only its own entries.
 
 ## Why not a synced "deleted" calendar?
 

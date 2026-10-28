@@ -132,7 +132,7 @@ pub fn show(parent: &impl IsA<gtk::Widget>, calendars: Vec<(String, String)>, on
     advanced.add(&ctx.path_row(
         "history",
         "History folder",
-        "What was changed and deleted, to undo later. Default ~/.local/share/rical/history",
+        "What was changed and deleted, to undo later. Default ~/.local/share/rical-calendar/history",
         value("history"),
         env("history"),
         true,

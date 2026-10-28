@@ -69,7 +69,7 @@ include-if-exists = ~/.config/rical/secret.conf
 | `no-notifications` | `RICAL_NO_NOTIFICATIONS` | `true` or `false` | `false` | at once |
 | `binds` | `RICAL_BINDS` | A key bindings file | `~/.config/rical/binds.conf` if it exists | at start |
 | `renderer` | `RICAL_RENDERER` | `cairo`, `gl`, `ngl`, `vulkan` or `auto` | `cairo` | at start |
-| `history` | `RICAL_HISTORY` | A folder for the history (see [History and undo](history.md)) | `~/.local/share/rical/history` | at start |
+| `history` | `RICAL_HISTORY` | A folder for the history (see [History and undo](history.md)) | `~/.local/share/rical-calendar/history` | at start |
 | `history-days` | `RICAL_HISTORY_DAYS` | Days of history to keep | `30` | at start |
 | `date` | `RICAL_DATE` | `YYYY-MM-DD` | Today | at start |
 
@@ -141,8 +141,8 @@ the choice to GTK. A `GSK_RENDERER` in the environment wins over this.
 ### `history`
 
 The folder where changes are kept so they can be undone later, after a
-restart too: a log, and each changed or deleted file as it was. Shared
-with the contacts app by default. See [History and undo](history.md).
+restart too: a log, and each changed or deleted file as it was. Default
+`~/.local/share/rical-calendar/history`. See [History and undo](history.md).
 
 ### `history-days`
 

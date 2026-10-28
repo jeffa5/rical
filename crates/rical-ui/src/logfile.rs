@@ -15,7 +15,7 @@ use log::{Level, LevelFilter, Log, Metadata, Record};
 const MAX_BYTES: u64 = 1024 * 1024;
 
 /// Where the log goes: `$XDG_STATE_HOME/rical/rical.log`, by default
-/// `~/.local/state/rical/rical.log` (the XDG folder for logs and history).
+/// `~/.local/state/rical-calendar/rical.log` (the XDG folder for logs).
 pub fn path() -> Option<PathBuf> {
     crate::uistate::dir().map(|d| d.join("rical.log"))
 }

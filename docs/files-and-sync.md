@@ -78,8 +78,11 @@ If rical is already open, opening a file hands it to the open window.
 | `~/.config/rical/config` | [Settings](configuration.md) |
 | `~/.config/rical/local.conf` | Settings saved by Preferences when the config is read-only |
 | `~/.config/rical/binds.conf` | [Key bindings](keys.md) |
-| `~/.local/state/rical/rical.log` | The [log](troubleshooting.md#the-log) |
-| `~/.local/state/rical/state` | What the window remembers, e.g. folded time zones |
+| `~/.local/state/rical-calendar/rical.log` | The [log](troubleshooting.md#the-log) |
+| `~/.local/state/rical-calendar/state` | What the window remembers, e.g. folded time zones |
+| `~/.local/share/rical-calendar/history/` | The [history](history.md), to undo changes later |
 
-(`~/.config` is `$XDG_CONFIG_HOME` and `~/.local/state` is
-`$XDG_STATE_HOME`, if you set them.)
+(`~/.config` is `$XDG_CONFIG_HOME`, `~/.local/state` is `$XDG_STATE_HOME`
+and `~/.local/share` is `$XDG_DATA_HOME`, if you set them.) Contacts keeps
+its own in `~/.config/rical/contacts/`, `~/.local/state/rical-contacts/`
+and `~/.local/share/rical-contacts/`.

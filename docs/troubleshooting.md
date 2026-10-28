@@ -2,7 +2,8 @@
 
 ## The log
 
-The app logs to `~/.local/state/rical/rical.log` (in `$XDG_STATE_HOME` if
+The app logs to `~/.local/state/rical-calendar/rical.log` (Contacts to
+`~/.local/state/rical-contacts/rical.log`; in `$XDG_STATE_HOME` if
 you set it): what it opened, files it couldn't read, changes it couldn't
 make. Warnings and errors also go to the terminal. Past 1 MB the log is
 moved to `rical.log.old` when the app starts.
