@@ -40,7 +40,11 @@ them back. Selecting something folded away shows it, and the choice is
 remembered.
 
 - **Select** with `j`/`k` or a click; `Enter` (or a click) shows the
-  details; a double click edits.
+  details; a double click edits. `j`/`k` go through the days as drawn.
+  Each day goes through its all-day row top to bottom, then by time.
+  Something spanning days, even one that began before the week shown, is
+  reached on each of its days, so the focused day stays where you are.
+  Moving to a day (`h`/`l`) selects its first item.
 - **Move** an event by dragging it, or with `J`/`K` (15 minutes) and
   `H`/`L` (a day). **Resize** by dragging its bottom edge, or with `]`/`[`.
 - **Create** by dragging over empty hours.

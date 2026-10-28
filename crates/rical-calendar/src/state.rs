@@ -443,65 +443,113 @@ impl State {
             .cloned()
     }
 
-    /// Visible occurrences in keyboard order: by day, all-day row first,
-    /// then by start.
-    pub fn navigation_order(&self) -> Vec<Occurrence> {
+    /// Visible occurrences in keyboard order, each with the day it is
+    /// reached on: day by day as shown, the all-day row top to bottom, then
+    /// by time. Something spanning days is on each of them, so it can be
+    /// reached from any.
+    pub fn navigation_entries(&self) -> Vec<(NaiveDate, Occurrence)> {
         if self.view == ViewKind::Invitations {
             let (open, maybe) = crate::invitations::waiting(self);
-            return [open, maybe].concat();
+            return [open, maybe]
+                .concat()
+                .into_iter()
+                .map(|o| (self.date, o))
+                .collect();
         }
-        let mut occ = self.visible_occurrences().as_ref().clone();
+        let days = self.visible_days();
+        let occ = self.occurrences(&days);
         let local = self.local;
-        occ.sort_by_key(|o| {
-            (
-                o.start.date(local),
-                !layout::is_all_day_row(o),
-                o.start.to_utc(local),
-                o.summary.clone(),
-            )
-        });
-        occ
+        let mut out = Vec::new();
+        if self.view == ViewKind::Month {
+            // each cell lists its week's bars in lane order
+            for week in days.chunks(7) {
+                let bars = layout::month_week_bars(&occ, week, local);
+                for (i, day) in week.iter().enumerate() {
+                    let mut on: Vec<_> = bars
+                        .iter()
+                        .filter(|b| b.first <= i && i <= b.last)
+                        .collect();
+                    on.sort_by_key(|b| b.lane);
+                    out.extend(on.iter().map(|b| (*day, occ[b.index].clone())));
+                }
+            }
+            return out;
+        }
+        let bars = layout::all_day_bars(&occ, &days, local);
+        for (i, day) in days.iter().enumerate() {
+            let mut on: Vec<_> = bars
+                .iter()
+                .filter(|b| b.first <= i && i <= b.last)
+                .collect();
+            on.sort_by_key(|b| b.lane);
+            out.extend(on.iter().map(|b| (*day, occ[b.index].clone())));
+            let mut segs = layout::day_segments(&occ, *day, local, 0.0);
+            segs.sort_by(|a, b| {
+                a.start_min
+                    .total_cmp(&b.start_min)
+                    .then(a.column.cmp(&b.column))
+            });
+            out.extend(segs.iter().map(|s| (*day, occ[s.index].clone())));
+        }
+        out
     }
 
-    /// Select the next (or previous) occurrence in keyboard order.
+    /// Visible occurrences in keyboard order, each once.
+    pub fn navigation_order(&self) -> Vec<Occurrence> {
+        let mut out: Vec<Occurrence> = Vec::new();
+        for (_, o) in self.navigation_entries() {
+            let key = OccurrenceKey::of(&o);
+            if !out.iter().any(|seen| key.matches(seen)) {
+                out.push(o);
+            }
+        }
+        out
+    }
+
+    /// Select the next (or previous) occurrence in keyboard order, from
+    /// the one selected on the focused day: day by day as shown, so an
+    /// event spanning days is reached on each and the focus stays put.
     pub fn select_relative(&mut self, forward: bool) {
-        let order = self.navigation_order();
+        let order = self.navigation_entries();
         if order.is_empty() {
             self.selected = None;
             return;
         }
-        let current = self
-            .selected
-            .as_ref()
-            .and_then(|k| order.iter().position(|o| k.matches(o)));
+        let current = self.selected.as_ref().and_then(|k| {
+            order
+                .iter()
+                .position(|(d, o)| *d == self.date && k.matches(o))
+                .or_else(|| order.iter().position(|(_, o)| k.matches(o)))
+        });
         let next = match current {
             Some(i) if forward => (i + 1).min(order.len() - 1),
             Some(i) => i.saturating_sub(1),
-            None => {
-                // start from the focused day
-                let local = self.local;
-                order
-                    .iter()
-                    .position(|o| o.start.date(local) >= self.date)
-                    .unwrap_or(0)
-            }
+            // from the focused day: its first, or (going back) the last
+            // before it
+            None if forward => order
+                .iter()
+                .position(|(d, _)| *d >= self.date)
+                .unwrap_or(order.len() - 1),
+            None => order
+                .iter()
+                .rposition(|(d, _)| *d <= self.date)
+                .unwrap_or(0),
         };
-        self.date = order[next]
-            .start
-            .date(self.local)
-            .max(self.visible_days()[0]);
-        self.selected = Some(OccurrenceKey::of(&order[next]));
+        let (day, occ) = &order[next];
+        self.date = *day;
+        self.selected = Some(OccurrenceKey::of(occ));
     }
 
-    /// Select the first occurrence on the focused day, if any.
+    /// Select the first occurrence on the focused day, if any: the top of
+    /// its all-day row (something that began days before included), else
+    /// its first by time.
     pub fn select_first_on_date(&mut self) {
-        let local = self.local;
         let date = self.date;
         self.selected = self
-            .navigation_order()
+            .navigation_entries()
             .iter()
-            .find(|o| o.start.date(local) <= date && o.end.date(local) >= date)
-            .map(OccurrenceKey::of);
+            .find(|(d, _)| *d == date)
+            .map(|(_, o)| OccurrenceKey::of(o));
     }
 }
 
@@ -604,4 +652,81 @@ struct Contacts {
     books: Option<rical_cards::Books>,
     /// Each address (lower case) with the card it is on.
     by_email: std::collections::HashMap<String, rical_cards::CardId>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event(dir: &std::path::Path, uid: &str, lines: &str) {
+        std::fs::write(
+            dir.join(format!("{uid}.ics")),
+            format!(
+                "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//t//EN\r\nBEGIN:VEVENT\r\n\
+                 UID:{uid}\r\nDTSTAMP:20250101T000000Z\r\nSUMMARY:{uid}\r\n{lines}END:VEVENT\r\nEND:VCALENDAR\r\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    fn names(s: &State) -> Vec<String> {
+        s.selected_occurrence()
+            .map(|o| o.summary)
+            .into_iter()
+            .collect()
+    }
+
+    #[test]
+    fn keys_go_day_by_day_as_shown() {
+        let dir = tempfile::tempdir().unwrap();
+        let cal = dir.path().join("cal");
+        std::fs::create_dir(&cal).unwrap();
+        // the week of Mon 26 Oct 2026; "away" began the week before
+        event(
+            &cal,
+            "away",
+            "DTSTART;VALUE=DATE:20261021\r\nDTEND;VALUE=DATE:20261030\r\n",
+        );
+        event(
+            &cal,
+            "bins",
+            "DTSTART;VALUE=DATE:20261028\r\nDTEND;VALUE=DATE:20261029\r\n",
+        );
+        event(
+            &cal,
+            "standup",
+            "DTSTART:20261028T090000Z\r\nDTEND:20261028T091500Z\r\n",
+        );
+        event(
+            &cal,
+            "lunch",
+            "DTSTART:20261027T120000Z\r\nDTEND:20261027T130000Z\r\n",
+        );
+        let vdir = Vdir::load(dir.path()).unwrap();
+        let wed = NaiveDate::from_ymd_opt(2026, 10, 28).unwrap();
+        let mut s = State::new(vdir, chrono_tz::UTC, wed);
+        s.view = ViewKind::Week;
+
+        // a day's first is the top of its all-day row, even begun before
+        s.select_first_on_date();
+        assert_eq!(names(&s), ["away"]);
+        assert_eq!(s.date, wed);
+        // on through Wednesday as drawn, not back to where "away" began
+        s.select_relative(true);
+        assert_eq!((names(&s), s.date), (vec!["bins".to_owned()], wed));
+        s.select_relative(true);
+        assert_eq!((names(&s), s.date), (vec!["standup".to_owned()], wed));
+        // then Thursday, where "away" is reached again
+        s.select_relative(true);
+        assert_eq!(names(&s), ["away"]);
+        assert_eq!(s.date, wed.succ_opt().unwrap());
+        // and back: Wednesday's, then Tuesday's
+        s.select_relative(false);
+        s.select_relative(false);
+        s.select_relative(false);
+        assert_eq!((names(&s), s.date), (vec!["away".to_owned()], wed));
+        s.select_relative(false);
+        assert_eq!(names(&s), ["lunch"]);
+        assert_eq!(s.date, wed.pred_opt().unwrap());
+    }
 }

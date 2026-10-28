@@ -4918,6 +4918,10 @@ rec {
             name = "compact-ics";
             packageId = "compact-ics";
           }
+          {
+            name = "tempfile";
+            packageId = "tempfile";
+          }
         ];
 
       };
