@@ -406,7 +406,7 @@ fn finish(win: &Rc<Window>, plan: &dedupe::Merge, mut changes: Vec<Change>, dele
             }
         }
     }
-    win.state.borrow_mut().record(changes);
+    win.state.borrow_mut().record("merge the contacts", changes);
     // the next duplicates take their place, on the same row
     win.state.borrow_mut().selected = Some(plan.keep.clone());
     win.after_change(None);

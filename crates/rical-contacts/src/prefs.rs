@@ -9,7 +9,7 @@ use rical_ui::prefs::{Prefs, owned};
 use crate::{config::SETTINGS, window::Window};
 
 /// Settings that only take effect when the app starts.
-const AT_START: &[&str] = &["contacts", "binds", "renderer"];
+const AT_START: &[&str] = &["contacts", "binds", "renderer", "history", "history-days"];
 
 pub fn show(win: &Rc<Window>) {
     let books: Vec<(String, String)> = win
@@ -78,6 +78,21 @@ pub fn show(win: &Rc<Window>) {
         value("binds"),
         env("binds"),
         false,
+    ));
+    advanced.add(&ctx.path_row(
+        "history",
+        "History folder",
+        "What was changed and deleted, to undo later. Default ~/.local/share/rical/history",
+        value("history"),
+        env("history"),
+        true,
+    ));
+    advanced.add(&ctx.entry_row(
+        "history-days",
+        "Days of history to keep (default 30)",
+        value("history-days"),
+        env("history-days"),
+        |v| rical_ui::history::parse_days(v).map(|_| ()),
     ));
     let renderers = [
         ("", "Cairo (the default: least memory)"),

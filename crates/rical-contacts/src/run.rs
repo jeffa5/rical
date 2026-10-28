@@ -5,7 +5,6 @@ use std::rc::Rc;
 use adw::prelude::*;
 use gtk::gio;
 use rical_cards::{Card, CardId, Field, edit::Draft};
-use rical_core::write::Change;
 use rical_ui::{
     command::{Parsed, Registry, Values},
     palette,
@@ -147,6 +146,7 @@ impl Window {
             }
             "undo" => self.undo(true)?,
             "redo" => self.undo(false)?,
+            "history" => self.show_history(),
             "reload" => {
                 let changed = self
                     .state
@@ -297,7 +297,9 @@ impl Window {
             .books
             .create(book, draft)
             .map_err(|e| format!("{e:#}"))?;
-        self.state.borrow_mut().record(vec![change]);
+        self.state
+            .borrow_mut()
+            .record("add the contact", vec![change]);
         let (name, book_name) = {
             let s = self.state.borrow();
             (
@@ -324,23 +326,54 @@ impl Window {
         if change.before == change.after {
             return Ok(());
         }
-        self.state.borrow_mut().record(vec![change]);
+        self.state
+            .borrow_mut()
+            .record("edit the contact", vec![change]);
         self.after_change(Some(id));
         self.undo_toast("Saved");
         Ok(())
     }
 
+    /// Delete the selected person, after asking (Delete the default); undo
+    /// and the history bring them back.
     fn delete(self: &Rc<Self>) -> Result<(), String> {
         let id = self.selected_card()?;
         let name = self.with_card(|c| c.display_name())?;
+        let place = self.state.borrow().books.place(&id.path);
+        let alert = adw::AlertDialog::builder()
+            .heading(format!("Delete {name}?"))
+            .body(format!(
+                "{place} is deleted. Undo (u), or History (Ctrl+H) later, brings it back."
+            ))
+            .default_response("delete")
+            .close_response("cancel")
+            .build();
+        alert.add_response("cancel", "Cancel");
+        alert.add_response("delete", "Delete");
+        alert.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+        let w = self.clone();
+        alert.connect_response(None, move |_, response| {
+            if response == "delete"
+                && let Err(e) = w.delete_now(&id, &name)
+            {
+                w.toast(&e);
+            }
+        });
+        alert.present(Some(&self.window));
+        Ok(())
+    }
+
+    fn delete_now(self: &Rc<Self>, id: &CardId, name: &str) -> Result<(), String> {
         let at = self.selection.selected();
         let change = self
             .state
             .borrow_mut()
             .books
-            .delete(&id)
+            .delete(id)
             .map_err(|e| format!("{e:#}"))?;
-        self.state.borrow_mut().record(vec![change]);
+        self.state
+            .borrow_mut()
+            .record("delete the contact", vec![change]);
         self.state.borrow_mut().selected = None;
         self.after_change(None);
         // the next person takes their place
@@ -374,59 +407,87 @@ impl Window {
         self.toasts.add_toast(toast);
     }
 
-    /// Undo (or redo) the last change, which may be several files (a merge).
+    /// Undo (or redo) the latest change, from the history: after a restart
+    /// too, and a merge as one.
     fn undo(self: &Rc<Self>, undo: bool) -> Result<(), String> {
-        let changes = {
+        let entry = {
             let mut s = self.state.borrow_mut();
-            let stack = if undo { &mut s.undo } else { &mut s.redo };
-            stack.pop().ok_or(if undo {
-                "nothing to undo"
-            } else {
-                "nothing to redo"
-            })?
-        };
-        let mut inverses: Vec<Change> = Vec::new();
-        let mut failed = None;
-        for c in changes.iter().rev() {
-            match self.state.borrow_mut().books.undo(c) {
-                Ok(inv) => inverses.push(inv),
-                Err(e) => {
-                    failed = Some(format!("{e:#}"));
-                    break;
+            s.history.as_mut().and_then(|h| {
+                // the other app may have added to it
+                if let Err(e) = h.reload() {
+                    log::warn!("reading the history: {e:#}");
                 }
-            }
-        }
-        // the first file changed again, to select
-        let select = changes
-            .first()
-            .filter(|c| {
                 if undo {
-                    c.before.is_some()
+                    h.last_done(crate::state::APP)
                 } else {
-                    c.after.is_some()
+                    h.next_undone(crate::state::APP)
                 }
+                .cloned()
             })
-            .map(|c| CardId {
-                path: c.path.clone(),
-                index: 0,
-            });
-        {
-            let mut s = self.state.borrow_mut();
-            if !inverses.is_empty() {
-                if undo {
-                    s.redo.push(inverses);
-                } else {
-                    s.undo.push(inverses);
-                }
-            }
-            s.invalidate_groups();
-        }
-        self.after_change(select.as_ref());
-        if let Some(e) = failed {
-            return Err(e);
-        }
-        self.toast(if undo { "Undone" } else { "Redone" });
+        };
+        let entry = entry.ok_or(if undo {
+            "nothing to undo"
+        } else {
+            "nothing to redo"
+        })?;
+        self.undo_entry(&entry.id, undo)?;
+        self.toast(&format!(
+            "{}: {}",
+            if undo { "Undone" } else { "Redone" },
+            entry.what
+        ));
         Ok(())
+    }
+
+    /// Undo (or redo) one entry of the history, showing the person it
+    /// brings back (or leaves).
+    pub fn undo_entry(self: &Rc<Self>, id: &str, undo: bool) -> Result<(), String> {
+        let result = self.state.borrow_mut().undo_entry(id, undo);
+        // the first file there afterwards, to select
+        let select = {
+            let s = self.state.borrow();
+            s.history.as_ref().and_then(|h| {
+                h.entries()
+                    .iter()
+                    .find(|e| e.id == id)?
+                    .files
+                    .iter()
+                    .find(|f| {
+                        if undo {
+                            f.before.is_some()
+                        } else {
+                            f.after.is_some()
+                        }
+                    })
+                    .map(|f| CardId {
+                        path: f.path.clone(),
+                        index: 0,
+                    })
+            })
+        };
+        self.after_change(select.as_ref());
+        result.map_err(|e| format!("Could not {}: {e:#}", if undo { "undo" } else { "redo" }))
+    }
+
+    /// Everything done here, to undo or redo any of it.
+    fn show_history(self: &Rc<Self>) {
+        let state = self.state.clone();
+        let entries: rical_ui::history::Entries = Rc::new(move || {
+            let mut s = state.borrow_mut();
+            match s.history.as_mut() {
+                Some(h) => {
+                    let _ = h.reload();
+                    (h.entries().to_vec(), h.dir().to_owned())
+                }
+                None => (Vec::new(), std::path::PathBuf::new()),
+            }
+        });
+        let weak = Rc::downgrade(self);
+        let toggle: rical_ui::history::Toggle = Rc::new(move |id, undo| match weak.upgrade() {
+            Some(w) => w.undo_entry(id, undo),
+            None => Ok(()),
+        });
+        rical_ui::history::dialog(crate::state::APP, entries, toggle).present(Some(&self.window));
     }
 
     fn about(&self) {

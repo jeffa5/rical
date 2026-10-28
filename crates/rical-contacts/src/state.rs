@@ -42,11 +42,14 @@ pub struct State {
     pub default_book: Option<String>,
     /// How the list of everyone is sorted.
     pub sort: rical_cards::search::SortBy,
-    pub undo: Vec<Vec<Change>>,
-    pub redo: Vec<Vec<Change>>,
+    /// What was changed, to undo (shared with the other apps, and kept).
+    pub history: Option<rical_core::history::History>,
 }
 
 pub type SharedState = Rc<RefCell<State>>;
+
+/// Who did it, in the history the apps share.
+pub const APP: &str = "contacts";
 
 impl State {
     pub fn new(books: Books) -> Self {
@@ -63,8 +66,7 @@ impl State {
             not_same: load_not_same(),
             default_book: None,
             sort: Default::default(),
-            undo: Vec::new(),
-            redo: Vec::new(),
+            history: None,
         };
         s.search();
         s
@@ -149,13 +151,27 @@ impl State {
         self.invalidate_groups();
     }
 
-    /// Record changes made, for undo.
-    pub fn record(&mut self, changes: Vec<Change>) {
-        if !changes.is_empty() {
-            self.undo.push(changes);
-            self.redo.clear();
+    /// Record changes made by one action (`what` it was doing: "delete the
+    /// contact") so it can be undone, now or later.
+    pub fn record(&mut self, what: &str, changes: Vec<Change>) {
+        if let Some(h) = self.history.as_mut() {
+            let what = rical_core::history::describe(what, &changes);
+            if let Err(e) = h.record(APP, &what, &changes) {
+                log::warn!("could not keep “{what}” in the history: {e:#}");
+            }
         }
         self.invalidate_groups();
+    }
+
+    /// Undo (or redo) history entry `id`, if its files are as it left them.
+    pub fn undo_entry(&mut self, id: &str, undo: bool) -> anyhow::Result<()> {
+        let Self { history, books, .. } = self;
+        let history = history
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("no history is kept"))?;
+        let result = history.undo_with(id, undo, |c| books.apply(c));
+        self.invalidate_groups();
+        result
     }
 
     /// The book new contacts go in: as set, else the one with most cards.

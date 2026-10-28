@@ -10,6 +10,7 @@ pub mod command;
 pub mod config;
 pub mod draw;
 pub mod help;
+pub mod history;
 pub mod keys;
 pub mod listhead;
 pub mod logfile;

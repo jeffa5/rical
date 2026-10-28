@@ -17,6 +17,9 @@ use rical_core::{
 
 use crate::layout::{self, ViewKind};
 
+/// Who did it, in the history the apps share.
+pub const APP: &str = "calendar";
+
 /// Identifies one occurrence across reloads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OccurrenceKey {
@@ -54,8 +57,8 @@ pub struct State {
     /// Calendar new items go in; the last one used.
     pub last_calendar: Option<String>,
     /// Each entry is the file changes one action made.
-    pub undo: Vec<Vec<Change>>,
-    pub redo: Vec<Vec<Change>>,
+    /// What was changed, to undo (shared with the other apps, and kept).
+    pub history: Option<rical_core::history::History>,
     /// Whether to show reminders.
     pub notifications: bool,
     /// What "week" means: the full week, the work week or a number of days.
@@ -122,8 +125,7 @@ impl State {
             selected_task: None,
             selected_journal: None,
             last_calendar: None,
-            undo: Vec::new(),
-            redo: Vec::new(),
+            history: None,
             notifications: true,
             week_view: ViewKind::Week,
             calendar_view: ViewKind::Week,
@@ -577,11 +579,27 @@ impl State {
             .map(|c| c.id.clone())
     }
 
-    /// Record changes made by one action so it can be undone.
-    pub fn record(&mut self, changes: Vec<Change>) {
-        self.undo.push(changes);
-        self.redo.clear();
+    /// Record changes made by one action (`what` it was doing: "delete
+    /// the event") so it can be undone, now or later.
+    pub fn record(&mut self, what: &str, changes: Vec<Change>) {
+        if let Some(h) = self.history.as_mut() {
+            let what = rical_core::history::describe(what, &changes);
+            if let Err(e) = h.record(APP, &what, &changes) {
+                log::warn!("could not keep “{what}” in the history: {e:#}");
+            }
+        }
         self.invalidate();
+    }
+
+    /// Undo (or redo) history entry `id`, if its files are as it left them.
+    pub fn undo_entry(&mut self, id: &str, undo: bool) -> anyhow::Result<()> {
+        let Self { history, vdir, .. } = self;
+        let history = history
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("no history is kept"))?;
+        let result = history.undo_with(id, undo, |c| vdir.apply(c));
+        self.invalidate();
+        result
     }
 
     /// Find an occurrence of `uid` starting at `start` among visible ones.

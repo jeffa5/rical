@@ -55,6 +55,7 @@ with the app's own files and environment prefix:
 | `sort` | How the list is sorted: `name` (as shown, so “Sam Lee” under S; the default) or `family` (by family name, then given). |
 | `binds` | Key bindings file. Default `~/.config/rical/contacts/binds.conf` if it exists. |
 | `renderer` | How GTK draws: `cairo` (the default, least memory), `gl`, `vulkan` or `auto`. |
+| `history`, `history-days` | Where the history is kept, and for how many days (30). See [History and undo](history.md). |
 
 The log is `~/.local/state/rical/contacts/rical.log`. About (`:about`)
 shows the log's location and the details for a bug report.
@@ -134,7 +135,9 @@ Apple and Google, say). Only the lines you changed are rewritten, so
 photos, custom fields and Apple's labels are kept.
 
 Every change can be undone with `u` (or Ctrl+Z) and redone with `U` (or
-Ctrl+Shift+Z). That includes a merge, which undoes as one step.
+Ctrl+Shift+Z), even after a restart. A merge undoes as one step. `Ctrl+H`
+(`:history`) lists every change to undo any of them, even several back.
+Deleting someone asks first. See [History and undo](history.md).
 
 ## Opening contacts from other apps
 
@@ -207,6 +210,7 @@ Selecting a group shows its cards side by side.
 | `m`, Enter | `merge` | merge duplicates |
 | `i` | `not-duplicates` | not the same person |
 | `u`, `U` | `undo`, `redo` | |
+| `Ctrl+H` | `history` | undo anything, even after a restart |
 | `Ctrl+R`, F5 | `reload` | read the files again |
 | `Ctrl+,` | `settings` | Preferences |
 | `Ctrl+Q` | `quit` | |

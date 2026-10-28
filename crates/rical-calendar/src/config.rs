@@ -72,6 +72,14 @@ pub const SETTINGS: &[(&str, &str)] = &[
         "How GTK draws: cairo (on the CPU, the least memory), gl, vulkan or auto (GTK's \
          choice). Default cairo. GSK_RENDERER, if set, wins.",
     ),
+    (
+        rical_ui::history::SETTINGS[0].0,
+        rical_ui::history::SETTINGS[0].1,
+    ),
+    (
+        rical_ui::history::SETTINGS[1].0,
+        rical_ui::history::SETTINGS[1].1,
+    ),
 ];
 
 /// The settings, from the config file and then the environment.
@@ -90,6 +98,9 @@ pub struct Options {
     pub zones: Vec<crate::zones::Zone>,
     /// GSK_RENDERER to start GTK with; None leaves it to GTK.
     pub renderer: Option<String>,
+    /// Where the history is kept, and for how many days.
+    pub history: Option<PathBuf>,
+    pub history_days: Option<u32>,
 }
 
 impl Options {
@@ -127,6 +138,12 @@ impl Options {
             "vdir" => self.vdir = path(),
             "binds" => self.binds = path(),
             "contacts" => self.contacts = path(),
+            "history" => self.history = path(),
+            "history-days" => {
+                self.history_days = Some(
+                    rical_ui::history::parse_days(value).map_err(|e| format!("{origin}: {e}"))?,
+                )
+            }
             "view" => self.view = text(),
             "week" => self.week = text(),
             "calendar" => self.calendar = text(),

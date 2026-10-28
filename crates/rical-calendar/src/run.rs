@@ -290,6 +290,7 @@ impl Window {
             }
             "undo" => self.undo(),
             "redo" => self.redo(),
+            "history" => self.show_history(),
             "calendar" => self.run_calendar(p.arg(0).unwrap(), p.arg(1))?,
             "sidebar" => {
                 let show = match p.arg(0) {

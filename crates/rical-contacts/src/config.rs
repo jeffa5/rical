@@ -31,6 +31,14 @@ pub const SETTINGS: &[(&str, &str)] = &[
         "How GTK draws: cairo (on the CPU, the least memory), gl, vulkan or auto. \
          Default cairo. GSK_RENDERER, if set, wins.",
     ),
+    (
+        rical_ui::history::SETTINGS[0].0,
+        rical_ui::history::SETTINGS[0].1,
+    ),
+    (
+        rical_ui::history::SETTINGS[1].0,
+        rical_ui::history::SETTINGS[1].1,
+    ),
 ];
 
 /// The settings, from the config file and then the environment.
@@ -41,6 +49,9 @@ pub struct Options {
     pub sort: Option<String>,
     pub binds: Option<PathBuf>,
     pub renderer: Option<String>,
+    /// Where the history is kept, and for how many days.
+    pub history: Option<PathBuf>,
+    pub history_days: Option<u32>,
 }
 
 impl Options {
@@ -83,6 +94,12 @@ impl Options {
         match name {
             "contacts" => self.contacts = Some(expand(value, base)),
             "binds" => self.binds = Some(expand(value, base)),
+            "history" => self.history = Some(expand(value, base)),
+            "history-days" => {
+                self.history_days = Some(
+                    rical_ui::history::parse_days(value).map_err(|e| format!("{origin}: {e}"))?,
+                )
+            }
             "book" => self.book = Some(value.to_owned()),
             "sort" => match value.to_ascii_lowercase().as_str() {
                 "name" | "family" => self.sort = Some(value.to_ascii_lowercase()),

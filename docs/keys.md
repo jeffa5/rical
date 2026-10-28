@@ -130,6 +130,7 @@ x =                        # unbind x
 | `<C-z>` | `:undo` |
 | `<C-Z>` | `:redo` |
 | `<C-y>` | `:redo` |
+| `<C-h>` | `:history` |
 | `<A-1>` | `:calendar toggle 1` |
 | `<A-2>` | `:calendar toggle 2` |
 | `<A-3>` | `:calendar toggle 3` |

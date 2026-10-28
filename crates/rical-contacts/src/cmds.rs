@@ -115,6 +115,10 @@ pub static SPECS: &[Spec] = &[
     },
     spec("undo", "Undo the last change"),
     spec("redo", "Redo the last undone change"),
+    spec(
+        "history",
+        "Everything changed and deleted, to undo or redo any of it (kept after restarts)",
+    ),
     spec("reload", "Read the address books again"),
     Spec {
         aliases: &["preferences", "prefs"],

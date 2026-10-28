@@ -5067,6 +5067,10 @@ rec {
             features = [ "derive" ];
           }
           {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+          {
             name = "uuid";
             packageId = "uuid";
             features = [ "v4" ];

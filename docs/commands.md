@@ -57,6 +57,7 @@ out, rical asks.
 | `:convert` (also `:to-task`, `:to-event`) | Turn the selected event into a task, or task into an event |
 | `:undo` | Undo the last change |
 | `:redo` | Redo the last undone change |
+| `:history` | Everything changed and deleted, to undo or redo any of it (kept after restarts) |
 
 ## Tasks
 

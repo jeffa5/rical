@@ -59,10 +59,12 @@ occurrence by the same amount. Changing the rule (in the editor, or with
 repeating event. `u` brings it back.
 
 ## Undo
-
 `u` (`Ctrl+Z`) undoes the last change, `U` (`Ctrl+Shift+Z`, `Ctrl+Y`)
-redoes it, through every change made in this session: creating, editing,
-moving, deleting, completing, answering, converting. Undo puts the file
+redoes it: creating, editing, moving, deleting, completing, answering,
+converting. Undo puts the file back exactly as it was. Changes are kept
+in a history that lasts across restarts, and `Ctrl+H` (`:history`) lists
+them to undo any, even several back. See [History and undo](history.md).
+Deleting asks first (Delete is the default).
 back exactly as it was.
 
 If a file changed on disk since rical read it (vdirsyncer brought down a

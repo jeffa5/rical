@@ -1538,6 +1538,7 @@ dependencies = [
  "log",
  "rrule",
  "serde",
+ "serde_json",
  "tempfile",
  "uuid",
 ]

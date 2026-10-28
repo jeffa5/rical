@@ -7,7 +7,14 @@ use rical_ui::prefs::{OnSaved, Prefs, is_true, owned};
 use crate::config::SETTINGS;
 
 /// Settings that only take effect when the calendar starts.
-const AT_START: &[&str] = &["vdir", "view", "binds", "renderer"];
+const AT_START: &[&str] = &[
+    "vdir",
+    "view",
+    "binds",
+    "renderer",
+    "history",
+    "history-days",
+];
 
 pub fn show(parent: &impl IsA<gtk::Widget>, calendars: Vec<(String, String)>, on_saved: OnSaved) {
     let Some(ctx) = Prefs::open(SETTINGS, AT_START, on_saved) else {
@@ -121,6 +128,21 @@ pub fn show(parent: &impl IsA<gtk::Widget>, calendars: Vec<(String, String)>, on
         value("binds"),
         env("binds"),
         false,
+    ));
+    advanced.add(&ctx.path_row(
+        "history",
+        "History folder",
+        "What was changed and deleted, to undo later. Default ~/.local/share/rical/history",
+        value("history"),
+        env("history"),
+        true,
+    ));
+    advanced.add(&ctx.entry_row(
+        "history-days",
+        "Days of history to keep (default 30)",
+        value("history-days"),
+        env("history-days"),
+        |v| rical_ui::history::parse_days(v).map(|_| ()),
     ));
     let renderers = [
         ("", "Cairo (the default: least memory)"),

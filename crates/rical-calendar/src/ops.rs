@@ -60,7 +60,12 @@ impl Window {
             ("all", "_All events"),
             ("this", "_This event"),
         ]);
-        dialog.set_response_appearance("this", adw::ResponseAppearance::Suggested);
+        if verb == "Delete" {
+            dialog.set_response_appearance("this", adw::ResponseAppearance::Destructive);
+            dialog.set_response_appearance("all", adw::ResponseAppearance::Destructive);
+        } else {
+            dialog.set_response_appearance("this", adw::ResponseAppearance::Suggested);
+        }
         dialog.set_default_response(Some("this"));
         dialog.set_close_response("cancel");
         let weak = Rc::downgrade(self);
@@ -88,7 +93,7 @@ impl Window {
         let result = f(&mut self.state.borrow_mut().vdir);
         match result {
             Ok(changes) => {
-                self.state.borrow_mut().record(changes);
+                self.state.borrow_mut().record(what, changes);
                 self.refresh();
                 true
             }
@@ -460,10 +465,18 @@ impl Window {
         }
     }
 
+    /// Delete, after asking: a repeating event's "this one or all" is the
+    /// asking; anything else gets "Delete …?", Delete the default. Undo (and
+    /// the history) bring it back.
     fn delete_occurrence(self: &Rc<Self>, occ: Occurrence) {
+        let what = match occ.kind {
+            rical_core::Kind::Todo => "task",
+            rical_core::Kind::Journal => "journal entry",
+            _ => "event",
+        };
         let o = occ.clone();
-        self.with_scope(&o, "Delete", move |w, scope| {
-            if w.perform("delete the event", |v| {
+        let delete = move |w: &Rc<Self>, scope: Scope| {
+            if w.perform(&format!("delete the {what}"), |v| {
                 v.delete(&occ, scope).map(|c| vec![c])
             }) {
                 w.state.borrow_mut().selected = None;
@@ -476,7 +489,38 @@ impl Window {
                     .build();
                 w.toasts.add_toast(toast);
             }
+        };
+
+        let asks = o.recurring && self.forced_scope.get().is_none();
+        if asks {
+            return self.with_scope(&o, "Delete", delete);
+        }
+        let alert = adw::AlertDialog::builder()
+            .heading(format!("Delete “{}”?", o.summary))
+            .body(format!(
+                "The {what} goes from {}. Undo (u), or History (Ctrl+H) later, brings it back.",
+                self.state
+                    .borrow()
+                    .vdir
+                    .calendar(&o.calendar)
+                    .map_or(o.calendar.clone(), |c| c.name.clone())
+            ))
+            .default_response("delete")
+            .close_response("cancel")
+            .build();
+        alert.add_response("cancel", "Cancel");
+        alert.add_response("delete", "Delete");
+        alert.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+        let weak = Rc::downgrade(self);
+        alert.connect_response(None, move |_, response| {
+            let Some(w) = weak.upgrade() else { return };
+            if response == "delete" {
+                w.with_scope(&o, "Delete", delete.clone());
+            } else {
+                w.forced_scope.set(None);
+            }
         });
+        alert.present(Some(&self.window));
     }
 
     /// Move the selected event by `shift`, or with `resize` change its end.
@@ -506,47 +550,76 @@ impl Window {
         self.set_times(occ, start, end);
     }
 
+    /// Undo the latest change (from the history, so after a restart too).
     pub(super) fn undo(self: &Rc<Self>) {
-        let Some(changes) = self.state.borrow_mut().undo.pop() else {
-            self.toast("Nothing to undo");
-            return;
-        };
-        let result = {
-            let mut s = self.state.borrow_mut();
-            changes
-                .iter()
-                .rev()
-                .try_for_each(|c| s.vdir.undo(c).map(|_| ()))
-        };
-        match result {
-            Ok(()) => {
-                let mut s = self.state.borrow_mut();
-                s.redo.push(changes);
-                s.invalidate();
-            }
-            Err(e) => self.toast(&format!("Could not undo: {e}")),
-        }
-        self.refresh();
+        self.undo_redo(true);
     }
 
+    /// Redo what was last undone.
     pub(super) fn redo(self: &Rc<Self>) {
-        let Some(changes) = self.state.borrow_mut().redo.pop() else {
-            self.toast("Nothing to redo");
+        self.undo_redo(false);
+    }
+
+    fn undo_redo(self: &Rc<Self>, undo: bool) {
+        let entry = {
+            let mut s = self.state.borrow_mut();
+            s.history.as_mut().and_then(|h| {
+                // the other app may have added to it
+                if let Err(e) = h.reload() {
+                    warn!("reading the history: {e:#}");
+                }
+                if undo {
+                    h.last_done(crate::state::APP)
+                } else {
+                    h.next_undone(crate::state::APP)
+                }
+                .cloned()
+            })
+        };
+        let Some(entry) = entry else {
+            self.toast_now(if undo {
+                "Nothing to undo"
+            } else {
+                "Nothing to redo"
+            });
             return;
         };
-        let result = {
-            let mut s = self.state.borrow_mut();
-            changes.iter().try_for_each(|c| s.vdir.apply(c))
-        };
-        match result {
-            Ok(()) => {
-                let mut s = self.state.borrow_mut();
-                s.undo.push(changes);
-                s.invalidate();
-            }
-            Err(e) => self.toast(&format!("Could not redo: {e}")),
+        match self.undo_entry(&entry.id, undo) {
+            Ok(()) => self.toast_now(&format!(
+                "{}: {}",
+                if undo { "Undone" } else { "Redone" },
+                entry.what
+            )),
+            Err(e) => self.toast_now(&e),
         }
+    }
+
+    /// Undo (or redo) one entry of the history, and show the result.
+    pub(super) fn undo_entry(self: &Rc<Self>, id: &str, undo: bool) -> Result<(), String> {
+        let result = self.state.borrow_mut().undo_entry(id, undo);
         self.refresh();
+        result.map_err(|e| format!("Could not {}: {e:#}", if undo { "undo" } else { "redo" }))
+    }
+
+    /// Everything done here, to undo or redo any of it.
+    pub(super) fn show_history(self: &Rc<Self>) {
+        let state = self.state.clone();
+        let entries: rical_ui::history::Entries = Rc::new(move || {
+            let mut s = state.borrow_mut();
+            match s.history.as_mut() {
+                Some(h) => {
+                    let _ = h.reload();
+                    (h.entries().to_vec(), h.dir().to_owned())
+                }
+                None => (Vec::new(), std::path::PathBuf::new()),
+            }
+        });
+        let weak = Rc::downgrade(self);
+        let toggle: rical_ui::history::Toggle = Rc::new(move |id, undo| match weak.upgrade() {
+            Some(w) => w.undo_entry(id, undo),
+            None => Ok(()),
+        });
+        rical_ui::history::dialog(crate::state::APP, entries, toggle).present(Some(&self.window));
     }
 
     /// What edit and delete act on: the selected task in the tasks view,

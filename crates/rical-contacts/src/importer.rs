@@ -199,7 +199,9 @@ impl Window {
             .books
             .replace_with(id, incoming)
             .map_err(|e| format!("{e:#}"))?;
-        self.state.borrow_mut().record(vec![change]);
+        self.state
+            .borrow_mut()
+            .record("update the contact from a file", vec![change]);
         self.after_change(Some(id));
         self.split.set_show_content(true);
         self.undo_toast(&format!("Updated {}", self.name_of(id)));
@@ -267,7 +269,7 @@ impl Window {
                     }
                 }
                 let n = changes.len();
-                w.state.borrow_mut().record(changes);
+                w.state.borrow_mut().record("add from a file", changes);
                 if let Some(id) = last {
                     w.after_change(Some(&id));
                     w.show_person(&id);

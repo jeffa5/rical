@@ -13,6 +13,7 @@ icalendar.workspace = true
 log.workspace = true
 rrule = "0.14.0"
 serde.workspace = true
+serde_json.workspace = true
 uuid = { version = "1.29.0", features = ["v4"] }
 
 [dev-dependencies]

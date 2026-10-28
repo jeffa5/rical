@@ -5,6 +5,7 @@ pub mod component;
 pub mod convert;
 pub mod doc;
 pub mod files;
+pub mod history;
 pub mod ics;
 pub mod import;
 pub mod input;
