@@ -3,7 +3,7 @@
 Settings come from, in order (a later one wins):
 
 1. The defaults below.
-2. The config file, `~/.config/rical/config` (or the file `RICAL_CONFIG`
+2. The config file, `~/.config/rical-calendar/config` (or the file `RICAL_CONFIG`
    names). Within it, later lines win, and an `include` takes effect where
    it is written.
 3. `local.conf` beside the config file, if it exists, read after it
@@ -33,14 +33,14 @@ change it where that is set.
 `name = value`, one per line:
 
 ```ini
-# ~/.config/rical/config
+# ~/.config/rical-calendar/config
 vdir = ~/calendar/nextcloud
 week = workweek        # a comment
 remind = 10m
 me = me@example.com, me@work.example
 zones = UK=Europe/London, America/New_York
 include = local-extra.conf           # relative to this file
-include-if-exists = ~/.config/rical/secret.conf
+include-if-exists = ~/.config/rical-calendar/secret.conf
 ```
 
 - `#` starts a comment at the start of a line or after a space; `#ff0000`
@@ -67,7 +67,7 @@ include-if-exists = ~/.config/rical/secret.conf
 | `zones` | `RICAL_ZONES` | Extra time zones (see below) | None | at once |
 | `remind` | `RICAL_REMIND` | A length, e.g. `10m`, `1h` | None | at once |
 | `no-notifications` | `RICAL_NO_NOTIFICATIONS` | `true` or `false` | `false` | at once |
-| `binds` | `RICAL_BINDS` | A key bindings file | `~/.config/rical/binds.conf` if it exists | at start |
+| `binds` | `RICAL_BINDS` | A key bindings file | `~/.config/rical-calendar/binds.conf` if it exists | at start |
 | `renderer` | `RICAL_RENDERER` | `cairo`, `gl`, `ngl`, `vulkan` or `auto` | `cairo` | at start |
 | `history` | `RICAL_HISTORY` | A folder for the history (see [History and undo](history.md)) | `~/.local/share/rical-calendar/history` | at start |
 | `history-days` | `RICAL_HISTORY_DAYS` | Days of history to keep | `30` | at start |
@@ -179,7 +179,7 @@ The flake has a Home Manager module:
       [global]
       <C-t> = :today<Enter>
     '';
-    extraConfig = "include-if-exists = ~/.config/rical/private.conf";
+    extraConfig = "include-if-exists = ~/.config/rical-calendar/private.conf";
   };
 }
 ```
@@ -191,10 +191,10 @@ The flake has a Home Manager module:
 | `vdir`, `calendar`, `week`, `remind` | Those settings. |
 | `reminders` | Run `rical remind` as a systemd user service, and set `no-notifications = true` so the app doesn't remind as well. Needs `vdir`. |
 | `settings` | Any other settings, by name. Lists are joined with commas; booleans are `true`/`false`. |
-| `binds` | Key bindings, written to `~/.config/rical/binds.conf`. |
+| `binds` | Key bindings, written to `~/.config/rical-calendar/binds.conf`. |
 | `extraConfig` | Lines added to the end of the config file. |
 | `openCalendarFiles` | Make rical the default for `.ics` files, so mail clients open invitations in it. |
 | `openContactFiles` | Make rical-contacts the default for `.vcf` files, so contacts opened elsewhere are shown or added there ([Contacts](contacts.md)). |
 
-The module writes these into `~/.config/rical/config`, which is then
+The module writes these into `~/.config/rical-calendar/config`, which is then
 read-only: changes made in Preferences go to `local.conf` and override it.

@@ -4,14 +4,14 @@
 //! [`crate::app`]).
 //!
 //! ```text
-//! # ~/.config/rical/config
+//! # ~/.config/rical-calendar/config
 //! vdir = ~/.calendars
 //! week = workweek
 //! remind = 10m
 //! me = me@example.com, me@work.example
 //! no-notifications = true
 //! include = local.conf            # relative to this file
-//! include-if-exists = ~/.config/rical/secret.conf
+//! include-if-exists = ~/.config/rical-calendar/secret.conf
 //! ```
 //!
 //! Lines apply in order, so a later line (including one after an
@@ -321,7 +321,7 @@ pub enum Source {
 
 /// The default config file: `config` in the app's settings folder.
 pub fn default_path() -> Option<PathBuf> {
-    crate::app::config_dir().map(|d| d.join("config"))
+    crate::app::config_file("config")
 }
 
 #[cfg(test)]

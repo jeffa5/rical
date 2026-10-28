@@ -31,7 +31,7 @@ files). Without a setting it uses `~/contacts` if that folder exists.
 RICAL_CONTACTS_CONTACTS=~/contacts rical-contacts
 ```
 
-Or put `contacts = ~/contacts` in `~/.config/rical/contacts/config`.
+Or put `contacts = ~/contacts` in `~/.config/rical-contacts/config`.
 
 To try it without your own contacts, run
 `scripts/demo-contacts.sh /tmp/c`, which writes made-up address books with
@@ -42,7 +42,7 @@ a few duplicates. Then run `RICAL_CONTACTS_CONTACTS=/tmp/c rical-contacts`.
 Settings work as the calendar's do (see [Configuration](configuration.md)),
 with the app's own files and environment prefix:
 
-- They live in `~/.config/rical/contacts/config`, then `local.conf` beside
+- They live in `~/.config/rical-contacts/config`, then `local.conf` beside
   it.
 - The environment wins over both: `RICAL_CONTACTS_<NAME>`, upper-cased with
   dashes as underscores.
@@ -53,7 +53,7 @@ with the app's own files and environment prefix:
 | `contacts` | The folder of address books. Default `~/contacts` if it exists. |
 | `book` | The address book new contacts go in, by folder or display name. Default: the one with the most contacts. |
 | `sort` | How the list is sorted: `name` (as shown, so “Sam Lee” under S; the default) or `family` (by family name, then given). |
-| `binds` | Key bindings file. Default `~/.config/rical/contacts/binds.conf` if it exists. |
+| `binds` | Key bindings file. Default `~/.config/rical-contacts/binds.conf` if it exists. |
 | `renderer` | How GTK draws: `cairo` (the default, least memory), `gl`, `vulkan` or `auto`. |
 | `history`, `history-days` | Where the history is kept, and for how many days (30). See [History and undo](history.md). |
 
@@ -224,7 +224,7 @@ where you choose which card to keep.
 | `Ctrl+Q` | `quit` | |
 
 Bindings are changed as the calendar's are (see [Keys](keys.md)), in
-`~/.config/rical/contacts/binds.conf`, with the sections `[global]`,
+`~/.config/rical-contacts/binds.conf`, with the sections `[global]`,
 `[people]` and `[duplicates]`.
 
 ## Files

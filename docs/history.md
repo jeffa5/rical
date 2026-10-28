@@ -50,8 +50,8 @@ files, when an app starts.
 | `history` | `RICAL_HISTORY`, `RICAL_CONTACTS_HISTORY` | `~/.local/share/rical-calendar/history`, `~/.local/share/rical-contacts/history` |
 | `history-days` | `RICAL_HISTORY_DAYS`, `RICAL_CONTACTS_HISTORY_DAYS` | `30` |
 
-They are set in each app's config (`~/.config/rical/config`,
-`~/.config/rical/contacts/config`) or in Preferences, and take effect when
+They are set in each app's config (`~/.config/rical-calendar/config`,
+`~/.config/rical-contacts/config`) or in Preferences, and take effect when
 the app next starts. Both apps can be pointed at the same folder: each
 still lists, undoes and prunes only its own entries.
 

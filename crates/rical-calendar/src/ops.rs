@@ -357,7 +357,7 @@ impl Window {
         }
         if !had && !guests.is_empty() && draft.organizer.is_none() {
             return Err(
-                "your address is not known: set me = you@example.com in ~/.config/rical/config"
+                "your address is not known: set me = you@example.com in ~/.config/rical-calendar/config"
                     .into(),
             );
         }

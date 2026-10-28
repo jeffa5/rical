@@ -1,4 +1,4 @@
-use std::{cell::RefCell, path::PathBuf, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
 use adw::prelude::*;
 use chrono::Utc;
@@ -187,7 +187,7 @@ fn main() -> glib::ExitCode {
 /// The state and bindings, from the settings.
 fn setup(o: config::Options) -> Result<(state::SharedState, binds::Binds), String> {
     let vdir_path = o.vdir.ok_or(
-        "which vdir? Set `vdir = PATH` in ~/.config/rical/config, or RICAL_VDIR (see --help)",
+        "which vdir? Set `vdir = PATH` in ~/.config/rical-calendar/config, or RICAL_VDIR (see --help)",
     )?;
     let local = local_timezone();
     let vdir = Vdir::load(&vdir_path).map_err(|e| format!("{e:#}"))?;
@@ -239,11 +239,7 @@ fn load_binds(path: Option<&std::path::Path>) -> Result<binds::Binds, String> {
         binds::Binds::parse(binds::DEFAULTS).map_err(|e| format!("built-in binds: {e}"))?;
     let path = match path {
         Some(p) => Some(p.to_owned()),
-        None => std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-            .map(|c| c.join("rical/binds.conf"))
-            .filter(|p| p.exists()),
+        None => rical_ui::app::config_file("binds.conf").filter(|p| p.exists()),
     };
     if let Some(path) = path {
         let text = std::fs::read_to_string(&path).map_err(|e| format!("{path:?}: {e}"))?;

@@ -137,7 +137,7 @@
             contacts = "~/contacts/nextcloud";
             view = "3days";
           };
-          description = "Settings for ~/.config/rical/config: any rical-calendar flag by its long name.";
+          description = "Settings for ~/.config/rical-calendar/config: any rical-calendar flag by its long name.";
         };
         openCalendarFiles = lib.mkOption {
           type = lib.types.bool;
@@ -153,7 +153,7 @@
           type = lib.types.lines;
           default = "";
           example = "include-if-exists = local.conf";
-          description = "Lines added to ~/.config/rical/config after `settings`, e.g. includes.";
+          description = "Lines added to ~/.config/rical-calendar/config after `settings`, e.g. includes.";
         };
       };
 
@@ -193,10 +193,10 @@
             "text/x-vcard" = ["net.jeffas.Rical.Contacts.desktop"];
           })
         ];
-        xdg.configFile."rical/binds.conf" = lib.mkIf (cfg.binds != "") {
+        xdg.configFile."rical-calendar/binds.conf" = lib.mkIf (cfg.binds != "") {
           text = cfg.binds;
         };
-        xdg.configFile."rical/config" = let
+        xdg.configFile."rical-calendar/config" = let
           # the named options, then `settings` (which can override them)
           named = lib.filterAttrs (_: v: v != null) {
             vdir = vdirPath;

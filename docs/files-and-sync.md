@@ -75,14 +75,21 @@ If rical is already open, opening a file hands it to the open window.
 
 | File | What |
 |---|---|
-| `~/.config/rical/config` | [Settings](configuration.md) |
-| `~/.config/rical/local.conf` | Settings saved by Preferences when the config is read-only |
-| `~/.config/rical/binds.conf` | [Key bindings](keys.md) |
+| `~/.config/rical-calendar/config` | [Settings](configuration.md) |
+| `~/.config/rical-calendar/local.conf` | Settings saved by Preferences when the config is read-only |
+| `~/.config/rical-calendar/binds.conf` | [Key bindings](keys.md) |
 | `~/.local/state/rical-calendar/rical.log` | The [log](troubleshooting.md#the-log) |
 | `~/.local/state/rical-calendar/state` | What the window remembers, e.g. folded time zones |
 | `~/.local/share/rical-calendar/history/` | The [history](history.md), to undo changes later |
 
 (`~/.config` is `$XDG_CONFIG_HOME`, `~/.local/state` is `$XDG_STATE_HOME`
 and `~/.local/share` is `$XDG_DATA_HOME`, if you set them.) Contacts keeps
-its own in `~/.config/rical/contacts/`, `~/.local/state/rical-contacts/`
+its own in `~/.config/rical-contacts/`, `~/.local/state/rical-contacts/`
 and `~/.local/share/rical-contacts/`.
+
+These folders used to be shared: settings in `~/.config/rical` (and
+`~/.config/rical/contacts`), state in `~/.local/state/rical`. Each app moves
+its old files to its own folders when it starts. A folder holding links,
+as Home Manager makes, is left as it is and read from where it is, until a
+`home-manager switch` with the new module puts them in the new place. Then
+anything left, such as a `local.conf` saved by Preferences, moves too.

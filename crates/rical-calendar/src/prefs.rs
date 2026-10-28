@@ -124,7 +124,7 @@ pub fn show(parent: &impl IsA<gtk::Widget>, calendars: Vec<(String, String)>, on
     advanced.add(&ctx.path_row(
         "binds",
         "Key bindings file",
-        "Default ~/.config/rical/binds.conf",
+        "Default ~/.config/rical-calendar/binds.conf",
         value("binds"),
         env("binds"),
         false,

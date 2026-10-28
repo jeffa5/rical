@@ -1,4 +1,4 @@
-//! Contacts' settings: from `~/.config/rical/contacts/config` (then its
+//! Contacts' settings: from `~/.config/rical-contacts/config` (then its
 //! `local.conf`), then the environment (`RICAL_CONTACTS_…`). The files
 //! themselves are `rical_ui::config`.
 
@@ -24,7 +24,7 @@ pub const SETTINGS: &[(&str, &str)] = &[
     ),
     (
         "binds",
-        "Key bindings file. Default ~/.config/rical/contacts/binds.conf if it exists.",
+        "Key bindings file. Default ~/.config/rical-contacts/binds.conf if it exists.",
     ),
     (
         "renderer",
@@ -135,7 +135,7 @@ impl Options {
 /// What `--help` says after the options.
 pub fn help() -> String {
     let mut s = String::from(
-        "Settings go in ~/.config/rical/contacts/config (or the file \
+        "Settings go in ~/.config/rical-contacts/config (or the file \
          RICAL_CONTACTS_CONFIG names) as\n`name = value` lines, and each can be set \
          in the environment instead, which wins:\n\n",
     );

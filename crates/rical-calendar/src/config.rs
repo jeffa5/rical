@@ -2,14 +2,14 @@
 //! The files themselves (format, includes, saving) are `rical_ui::config`.
 //!
 //! ```text
-//! # ~/.config/rical/config
+//! # ~/.config/rical-calendar/config
 //! vdir = ~/.calendars
 //! week = workweek
 //! remind = 10m
 //! me = me@example.com, me@work.example
 //! no-notifications = true
 //! include = local.conf            # relative to this file
-//! include-if-exists = ~/.config/rical/secret.conf
+//! include-if-exists = ~/.config/rical-calendar/secret.conf
 //! ```
 //!
 //! Lines apply in order, so a later line (including one after an
@@ -43,7 +43,7 @@ pub const SETTINGS: &[(&str, &str)] = &[
     ),
     (
         "binds",
-        "Key bindings file. Default ~/.config/rical/binds.conf if it exists.",
+        "Key bindings file. Default ~/.config/rical-calendar/binds.conf if it exists.",
     ),
     (
         "remind",
@@ -202,7 +202,7 @@ impl Options {
 /// What `--help` says after the options: the settings and where they go.
 pub fn help() -> String {
     let mut s = String::from(
-        "Settings go in ~/.config/rical/config (or the file RICAL_CONFIG names) as\n\
+        "Settings go in ~/.config/rical-calendar/config (or the file RICAL_CONFIG names) as\n\
          `name = value` lines, `include = FILE` reads another file, and each can be\n\
          set in the environment instead, which wins:\n\n",
     );

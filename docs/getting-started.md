@@ -40,7 +40,7 @@ path = "~/calendar/nextcloud"
 fileext = ".ics"
 ```
 
-Tell rical where that is, in `~/.config/rical/config`:
+Tell rical where that is, in `~/.config/rical-calendar/config`:
 
 ```ini
 vdir = ~/calendar/nextcloud

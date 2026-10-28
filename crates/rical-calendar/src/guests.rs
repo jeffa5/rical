@@ -152,7 +152,7 @@ impl GuestsEditor {
         self.group.set_description(Some(&match sender {
             Some(s) => format!("Invitations go out from your server as {s} when this syncs."),
             None => "Your address is not known: set `me = you@example.com` in \
-                     ~/.config/rical/config to invite people."
+                     ~/.config/rical-calendar/config to invite people."
                 .to_owned(),
         }));
     }

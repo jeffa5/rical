@@ -129,7 +129,7 @@ fn main() -> glib::ExitCode {
 /// The state and bindings, from the settings.
 fn setup(o: config::Options) -> Result<(state::SharedState, rical_ui::binds::Binds), String> {
     let root = o.contacts.ok_or(
-        "which contacts? Set `contacts = PATH` in ~/.config/rical/contacts/config, \
+        "which contacts? Set `contacts = PATH` in ~/.config/rical-contacts/config, \
          or RICAL_CONTACTS_CONTACTS (see --help)",
     )?;
     let started = std::time::Instant::now();
@@ -158,11 +158,9 @@ fn load_binds(path: Option<&std::path::Path>) -> Result<rical_ui::binds::Binds, 
     use rical_ui::binds::Binds;
     let mut binds =
         Binds::parse(include_str!("binds.conf")).map_err(|e| format!("built-in binds: {e}"))?;
-    let path = path.map(ToOwned::to_owned).or_else(|| {
-        rical_ui::app::config_dir()
-            .map(|d| d.join("binds.conf"))
-            .filter(|p| p.exists())
-    });
+    let path = path
+        .map(ToOwned::to_owned)
+        .or_else(|| rical_ui::app::config_file("binds.conf").filter(|p| p.exists()));
     if let Some(path) = path {
         let text = std::fs::read_to_string(&path).map_err(|e| format!("{path:?}: {e}"))?;
         binds.merge(Binds::parse(&text).map_err(|e| format!("{path:?}: {e}"))?);

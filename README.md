@@ -66,7 +66,7 @@ apps open `.ics` and `.vcf` files from other apps.
 ## Configure
 
 Calendar's Preferences (`Ctrl+,` or `:settings`) edit
-`~/.config/rical/config`, a file of `name = value` lines:
+`~/.config/rical-calendar/config`, a file of `name = value` lines:
 
 ```ini
 vdir = ~/calendars
@@ -81,7 +81,7 @@ config is read-only (say Home Manager made it), Preferences save to
 `local.conf` beside it, which is read after it. See
 [Configuration](docs/configuration.md) for every setting.
 
-Contacts has its own, smaller config in `~/.config/rical/contacts/config`
+Contacts has its own, smaller config in `~/.config/rical-contacts/config`
 (`RICAL_CONTACTS_...` in the environment). Without one, it opens
 `~/contacts`:
 

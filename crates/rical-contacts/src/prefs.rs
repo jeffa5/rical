@@ -74,7 +74,7 @@ pub fn show(win: &Rc<Window>) {
     advanced.add(&ctx.path_row(
         "binds",
         "Key bindings file",
-        "Default ~/.config/rical/contacts/binds.conf",
+        "Default ~/.config/rical-contacts/binds.conf",
         value("binds"),
         env("binds"),
         false,

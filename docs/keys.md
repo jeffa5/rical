@@ -8,13 +8,13 @@ only while it has focus, so they still work in the sidebar and dialogs.
 
 ## Changing them
 
-Put bindings in `~/.config/rical/binds.conf` (or the file the
+Put bindings in `~/.config/rical-calendar/binds.conf` (or the file the
 [`binds`](configuration.md#binds) setting names). They are layered over the
 defaults below: a key you bind replaces the default, and a key bound to
 nothing (`x =`) removes it. The format is aerc's:
 
 ```ini
-# ~/.config/rical/binds.conf
+# ~/.config/rical-calendar/binds.conf
 [global]
 <C-t> = :today<Enter>
 gd = :goto<space>          # no <Enter>: opens the command line, typed so far
