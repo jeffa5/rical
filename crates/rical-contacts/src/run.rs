@@ -543,8 +543,7 @@ impl palette::Host for Window {
             Some(b) => s.books.find_book(b),
             None => s.default_book(),
         }
-        .and_then(|i| s.books.books.get(i))
-        .map_or("?".to_owned(), |b| b.name.clone());
+        .map_or("?".to_owned(), |i| s.books.book_place(i));
         let mut parts = vec![if d.formatted_name.is_empty() {
             "(no name)".to_owned()
         } else {

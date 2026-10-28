@@ -858,28 +858,38 @@ impl Window {
     }
 }
 
-/// Which address books a person is in.
-fn where_kept(s: &crate::state::State, id: &CardId) -> gtk::Label {
-    let book = s.books.book(id).map(|b| b.name.clone()).unwrap_or_default();
-    let copies: Vec<String> = s
+/// Where a person's card is kept (and any copies of it, by UID, in other
+/// address books): each file from the contacts folder, opening its folder.
+fn where_kept(s: &crate::state::State, id: &CardId) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::builder().title("Saved in").build();
+    let copies = s
         .index
         .position(id)
-        .map(|n| {
-            s.index.entries[n]
-                .copies
-                .iter()
-                .filter_map(|c| s.books.book(c).map(|b| b.name.clone()))
-                .collect()
-        })
+        .map(|n| s.index.entries[n].copies.clone())
         .unwrap_or_default();
-    let text = if copies.is_empty() {
-        format!("In {book}")
-    } else {
-        format!("In {book}; also in {}", copies.join(", "))
-    };
-    gtk::Label::builder()
-        .label(&text)
-        .css_classes(["dim-label", "caption"])
-        .tooltip_text(id.path.display().to_string())
-        .build()
+    for (i, card) in std::iter::once(id).chain(copies.iter()).enumerate() {
+        let book = s
+            .books
+            .book(card)
+            .map(|b| b.name.clone())
+            .unwrap_or_default();
+        let place = s.books.place(&card.path);
+        let folder = card
+            .path
+            .parent()
+            .map(|p| gio::File::for_path(p).uri().to_string());
+        group.add(&rical_ui::card::link_row(
+            &place,
+            &if i == 0 {
+                book
+            } else {
+                format!("a copy, in {book}")
+            },
+            "folder-symbolic",
+            "Open the folder",
+            folder,
+            &card.path.display().to_string(),
+        ));
+    }
+    group
 }

@@ -349,6 +349,26 @@ impl Books {
 }
 
 impl Books {
+    /// Where a file is, from the contacts folder itself (named, so a book
+    /// that is the folder still says something): `contacts/work/sam.vcf`.
+    /// Something outside it is shown in full.
+    pub fn place(&self, path: &Path) -> String {
+        let base = self.root.parent().unwrap_or(&self.root);
+        match path.strip_prefix(base) {
+            Ok(rel) if !rel.as_os_str().is_empty() => rel.display().to_string(),
+            _ => path.display().to_string(),
+        }
+    }
+
+    /// Where address book `i`'s new cards go, as [`Books::place`] does,
+    /// ending in `/`: `contacts/work/`.
+    pub fn book_place(&self, i: usize) -> String {
+        self.books
+            .get(i)
+            .map(|b| format!("{}/", self.place(&b.path)))
+            .unwrap_or_default()
+    }
+
     /// Whether a file changed on disk since it was read here (or is gone),
     /// so an edit based on what is shown would undo someone else's.
     pub fn is_stale(&self, path: &Path) -> bool {
@@ -384,5 +404,29 @@ impl Books {
                 cards,
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn places_from_the_contacts_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("contacts");
+        std::fs::create_dir_all(root.join("work")).unwrap();
+        std::fs::write(
+            root.join("work/sam.vcf"),
+            "BEGIN:VCARD\r\nVERSION:4.0\r\nUID:s\r\nFN:Sam\r\nEND:VCARD\r\n",
+        )
+        .unwrap();
+        let b = Books::load(&root).unwrap();
+        assert_eq!(b.place(&root.join("work/sam.vcf")), "contacts/work/sam.vcf");
+        assert_eq!(b.book_place(0), "contacts/work/");
+        assert_eq!(b.place(Path::new("/elsewhere/x.vcf")), "/elsewhere/x.vcf");
+        // a folder that is itself the address book
+        let b = Books::load(root.join("work")).unwrap();
+        assert_eq!(b.book_place(0), "work/");
     }
 }

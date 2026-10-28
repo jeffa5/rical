@@ -372,7 +372,7 @@ pub fn parse_date(text: &str) -> Result<String, String> {
 
 /// Open the editor for `id`, or for someone new.
 pub fn open(win: &Rc<Window>, id: Option<CardId>) {
-    let (draft, book_names, book) = {
+    let (draft, book_names, book, book_places, file_place) = {
         let s = win.state.borrow();
         let draft = id
             .as_ref()
@@ -380,7 +380,9 @@ pub fn open(win: &Rc<Window>, id: Option<CardId>) {
             .map(|c| Draft::of(&c))
             .unwrap_or_default();
         let names: Vec<String> = s.books.books.iter().map(|b| b.name.clone()).collect();
-        (draft, names, s.default_book())
+        let places: Vec<String> = (0..names.len()).map(|i| s.books.book_place(i)).collect();
+        let file = id.as_ref().map(|id| s.books.place(&id.path));
+        (draft, names, s.default_book(), places, file)
     };
     if id.is_none() && book_names.is_empty() {
         win.toast("There are no address books to add to");
@@ -396,6 +398,42 @@ pub fn open(win: &Rc<Window>, id: Option<CardId>) {
         .content_height(720)
         .build();
     let page = adw::PreferencesPage::new();
+    // where it is saved: a new file in the address book chosen, or the
+    // card's own file
+    let saved = adw::PreferencesGroup::builder().title("Saved in").build();
+    let start = book.unwrap_or(0);
+    let book_row = adw::ComboRow::builder()
+        .title("Address book")
+        .subtitle(format!(
+            "{} (a new file)",
+            book_places.get(start).cloned().unwrap_or_default()
+        ))
+        .subtitle_selectable(true)
+        .model(&gtk::StringList::new(
+            &book_names.iter().map(String::as_str).collect::<Vec<_>>(),
+        ))
+        .selected(start as u32)
+        .build();
+    book_row.connect_selected_notify(move |r| {
+        let place = book_places
+            .get(r.selected() as usize)
+            .cloned()
+            .unwrap_or_default();
+        r.set_subtitle(&format!("{place} (a new file)"));
+    });
+    match &file_place {
+        Some(place) => {
+            let row = adw::ActionRow::builder()
+                .title(glib::markup_escape_text(place))
+                .subtitle("Only what you change in it is rewritten")
+                .title_selectable(true)
+                .build();
+            row.add_prefix(&gtk::Image::from_icon_name("document-save-symbolic"));
+            saved.add(&row);
+        }
+        None => saved.add(&book_row),
+    }
+    page.add(&saved);
 
     let names = adw::PreferencesGroup::new();
     let entry = |title: &str, text: &str| {
@@ -459,16 +497,7 @@ pub fn open(win: &Rc<Window>, id: Option<CardId>) {
     more.add(&birthday);
     more.add(&anniversary);
     more.add(&groups);
-    let book_row = adw::ComboRow::builder()
-        .title("Address book")
-        .model(&gtk::StringList::new(
-            &book_names.iter().map(String::as_str).collect::<Vec<_>>(),
-        ))
-        .selected(book.unwrap_or(0) as u32)
-        .build();
-    if id.is_none() && book_names.len() > 1 {
-        more.add(&book_row);
-    }
+
     page.add(&more);
 
     let notes_group = adw::PreferencesGroup::builder().title("Notes").build();

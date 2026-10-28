@@ -26,13 +26,10 @@ fn row(title: &str, subtitle: &str, icon: &str) -> adw::ActionRow {
 }
 
 /// The lines of one card worth comparing.
-fn card_group(card: &Card, book: &str, path: &std::path::Path) -> adw::PreferencesGroup {
+fn card_group(card: &Card, book: &str, place: &str) -> adw::PreferencesGroup {
     let g = adw::PreferencesGroup::builder()
         .title(escape(&card.display_name()))
-        .description(escape(&format!(
-            "in {book} · {}",
-            path.file_name().unwrap_or_default().to_string_lossy()
-        )))
+        .description(escape(&format!("in {book} · {place}")))
         .build();
     for r in draft_rows(&Draft::of(card)) {
         g.add(&r);
@@ -157,7 +154,7 @@ pub fn preview(s: &State) -> gtk::Widget {
     b.append(&buttons);
     for id in &group.cards {
         if let (Some(card), Some(book)) = (s.books.get(id), s.books.book(id)) {
-            b.append(&card_group(&card, &book.name, &id.path));
+            b.append(&card_group(&card, &book.name, &s.books.place(&id.path)));
         }
     }
     b.upcast()
@@ -200,6 +197,41 @@ pub fn merge_group(
         .content_height(640)
         .build();
     let page = adw::PreferencesPage::new();
+    // where it goes: the kept card's file, and the others' (deleted after
+    // asking; an imported copy goes without)
+    let files = adw::PreferencesGroup::builder().title("Files").build();
+    {
+        let s = win.state.borrow();
+        let p = plan.borrow();
+        let row = |place: String, what: &str, icon: &str| {
+            let r = adw::ActionRow::builder()
+                .title(escape(&place))
+                .subtitle(what)
+                .title_selectable(true)
+                .build();
+            r.add_prefix(&gtk::Image::from_icon_name(icon));
+            r
+        };
+        files.add(&row(
+            s.books.place(&p.keep.path),
+            "saved here, as the merged card",
+            "document-save-symbolic",
+        ));
+        let gone = if imported.is_some() {
+            "the opened card, not kept"
+        } else {
+            "deleted afterwards (you're asked first)"
+        };
+        for other in &p.others {
+            files.add(&row(
+                s.books.place(&other.path),
+                gone,
+                "user-trash-symbolic",
+            ));
+        }
+    }
+    page.add(&files);
+
     let merged_group = adw::PreferencesGroup::builder()
         .title("The merged card")
         .description("Everything each card says, once")
@@ -336,8 +368,14 @@ fn confirm_delete(win: &Rc<Window>, plan: dedupe::Merge, saved: Change) {
             format!("Delete the {n} Duplicates?")
         })
         .body(format!(
-            "Everything they said is now in {}'s card. Undo brings them back.",
-            name_of(&plan)
+            "Everything they said is now in {}'s card, in {}. Deleting:\n\n{}\n\nUndo brings them back.",
+            name_of(&plan),
+            win.state.borrow().books.place(&plan.keep.path),
+            plan.others
+                .iter()
+                .map(|o| win.state.borrow().books.place(&o.path))
+                .collect::<Vec<_>>()
+                .join("\n"),
         ))
         .default_response("delete")
         .close_response("keep")

@@ -81,8 +81,20 @@ address or number to tell people apart.
 
 The right-hand pane shows the selected person. Every way to reach them is a
 link: an email address writes to them, a number calls, and an address opens
-a map. Each has a copy button. Below the card it says which address book
-holds them, and any other books holding a copy of the same card (by UID).
+a map. Each has a copy button. **Saved in**, below the card, lists the file
+they are in, from the contacts folder (`contacts/work/sam.vcf`), with its
+address book. It also lists any copy of the same card (by UID) in another
+book. Clicking a file opens its folder, and the copy button copies its full
+path.
+
+Anything that writes says where first:
+
+- The editor shows the file an edit changes. For someone new, it shows the
+  folder of the address book chosen.
+- Quick add's preview line names the folder too.
+- When a contact opened from elsewhere is added, the prompt names the folder.
+- The merge dialog lists the file the merged card is saved to, and the files
+  deleted afterwards.
 
 From the keyboard:
 
