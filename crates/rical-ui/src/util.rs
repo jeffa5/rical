@@ -17,10 +17,24 @@ pub fn open_uri(parent: Option<&gtk::Window>, uri: &str) {
     });
 }
 
-/// A web map searching for `place`.
+/// A link that shows `place` on a map: a `geo:` link when a maps app is
+/// installed to handle it, else a web map.
 pub fn map_url(place: &str) -> String {
-    let q: String = place
-        .bytes()
+    if gtk::gio::AppInfo::default_for_uri_scheme("geo").is_some() {
+        geo_url(place)
+    } else {
+        web_map_url(place)
+    }
+}
+
+/// Fold newlines and runs of spaces into single spaces.
+fn one_line(place: &str) -> String {
+    place.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Percent-encode `s` for a URL query, spaces as `+`.
+fn query_escape(s: &str) -> String {
+    s.bytes()
         .map(|b| match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
                 (b as char).to_string()
@@ -28,8 +42,20 @@ pub fn map_url(place: &str) -> String {
             b' ' => "+".to_owned(),
             b => format!("%{b:02X}"),
         })
-        .collect();
-    format!("https://www.openstreetmap.org/search?query={q}")
+        .collect()
+}
+
+/// A `geo:` URI (RFC 5870) asking a maps app to search for `place`.
+pub fn geo_url(place: &str) -> String {
+    format!("geo:0,0?q={}", query_escape(&one_line(place)))
+}
+
+/// A web map searching for `place`.
+pub fn web_map_url(place: &str) -> String {
+    format!(
+        "https://www.openstreetmap.org/search?query={}",
+        query_escape(&one_line(place))
+    )
 }
 
 /// The look the apps share: a tinted selection in lists (so it stands out

@@ -326,6 +326,7 @@ pub fn place(o: &Occurrence) -> Option<&str> {
 #[cfg(test)]
 mod location_tests {
     use super::*;
+    use rical_ui::util::{geo_url, web_map_url};
 
     #[test]
     fn urls() {
@@ -339,8 +340,16 @@ mod location_tests {
         );
         assert_eq!(first_url("Room 4"), None);
         assert_eq!(
-            map_url("Bistro 21, Leeds"),
+            web_map_url("Bistro 21, Leeds"),
             "https://www.openstreetmap.org/search?query=Bistro+21%2C+Leeds"
+        );
+        assert_eq!(
+            web_map_url("Bistro 21,\r\n Leeds\n"),
+            "https://www.openstreetmap.org/search?query=Bistro+21%2C+Leeds"
+        );
+        assert_eq!(
+            geo_url("Bistro 21,\n Leeds"),
+            "geo:0,0?q=Bistro+21%2C+Leeds"
         );
     }
 }
