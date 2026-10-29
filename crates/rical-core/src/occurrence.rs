@@ -71,6 +71,8 @@ pub struct Occurrence {
     pub attendees: Vec<Person>,
     /// Ways to join online (RFC 7986 CONFERENCE).
     pub conferences: Vec<Conference>,
+    /// Attached files (ATTACH).
+    pub attachments: Vec<Attachment>,
     /// For a subtask, its parent task's UID.
     pub parent: Option<String>,
 }
@@ -384,6 +386,7 @@ impl<'a> Fields<'a> {
             organizer: people(self.component, "ORGANIZER").into_iter().next(),
             attendees: people(self.component, "ATTENDEE"),
             conferences: conferences(self.component),
+            attachments: attachments(self.component),
             parent: parent_of(self.component),
             due: self.component.prop("DUE").and_then(When::from_property),
         }
@@ -880,5 +883,170 @@ mod tests {
             ),
             None
         );
+    }
+}
+
+/// A file attached to an item (ATTACH, RFC 5545 §3.8.1.1): a link, or the
+/// file itself written into the calendar as base64.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attachment {
+    /// Where it is, for an attachment by reference; None when the file is
+    /// inside the calendar (read it with [`Vdir::attachment_data`]).
+    pub uri: Option<String>,
+    /// FILENAME (RFC 8607), else the last part of the link's path.
+    pub name: Option<String>,
+    /// FMTTYPE, e.g. application/pdf.
+    pub mime: Option<String>,
+    /// SIZE in bytes (RFC 8607), when given.
+    pub size: Option<u64>,
+    /// Which of the item's ATTACH properties it is.
+    pub index: usize,
+}
+
+impl Attachment {
+    /// What to call it: its name, else its type, else just "Attachment".
+    pub fn title(&self) -> String {
+        match (&self.name, &self.mime) {
+            (Some(n), _) => n.clone(),
+            (None, Some(m)) => format!("Attachment ({m})"),
+            _ => "Attachment".into(),
+        }
+    }
+}
+
+/// The component's ATTACH properties.
+pub fn attachments(component: &AnyComponent) -> Vec<Attachment> {
+    component
+        .props("ATTACH")
+        .enumerate()
+        .filter(|(_, p)| !p.value().trim().is_empty())
+        .map(|(index, p)| {
+            let inline = p
+                .param("ENCODING")
+                .is_some_and(|e| e.eq_ignore_ascii_case("BASE64"))
+                || p.param("VALUE")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("BINARY"));
+            let uri = (!inline).then(|| p.value().trim().to_owned());
+            let name = p
+                .param("FILENAME")
+                .map(unescape_text)
+                .filter(|n| !n.trim().is_empty())
+                .or_else(|| uri.as_deref().and_then(name_in_uri));
+            Attachment {
+                uri,
+                name,
+                mime: p.param("FMTTYPE").map(str::to_owned),
+                size: p.param("SIZE").and_then(|s| s.trim().parse().ok()),
+                index,
+            }
+        })
+        .collect()
+}
+
+/// The last part of a link's path, if it looks like a file name.
+fn name_in_uri(uri: &str) -> Option<String> {
+    let path = uri.split(['?', '#']).next()?;
+    let (scheme, rest) = path.split_once(':')?;
+    if scheme.eq_ignore_ascii_case("cid") {
+        return None;
+    }
+    let last = rest.trim_end_matches('/').rsplit('/').next()?;
+    let name = percent_decode(last);
+    (name.contains('.') && !name.trim().is_empty()).then_some(name)
+}
+
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = |c: u8| (c as char).to_digit(16);
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2]))
+        {
+            out.push((h * 16 + l) as u8);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Decode base64, ignoring whitespace and padding; None if it is not.
+pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(s.len() / 4 * 3);
+    let (mut acc, mut bits) = (0u32, 0);
+    for c in s.bytes() {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' | b'-' => 62,
+            b'/' | b'_' => 63,
+            b'=' => break,
+            c if c.is_ascii_whitespace() => continue,
+            _ => return None,
+        };
+        acc = (acc << 6) | v as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
+}
+
+impl crate::Vdir {
+    /// The bytes of attachment `index` of `occ` when they are written into
+    /// the calendar.
+    pub fn attachment_data(&self, occ: &Occurrence, index: usize) -> anyhow::Result<Vec<u8>> {
+        use anyhow::Context as _;
+        let components = self.get(&occ.path).context("item not loaded")?;
+        let of_uid = || {
+            components
+                .iter()
+                .filter(|c| c.get_uid() == Some(occ.uid.as_str()))
+        };
+        let component = of_uid()
+            .find(|c| {
+                c.prop("RECURRENCE-ID")
+                    .and_then(When::from_property)
+                    .is_some()
+                    && c.prop("RECURRENCE-ID").and_then(When::from_property) == occ.recurrence_id
+            })
+            .or_else(|| of_uid().find(|c| c.prop("RECURRENCE-ID").is_none()))
+            .context("item not found in file")?;
+        let prop = component
+            .props("ATTACH")
+            .nth(index)
+            .context("attachment not found")?;
+        base64_decode(prop.value()).context("attachment is not valid base64")
+    }
+}
+
+#[cfg(test)]
+mod attachment_tests {
+    use super::*;
+
+    #[test]
+    fn base64() {
+        assert_eq!(base64_decode("aGVsbG8=").unwrap(), b"hello");
+        assert_eq!(base64_decode("aGVs\r\n bG8").unwrap(), b"hello");
+        assert!(base64_decode("a$b").is_none());
+    }
+
+    #[test]
+    fn names_from_links() {
+        assert_eq!(
+            name_in_uri("https://x.org/a/Agenda%20v2.pdf?dl=1").as_deref(),
+            Some("Agenda v2.pdf")
+        );
+        assert_eq!(name_in_uri("https://x.org/drive/view/"), None);
+        assert_eq!(name_in_uri("cid:part1.1@x.org"), None);
     }
 }

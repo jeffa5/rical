@@ -24,7 +24,7 @@ pub mod when;
 pub mod write;
 
 pub use component::AnyComponent;
-pub use occurrence::{Conference, Kind, Occurrence, Person};
+pub use occurrence::{Attachment, Conference, Kind, Occurrence, Person};
 pub use task::Task;
 pub use vdir::{Calendar, Rgb, Vdir};
 pub use when::When;

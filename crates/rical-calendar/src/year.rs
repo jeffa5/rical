@@ -160,12 +160,14 @@ impl YearView {
                 let radius = (cell_w.min(cell_h) / 2.0 - 1.0).max(4.0);
                 if day == today {
                     pal.accent(cr, 1.0);
+                    cr.new_sub_path();
                     cr.arc(cx, cy, radius, 0.0, std::f64::consts::TAU);
                     let _ = cr.fill();
                 }
                 if day == state.date {
                     pal.fg(cr, 0.8);
                     cr.set_line_width(1.5);
+                    cr.new_sub_path();
                     cr.arc(cx, cy, radius, 0.0, std::f64::consts::TAU);
                     let _ = cr.stroke();
                 }

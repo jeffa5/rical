@@ -4,7 +4,11 @@
 
 `Enter`, or a click, shows the selected item's details: when (and in its
 own time zone, if that differs), where, its calendar, who is invited and how
-they answered, its video call and dial-in links, and its notes. Along the
+they answered, its video call and dial-in links, its attached files, and its
+notes. Click an attachment to open it: a link opens as it is, and a file
+stored inside the calendar (base64, as a ticket QR code or PDF often is) is
+saved to a temporary folder and opened from there. rical shows attachments
+but does not add them. Along the
 bottom:
 
 | Button | Key | Does |

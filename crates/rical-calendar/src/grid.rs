@@ -574,6 +574,7 @@ impl TimeGrid {
                 organizer: None,
                 attendees: Vec::new(),
                 conferences: Vec::new(),
+                attachments: Vec::new(),
                 parent: None,
             },
         };
@@ -872,6 +873,7 @@ impl TimeGrid {
             let cy = 34.0;
             if is_today {
                 pal.accent(cr, 1.0);
+                cr.new_sub_path();
                 cr.arc(cx, cy, 15.0, 0.0, std::f64::consts::TAU);
                 let _ = cr.fill();
                 cr.set_source_rgb(1.0, 1.0, 1.0);
@@ -1155,6 +1157,7 @@ impl TimeGrid {
             cr.move_to(x, y);
             cr.line_to(x + col_w, y);
             let _ = cr.stroke();
+            cr.new_sub_path();
             cr.arc(x, y, 5.0, 0.0, std::f64::consts::TAU);
             let _ = cr.fill();
             // and what time it is in each extra zone, where the line meets it

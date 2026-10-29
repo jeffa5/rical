@@ -1582,3 +1582,47 @@ fn edit_following_starts_a_new_series() {
     assert_eq!(after[4].start, all[4].start.add(TimeDelta::hours(1)));
     assert_ne!(after[1].uid, after[2].uid);
 }
+
+#[test]
+fn attachments_are_read_and_survive_an_edit() {
+    let (dir, mut vdir) = setup(&[(
+        "home/trip.ics",
+        "
+        BEGIN:VEVENT
+        UID:trip
+        DTSTAMP:20250101T000000Z
+        DTSTART:20250310T090000Z
+        DTEND:20250310T100000Z
+        SUMMARY:Train
+        ATTACH;FMTTYPE=application/pdf:https://x.org/tickets/Ticket%201.pdf
+        ATTACH;ENCODING=BASE64;VALUE=BINARY;FMTTYPE=text/plain;FILENAME=hi.txt:aGVsbG8=
+        END:VEVENT
+        ",
+    )]);
+    let occ = query(&vdir, range("2025-03-10 00:00", "2025-03-11 00:00"));
+    let a = &occ[0].attachments;
+    assert_eq!(a.len(), 2);
+    assert_eq!(
+        a[0].uri.as_deref(),
+        Some("https://x.org/tickets/Ticket%201.pdf")
+    );
+    assert_eq!(a[0].title(), "Ticket 1.pdf");
+    assert_eq!(a[1].uri, None);
+    assert_eq!(a[1].title(), "hi.txt");
+    assert_eq!(vdir.attachment_data(&occ[0], 1).unwrap(), b"hello");
+
+    let mut d = vdir.draft(&occ[0]);
+    d.summary = "Train (late)".into();
+    vdir.update(&occ[0], Scope::All, &d, None).unwrap();
+    let text = fs::read_to_string(dir.path().join("home/trip.ics")).unwrap();
+    assert!(
+        text.contains("FILENAME=hi.txt:aGVs\r\n bG8=\r\n") || text.contains("aGVsbG8="),
+        "{text}"
+    );
+    assert_eq!(
+        query(&vdir, range("2025-03-10 00:00", "2025-03-11 00:00"))[0]
+            .attachments
+            .len(),
+        2
+    );
+}

@@ -253,6 +253,7 @@ impl MiniMonth {
             let ny = y + 11.0;
             if is_today {
                 pal.accent(cr, 1.0);
+                cr.new_sub_path();
                 cr.arc(cx, ny, 10.0, 0.0, std::f64::consts::TAU);
                 let _ = cr.fill();
                 cr.set_source_rgb(1.0, 1.0, 1.0);
@@ -270,6 +271,7 @@ impl MiniMonth {
             if *day == state.date && !is_today {
                 pal.accent(cr, 0.9);
                 cr.set_line_width(1.5);
+                cr.new_sub_path();
                 cr.arc(cx, ny, 10.0, 0.0, std::f64::consts::TAU);
                 let _ = cr.stroke();
             }
@@ -288,6 +290,7 @@ impl MiniMonth {
                             0.4
                         },
                     );
+                    cr.new_sub_path();
                     cr.arc(
                         start + k as f64 * gap,
                         y + 25.0,

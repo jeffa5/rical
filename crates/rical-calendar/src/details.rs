@@ -135,6 +135,53 @@ pub fn show(parent: &impl IsA<gtk::Widget>, rect: gdk::Rectangle, occ: &Occurren
         });
         content.append(&button);
     }
+    // attached files (ATTACH): a link opens as it is, a file written into
+    // the calendar is saved to a temporary folder and opened from there
+    for a in &occ.attachments {
+        let (icon, tip) = match &a.uri {
+            Some(u) => ("mail-attachment-symbolic", u.clone()),
+            None => (
+                "mail-attachment-symbolic",
+                "Stored in the calendar".to_owned(),
+            ),
+        };
+        let mut text = a.title();
+        if let Some(size) = a
+            .size
+            .or_else(|| a.uri.is_none().then_some(0))
+            .filter(|s| *s > 0)
+        {
+            text += &format!(" ({})", human_size(size));
+        }
+        let button = gtk::Button::builder()
+            .child(&row(icon, &text))
+            .css_classes(["flat"])
+            .halign(gtk::Align::Start)
+            .tooltip_text(&tip)
+            .build();
+        let target: Result<String, String> = match &a.uri {
+            Some(u) => Ok(u.clone()),
+            None => state
+                .vdir
+                .attachment_data(occ, a.index)
+                .map_err(|e| e.to_string())
+                .and_then(|data| save_attachment(&occ.uid, a, &data)),
+        };
+        match target {
+            Ok(uri) => {
+                button.connect_clicked(move |b| {
+                    close();
+                    open_uri(b.root().and_downcast_ref::<gtk::Window>(), &uri);
+                });
+            }
+            Err(e) => {
+                log::warn!("attachment unreadable: {e}");
+                button.set_sensitive(false);
+                button.set_tooltip_text(Some(&format!("Unreadable: {e}")));
+            }
+        }
+        content.append(&button);
+    }
     // where it sits among tasks: its parent, and how its subtasks are going
     if occ.kind == Kind::Todo {
         let tasks = state.vdir.tasks();
@@ -549,6 +596,53 @@ fn row(icon: &str, text: &str) -> gtk::Box {
             .build(),
     );
     b
+}
+
+/// "12 KB", "3.4 MB".
+fn human_size(bytes: u64) -> String {
+    match bytes {
+        0..1024 => format!("{bytes} B"),
+        1024..1_048_576 => format!("{} KB", (bytes + 512) / 1024),
+        _ => format!("{:.1} MB", bytes as f64 / 1_048_576.0),
+    }
+}
+
+/// Write an attachment held in the calendar to a file of its own (in a
+/// folder per item, under the temporary folder) and return its `file:` link.
+fn save_attachment(uid: &str, a: &rical_core::Attachment, data: &[u8]) -> Result<String, String> {
+    let safe = |s: &str| -> String {
+        s.chars()
+            .map(|c| {
+                if c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | ' ') {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>()
+            .trim_matches(['.', ' '])
+            .to_owned()
+    };
+    let ext = match a.mime.as_deref().map(str::to_ascii_lowercase).as_deref() {
+        Some("application/pdf") => ".pdf",
+        Some("image/png") => ".png",
+        Some("image/jpeg") => ".jpg",
+        Some("image/gif") => ".gif",
+        Some("text/plain") => ".txt",
+        Some("text/calendar") => ".ics",
+        _ => "",
+    };
+    let mut name = safe(a.name.as_deref().unwrap_or(""));
+    if name.is_empty() {
+        name = format!("attachment-{}{ext}", a.index + 1);
+    }
+    let dir = std::env::temp_dir()
+        .join("rical-attachments")
+        .join(safe(uid));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(name);
+    std::fs::write(&path, data).map_err(|e| e.to_string())?;
+    Ok(gtk::gio::File::for_path(&path).uri().to_string())
 }
 
 /// Open a link in the default browser.

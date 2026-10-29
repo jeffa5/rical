@@ -152,6 +152,7 @@ pub fn delete(vdir: &Path, id: &str) -> anyhow::Result<()> {
         organizer: None,
         attendees: Vec::new(),
         conferences: Vec::new(),
+        attachments: Vec::new(),
         parent: None,
     };
     vdir.delete(&occ, Scope::All)?;

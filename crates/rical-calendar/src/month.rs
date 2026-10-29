@@ -186,6 +186,7 @@ impl MonthView {
             let (nw, nh) = num.pixel_size();
             if *day == today {
                 pal.accent(cr, 1.0);
+                cr.new_sub_path();
                 cr.arc(x + 16.0, y + 13.0, 11.0, 0.0, std::f64::consts::TAU);
                 let _ = cr.fill();
                 cr.set_source_rgb(1.0, 1.0, 1.0);
@@ -268,6 +269,7 @@ impl MonthView {
                     tx = x + 17.0;
                 } else if !spans {
                     draw::set_rgb(cr, mark, 1.0);
+                    cr.new_sub_path();
                     cr.arc(x + 6.0, y + h / 2.0, 3.5, 0.0, std::f64::consts::TAU);
                     let _ = cr.fill();
                     tx = x + 13.0;
