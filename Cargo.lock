@@ -1544,6 +1544,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rical-mail"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "env_logger",
+ "libc",
+ "log",
+ "tempfile",
+]
+
+[[package]]
 name = "rical-ui"
 version = "0.1.0"
 dependencies = [

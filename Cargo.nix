@@ -103,6 +103,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "rical-mail" = rec {
+      packageId = "rical-mail";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "rical-mail";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "rical-ui" = rec {
       packageId = "rical-ui";
       build = internal.buildRustCrateWithFeatures {
@@ -5074,6 +5084,56 @@ rec {
             name = "uuid";
             packageId = "uuid";
             features = [ "v4" ];
+          }
+        ];
+        devDependencies = [
+          {
+            name = "tempfile";
+            packageId = "tempfile";
+          }
+        ];
+
+      };
+      "rical-mail" = rec {
+        crateName = "rical-mail";
+        version = "0.1.0";
+        edition = "2024";
+        crateBin = [
+          {
+            name = "rical-mail";
+            path = "src/main.rs";
+            requiredFeatures = [ ];
+          }
+        ];
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/rical-mail; };
+        libName = "rical_mail";
+        dependencies = [
+          {
+            name = "anyhow";
+            packageId = "anyhow";
+          }
+          {
+            name = "chrono";
+            packageId = "chrono";
+          }
+          {
+            name = "clap";
+            packageId = "clap";
+            features = [ "derive" "env" ];
+          }
+          {
+            name = "env_logger";
+            packageId = "env_logger";
+            features = [ "kv" ];
+          }
+          {
+            name = "libc";
+            packageId = "libc";
+          }
+          {
+            name = "log";
+            packageId = "log";
+            features = [ "kv" ];
           }
         ];
         devDependencies = [

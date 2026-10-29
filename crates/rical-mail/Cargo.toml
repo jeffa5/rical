@@ -1,0 +1,16 @@
+[package]
+name = "rical-mail"
+description = "Mail (rical): a send queue of files, with the sending left to any command"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+clap.workspace = true
+env_logger.workspace = true
+log.workspace = true
+libc = "0.2.191"
+
+[dev-dependencies]
+tempfile = "3.27.0"
