@@ -27,6 +27,8 @@ commands. A command-line tool (`rical`) works on the same files.
   invitations, inviting guests, and your contacts.
 - [Contacts](contacts.md): the companion address book app: search,
   editing, opening contacts from other apps, and merging duplicates.
+- [Mail](mailbox.md): `rical-mailbox`, a private, plain-text-first client for
+  Maildir folders, with Markdown.
 - [Mail: the send queue](mail.md): `rical-mail`, a queue of files that hands
   each message to any command that can send it.
 - [History and undo](history.md): undo anything, even after a restart;

@@ -1,0 +1,17 @@
+[package]
+name = "rical-maildir"
+description = "Maildir folders and mail messages (rical): reading, flags, threads, replies, composing"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+log.workspace = true
+mail-parser = { version = "1.0.0", features = ["full_encoding"] }
+scraper = "0.24.0"
+base64 = "0.22.1"
+pulldown-cmark = { version = "0.13.0", default-features = false, features = ["html"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

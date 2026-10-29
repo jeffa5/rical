@@ -191,8 +191,10 @@ fn the_sender_picks_the_command() {
     assert_eq!(f.run(Utc::now()).sent, 2);
     // the second one ran last, with the default command
     assert_eq!(f.out(), "default\n");
+}
 
-    // no command for a sender at all: failed, not sent some other way
+#[test]
+fn no_command_for_a_sender_fails_rather_than_going_another_way() {
     let mut g = Fixture::new("true");
     g.config.send = None;
     g.config.routes = vec![("*@nowhere.example".into(), "true".into())];

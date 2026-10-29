@@ -67,6 +67,8 @@ impl State {
 #[derive(Debug, Clone)]
 pub struct Entry {
     pub id: String,
+    /// Where the message is in the queue folder.
+    pub path: std::path::PathBuf,
     pub state: State,
     pub from: String,
     pub to: String,
@@ -233,6 +235,7 @@ impl Queue {
                 };
                 let (from, _) = envelope(&raw);
                 out.push(Entry {
+                    path: self.dir(sub).join(&id),
                     id,
                     state,
                     from: from.unwrap_or_default(),

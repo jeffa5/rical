@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Mail (rical)
+GenericName=Mail
+Comment=Private, keyboard-first mail for Maildir folders
+Exec=rical-mailbox %U
+Icon=net.jeffas.Rical.Mailbox
+Terminal=false
+Categories=Office;Email;GTK;
+Keywords=mail;email;maildir;rical;
+StartupNotify=true
+MimeType=x-scheme-handler/mailto;

@@ -28,7 +28,7 @@
         };
     };
 
-    # rical (CLI), rical-mail (send queue), rical-calendar and rical-contacts (GUIs)
+    # rical (CLI), rical-mail (send queue), rical-calendar, rical-contacts and rical-mailbox (GUIs)
     rical = pkgs.stdenv.mkDerivation {
       pname = "rical";
       version = "0.1.0";
@@ -47,6 +47,10 @@
         cp ${cargoNix.workspaceMembers.rical-calendar.build}/bin/rical-calendar $out/bin/
         cp ${cargoNix.workspaceMembers.rical-contacts.build}/bin/rical-contacts $out/bin/
         cp ${cargoNix.workspaceMembers.rical-mail.build}/bin/rical-mail $out/bin/
+        cp ${cargoNix.workspaceMembers.rical-mailbox.build}/bin/rical-mailbox $out/bin/
+        install -Dm644 ${./data/net.jeffas.Rical.Mailbox.desktop} $out/share/applications/net.jeffas.Rical.Mailbox.desktop
+        install -Dm644 ${./data/icons/hicolor/scalable/apps/net.jeffas.Rical.Mailbox.svg} $out/share/icons/hicolor/scalable/apps/net.jeffas.Rical.Mailbox.svg
+        install -Dm644 ${./data/icons/hicolor/symbolic/apps/net.jeffas.Rical.Mailbox-symbolic.svg} $out/share/icons/hicolor/symbolic/apps/net.jeffas.Rical.Mailbox-symbolic.svg
         install -Dm644 ${./data/net.jeffas.Rical.Contacts.desktop} $out/share/applications/net.jeffas.Rical.Contacts.desktop
         install -Dm644 ${./data/icons/hicolor/scalable/apps/net.jeffas.Rical.Contacts.svg} $out/share/icons/hicolor/scalable/apps/net.jeffas.Rical.Contacts.svg
         install -Dm644 ${./data/icons/hicolor/symbolic/apps/net.jeffas.Rical.Contacts-symbolic.svg} $out/share/icons/hicolor/symbolic/apps/net.jeffas.Rical.Contacts-symbolic.svg
