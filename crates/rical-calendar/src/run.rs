@@ -35,6 +35,7 @@ impl Window {
     fn run(self: &Rc<Self>, p: &Parsed) -> Result<(), String> {
         let scope = |i: usize| match p.arg(i) {
             Some("this") => Some(Scope::This),
+            Some("following") => Some(Scope::Following),
             Some("all") => Some(Scope::All),
             _ => None,
         };

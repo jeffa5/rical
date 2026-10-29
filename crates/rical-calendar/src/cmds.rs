@@ -81,7 +81,7 @@ const fn spec(name: &'static str, help: &'static str) -> Spec {
 const VIEWS: Kind = Kind::Text("view");
 const DATE: Kind = Kind::Text("date");
 const SHIFT: Kind = Kind::Text("shift");
-const SCOPE: Kind = Kind::Choice(&["this", "all"]);
+const SCOPE: Kind = Kind::Choice(&["this", "following", "all"]);
 
 /// What the help dialog lists: the commands, and the views' binding sections.
 pub const HELP: rical_ui::help::Commands = rical_ui::help::Commands {

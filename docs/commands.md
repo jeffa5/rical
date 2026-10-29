@@ -6,8 +6,9 @@ to take one), and `Enter` runs it. Keys are bound to commands (see
 [Keys](keys.md)), and `?` lists both, searchable.
 
 Arguments in `<angle brackets>` are needed, `[square brackets]` are
-optional, and `...` takes the rest of the line. A `[scope]` is `this` or
-`all`, for one occurrence of a repeating event or the whole series; left
+optional, and `...` takes the rest of the line. A `[scope]` is `this`,
+`following` (this and later ones; earlier ones stay) or
+`all`, for one occurrence of a repeating event, from there on, or the whole series; left
 out, rical asks.
 
 ## Moving around
@@ -53,7 +54,7 @@ out, rical asks.
 | `:move <by> [scope]` | Move the selected event, e.g. +15m, -1h, +1d |
 | `:resize <by> [scope]` | Change the selected event's end, e.g. +15m |
 | `:repeat [--every EVERY] [--on ON] [--count COUNT] [--until UNTIL] <rule...>` | Make the selected event repeat: none, daily, weekly, monthly, yearly or an RRULE, e.g. :repeat weekly --on mo,we --count 10. Flags: --every (every N days/weeks/...); --on (weekdays, e.g. mo,we,fr); --count (end after this many times); --until (end on this date) |
-| `:delete [scope]` (also `:rm`) | Delete the selected event (this occurrence or all) |
+| `:delete [scope]` (also `:rm`) | Delete the selected event (this occurrence, from here on, or all) |
 | `:convert` (also `:to-task`, `:to-event`) | Turn the selected event into a task, or task into an event |
 | `:undo` | Undo the last change |
 | `:redo` | Redo the last undone change |

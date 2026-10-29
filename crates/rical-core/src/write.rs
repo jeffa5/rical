@@ -11,13 +11,13 @@ use std::{
 };
 
 use anyhow::Context as _;
-use chrono::{TimeDelta, Utc};
+use chrono::{Days, TimeDelta, Utc};
 use chrono_tz::Tz;
 
 use crate::{
     doc::{self, Component, Document, Item, Line},
     occurrence::{Kind, Occurrence, unescape_text},
-    rule::{Freq, Rule},
+    rule::{End, Freq, Rule},
     vdir::Vdir,
     when::{When, resolve_local},
 };
@@ -27,6 +27,9 @@ use crate::{
 pub enum Scope {
     /// Only the selected occurrence.
     This,
+    /// The selected occurrence and every later one; earlier ones stay as
+    /// they were.
+    Following,
     /// The whole series.
     All,
 }
@@ -257,7 +260,11 @@ impl Vdir {
     ) -> anyhow::Result<Vec<Change>> {
         let before = read(&occ.path)?;
         let mut doc = Document::parse(&before)?;
+        let scope = narrow(&doc, occ, scope);
 
+        if scope == Scope::Following {
+            return self.update_following(occ, draft, calendar, before, doc);
+        }
         if occ.recurring && scope == Scope::This {
             let rid = occ
                 .recurrence_id
@@ -282,62 +289,7 @@ impl Vdir {
             );
             touch(c);
         } else if occ.recurring {
-            let master = doc
-                .find_mut(&occ.uid, None)
-                .context("series has no master component")?;
-            let master_start = master
-                .property("DTSTART")
-                .and_then(Line::when)
-                .context("series has no DTSTART")?;
-            // move the series by however far this occurrence moved
-            let shift = if draft.start.is_date() == occ.start.is_date() {
-                Some(
-                    draft.start.to_utc(Tz::UTC)
-                        - occ.start.coerce_like(&draft.start).to_utc(Tz::UTC),
-                )
-            } else {
-                None
-            };
-            let start = match shift {
-                // moved to another zone: the series keeps its wall-clock
-                // times there (09:00 Singapore becomes 09:00 London), plus
-                // however far this occurrence's wall time was changed
-                Some(_) if draft.exact_zones && zone_of(&master_start) != zone_of(&draft.start) => {
-                    let wall = naive(&draft.start) - naive(&occ.start.coerce_like(&master_start));
-                    let n = naive(&master_start) + wall;
-                    match draft.start {
-                        When::Zoned(dt) => When::Zoned(resolve_local(dt.timezone(), n)),
-                        _ => When::Floating(n),
-                    }
-                }
-                Some(shift) => master_start.add(shift),
-                None => draft
-                    .start
-                    .coerce_like(&master_start_kind(&master_start, &draft.start)),
-            };
-            let mut end = start.add(draft.start.until(&draft.end));
-            if draft.exact_zones && !end.is_date() {
-                // the end in its own zone (a flight lands somewhere else)
-                end = end.coerce_like(&draft.end);
-            }
-            set_fields(master, draft, true);
-            set_times(
-                master,
-                draft.kind,
-                &start,
-                &end,
-                Some(&master_start),
-                draft.exact_zones,
-                (draft.has_start, draft.has_due),
-            );
-            touch(master);
-            if draft.repeat == Repeat::None {
-                // no longer a series: drop its exceptions
-                master.remove("RDATE");
-                master.remove("EXDATE");
-                let uid = occ.uid.clone();
-                doc.remove_where(|c| c.uid() == Some(uid.as_str()) && c.recurrence_id().is_some());
-            }
+            edit_series(&mut doc, occ, draft)?;
         } else {
             let c = doc
                 .find_mut(&occ.uid, occ.recurrence_id.as_ref())
@@ -405,15 +357,96 @@ impl Vdir {
         Ok(changes)
     }
 
+    /// Change `occ` and every later occurrence: the series ends just before
+    /// `occ`, and a new one (in a file of its own) carries on from it with
+    /// `draft` applied. Overrides from `occ` on are not carried over.
+    fn update_following(
+        &mut self,
+        occ: &Occurrence,
+        draft: &Draft,
+        calendar: Option<&str>,
+        before: String,
+        mut doc: Document,
+    ) -> anyhow::Result<Vec<Change>> {
+        if calendar
+            .is_some_and(|id| Some(id) != self.calendar_for_path(&occ.path).map(|c| c.id.as_str()))
+        {
+            anyhow::bail!("move the whole series to change its calendar");
+        }
+        let rid = occ
+            .recurrence_id
+            .context("recurring occurrence without a recurrence id")?;
+        let new_uid = uuid::Uuid::new_v4().to_string();
+        let new_path = occ.path.with_file_name(format!("{new_uid}.ics"));
+
+        // a rule that counts occurrences carries on with what is left of
+        // the count
+        let mut draft = draft.clone();
+        if let Repeat::Rule(rule) = &mut draft.repeat
+            && let End::Count(n) = rule.end
+            && let Some(start) = doc
+                .find(&occ.uid, None)
+                .and_then(|m| m.property("DTSTART"))
+                .and_then(Line::when)
+        {
+            let cut = rid.coerce_like(&start).to_utc(Tz::UTC);
+            let range = start.to_utc(Tz::UTC) - TimeDelta::days(1)..cut;
+            let done = self
+                .query(&range, &[occ.kind], Tz::UTC)
+                .iter()
+                .filter(|o| o.uid == occ.uid)
+                .filter(|o| {
+                    o.recurrence_id
+                        .is_some_and(|r| r.coerce_like(&start).to_utc(Tz::UTC) < cut)
+                })
+                .count();
+            rule.end = End::Count((n as usize).saturating_sub(done).max(1) as u32);
+        }
+        let draft = &draft;
+
+        let mut fresh = Document::parse(&before)?;
+        split_off(&mut fresh, &occ.uid, &rid, &new_uid)?;
+        let moved = Occurrence {
+            uid: new_uid,
+            ..occ.clone()
+        };
+        edit_series(&mut fresh, &moved, draft)?;
+        self.add_timezones(&mut fresh);
+
+        end_series_before(&mut doc, &occ.uid, &rid)?;
+        let changes = vec![
+            Change {
+                path: occ.path.clone(),
+                before: Some(before),
+                after: Some(doc.write()),
+            },
+            Change {
+                path: new_path,
+                before: None,
+                after: Some(fresh.write()),
+            },
+        ];
+        for change in &changes {
+            self.apply_checked(change)?;
+        }
+        Ok(changes)
+    }
+
     /// Delete `occ`: one instance of a series becomes an EXDATE, anything
     /// else removes the item (and the file once it is empty).
     pub fn delete(&mut self, occ: &Occurrence, scope: Scope) -> anyhow::Result<Change> {
         let before = read(&occ.path)?;
         let mut doc = Document::parse(&before)?;
         let uid = occ.uid.clone();
+        let scope = narrow(&doc, occ, scope);
 
         let has_master = doc.find(&uid, None).is_some();
-        if occ.recurring && scope == Scope::This && has_master {
+        if scope == Scope::Following {
+            let rid = occ
+                .recurrence_id
+                .context("recurring occurrence without a recurrence id")?;
+            end_series_before(&mut doc, &uid, &rid)?;
+        } else if occ.recurring && scope == Scope::This && has_master {
             let rid = occ
                 .recurrence_id
                 .context("recurring occurrence without a recurrence id")?;
@@ -584,6 +617,160 @@ fn generated_timezone(tzid: &str, year: i32) -> Option<Component> {
     ))
     .ok()?;
     doc.timezone(tzid).cloned()
+}
+
+/// `Following` from a series' first occurrence is the whole series, and
+/// with no master to cut it is just the one override.
+fn narrow(doc: &Document, occ: &Occurrence, scope: Scope) -> Scope {
+    if scope != Scope::Following || !occ.recurring {
+        return scope;
+    }
+    let Some(master) = doc.find(&occ.uid, None) else {
+        return Scope::This;
+    };
+    let first = match (
+        occ.recurrence_id,
+        master.property("DTSTART").and_then(Line::when),
+    ) {
+        (Some(rid), Some(start)) => {
+            rid.coerce_like(&start).to_utc(Tz::UTC) <= start.to_utc(Tz::UTC)
+        }
+        _ => true,
+    };
+    if first { Scope::All } else { scope }
+}
+
+/// End the series `uid` just before `rid`: the rule gets an UNTIL (in place
+/// of any COUNT), and the repeats, exceptions and overrides from `rid` on
+/// are dropped. What came before is left as it was.
+fn end_series_before(doc: &mut Document, uid: &str, rid: &When) -> anyhow::Result<()> {
+    let master = doc
+        .find_mut(uid, None)
+        .context("series has no master component")?;
+    let start = master
+        .property("DTSTART")
+        .and_then(Line::when)
+        .context("series has no DTSTART")?;
+    let cut = rid.coerce_like(&start);
+    let cut_utc = cut.to_utc(Tz::UTC);
+    let second = TimeDelta::seconds(1);
+    let until = match cut {
+        When::Date(d) => (d - Days::new(1)).format("%Y%m%d").to_string(),
+        When::Floating(n) => (n - second).format("%Y%m%dT%H%M%S").to_string(),
+        When::Zoned(dt) => (dt.to_utc() - second).format("%Y%m%dT%H%M%SZ").to_string(),
+    };
+    if let Some(rule) = master.property("RRULE").map(|l| l.value().to_owned()) {
+        let mut parts: Vec<&str> = rule
+            .split(';')
+            .filter(|p| {
+                let key = p.split('=').next().unwrap_or("");
+                !p.is_empty()
+                    && !key.eq_ignore_ascii_case("COUNT")
+                    && !key.eq_ignore_ascii_case("UNTIL")
+            })
+            .collect();
+        let until = format!("UNTIL={until}");
+        parts.push(&until);
+        master.set(Line::property("RRULE", &[], &parts.join(";")));
+    }
+    master.items.retain(|i| match i {
+        Item::Line(l) if matches!(l.name().as_str(), "RDATE" | "EXDATE") => l
+            .when()
+            .is_none_or(|w| w.coerce_like(&start).to_utc(Tz::UTC) < cut_utc),
+        _ => true,
+    });
+    touch(master);
+    doc.remove_where(|c| {
+        c.uid() == Some(uid)
+            && c.recurrence_id()
+                .is_some_and(|r| r.coerce_like(&start).to_utc(Tz::UTC) >= cut_utc)
+    });
+    Ok(())
+}
+
+/// The part of the series `doc` holds that starts at `rid`, as a series of
+/// its own with a new UID: master only, from `rid` on.
+fn split_off(doc: &mut Document, uid: &str, rid: &When, new_uid: &str) -> anyhow::Result<()> {
+    doc.remove_where(|c| c.uid() == Some(uid) && c.recurrence_id().is_some());
+    let master = doc
+        .find_mut(uid, None)
+        .context("series has no master component")?;
+    let start = master
+        .property("DTSTART")
+        .and_then(Line::when)
+        .context("series has no DTSTART")?;
+    let cut = rid.coerce_like(&start);
+    let cut_utc = cut.to_utc(Tz::UTC);
+    master.items.retain(|i| match i {
+        Item::Line(l) if matches!(l.name().as_str(), "RDATE" | "EXDATE") => l
+            .when()
+            .is_none_or(|w| w.coerce_like(&start).to_utc(Tz::UTC) >= cut_utc),
+        _ => true,
+    });
+    master.set(Line::property("UID", &[], new_uid));
+    master.set_when("DTSTART", &cut);
+    master.set(Line::property("CREATED", &[], &stamp()));
+    master.set(Line::new("SEQUENCE:0"));
+    Ok(())
+}
+
+/// Apply `draft` to the whole series `occ` belongs to, moving it by however
+/// far `occ` moved.
+fn edit_series(doc: &mut Document, occ: &Occurrence, draft: &Draft) -> anyhow::Result<()> {
+    let master = doc
+        .find_mut(&occ.uid, None)
+        .context("series has no master component")?;
+    let master_start = master
+        .property("DTSTART")
+        .and_then(Line::when)
+        .context("series has no DTSTART")?;
+    // move the series by however far this occurrence moved
+    let shift = if draft.start.is_date() == occ.start.is_date() {
+        Some(draft.start.to_utc(Tz::UTC) - occ.start.coerce_like(&draft.start).to_utc(Tz::UTC))
+    } else {
+        None
+    };
+    let start = match shift {
+        // moved to another zone: the series keeps its wall-clock
+        // times there (09:00 Singapore becomes 09:00 London), plus
+        // however far this occurrence's wall time was changed
+        Some(_) if draft.exact_zones && zone_of(&master_start) != zone_of(&draft.start) => {
+            let wall = naive(&draft.start) - naive(&occ.start.coerce_like(&master_start));
+            let n = naive(&master_start) + wall;
+            match draft.start {
+                When::Zoned(dt) => When::Zoned(resolve_local(dt.timezone(), n)),
+                _ => When::Floating(n),
+            }
+        }
+        Some(shift) => master_start.add(shift),
+        None => draft
+            .start
+            .coerce_like(&master_start_kind(&master_start, &draft.start)),
+    };
+    let mut end = start.add(draft.start.until(&draft.end));
+    if draft.exact_zones && !end.is_date() {
+        // the end in its own zone (a flight lands somewhere else)
+        end = end.coerce_like(&draft.end);
+    }
+    set_fields(master, draft, true);
+    set_times(
+        master,
+        draft.kind,
+        &start,
+        &end,
+        Some(&master_start),
+        draft.exact_zones,
+        (draft.has_start, draft.has_due),
+    );
+    touch(master);
+    if draft.repeat == Repeat::None {
+        // no longer a series: drop its exceptions
+        master.remove("RDATE");
+        master.remove("EXDATE");
+        let uid = occ.uid.clone();
+        doc.remove_where(|c| c.uid() == Some(uid.as_str()) && c.recurrence_id().is_some());
+    }
+    Ok(())
 }
 
 fn master_start_kind(master_start: &When, new: &When) -> When {

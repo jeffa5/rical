@@ -1538,3 +1538,47 @@ fn converting_refuses_what_would_hurt() {
     let err = vdir.convert(&task, today, SINGAPORE).unwrap_err();
     assert!(err.to_string().contains("subtasks"), "{err}");
 }
+
+#[test]
+fn delete_following_keeps_the_earlier_ones() {
+    let (dir, mut vdir) = setup(&[("work/standup.ics", STANDUP)]);
+    let all = query(&vdir, range("2025-03-01 00:00", "2025-03-10 00:00"));
+    vdir.delete(&all[2], Scope::Following).unwrap();
+    let text = fs::read_to_string(dir.path().join("work/standup.ics")).unwrap();
+    assert!(text.contains("UNTIL=20250305T085959Z"), "{text}");
+    let left = query(&vdir, range("2025-03-01 00:00", "2025-03-20 00:00"));
+    assert_eq!(left.len(), 2, "{left:?}");
+
+    // from the first one on is the whole series
+    vdir.delete(&left[0], Scope::Following).unwrap();
+    assert!(!dir.path().join("work/standup.ics").exists());
+}
+
+#[test]
+fn edit_following_starts_a_new_series() {
+    let (_dir, mut vdir) = setup(&[("work/standup.ics", STANDUP)]);
+    let all = query(&vdir, range("2025-03-01 00:00", "2025-03-10 00:00"));
+    let wed = &all[2];
+    let mut draft = vdir.draft(wed);
+    draft.summary = "Standup (new)".into();
+    draft.start = wed.start.add(TimeDelta::hours(1));
+    draft.end = wed.end.add(TimeDelta::hours(1));
+    let changes = vdir.update(wed, Scope::Following, &draft, None).unwrap();
+    assert_eq!(changes.len(), 2);
+
+    let after = query(&vdir, range("2025-03-01 00:00", "2025-03-10 00:00"));
+    assert_eq!(after.len(), 5, "{after:?}");
+    let names: Vec<_> = after.iter().map(|o| o.summary.as_str()).collect();
+    assert_eq!(
+        &names[..2],
+        [all[0].summary.as_str(), all[1].summary.as_str()]
+    );
+    assert!(
+        names[2..].iter().all(|n| *n == "Standup (new)"),
+        "{names:?}"
+    );
+    assert_eq!(after[0].start, all[0].start);
+    assert_eq!(after[2].start, wed.start.add(TimeDelta::hours(1)));
+    assert_eq!(after[4].start, all[4].start.add(TimeDelta::hours(1)));
+    assert_ne!(after[1].uid, after[2].uid);
+}

@@ -51,17 +51,19 @@ impl Window {
         let dialog = adw::AlertDialog::new(
             Some(&format!("{verb} repeating event")),
             Some(&format!(
-                "“{}” repeats. Change just this one, or every occurrence?",
+                "“{}” repeats. Change just this one, this and the ones after it, or every occurrence?",
                 occ.summary
             )),
         );
         dialog.add_responses(&[
             ("cancel", "_Cancel"),
             ("all", "_All events"),
+            ("following", "This and _following events"),
             ("this", "_This event"),
         ]);
         if verb == "Delete" {
             dialog.set_response_appearance("this", adw::ResponseAppearance::Destructive);
+            dialog.set_response_appearance("following", adw::ResponseAppearance::Destructive);
             dialog.set_response_appearance("all", adw::ResponseAppearance::Destructive);
         } else {
             dialog.set_response_appearance("this", adw::ResponseAppearance::Suggested);
@@ -76,6 +78,7 @@ impl Window {
                 let Some(w) = weak.upgrade() else { return };
                 match response.as_str() {
                     "this" => f(&w, Scope::This),
+                    "following" => f(&w, Scope::Following),
                     "all" => f(&w, Scope::All),
                     _ => w.refresh(),
                 }
