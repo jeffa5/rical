@@ -42,7 +42,7 @@ pub fn show(win: &Rc<Window>) {
     ));
     mail.add(&text(
         "me",
-        "Your addresses (Name <you@example.com>, …)",
+        "Your addresses (Name &lt;you@example.com&gt;, …)",
         |v| {
             if rical_maildir::addr::parse_list(v).is_empty() {
                 Err("addresses like Name <you@example.com>".into())
@@ -80,8 +80,7 @@ pub fn show(win: &Rc<Window>) {
         env("search"),
     ));
 
-    let sending = ctx.group("Fetching and sending");
-    sending.add(&text("sync", "Fetch command (mbsync -a)", any));
+    let sending = ctx.group("Sending");
     sending.add(&text(
         "index",
         "Update the search index with (mu index)",

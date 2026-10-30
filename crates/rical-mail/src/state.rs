@@ -6,7 +6,6 @@ use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
 use rical_cards::Books;
 use rical_maildir::{
     addr::Mailbox,
-    backend::Backend,
     flags::Flags,
     read::Opened,
     search::Query,
@@ -23,6 +22,8 @@ pub enum Place {
     Folder(PathBuf),
     /// What rical-mail-queue has queued to send.
     Outbox,
+    /// Every folder of one kind across the accounts (all inboxes…).
+    Unified(Role),
     /// The messages a search found, by its query.
     Search(String),
 }
@@ -70,6 +71,13 @@ pub struct State {
     pub shown: Vec<usize>,
     pub query: String,
     pub threaded: bool,
+    /// What the list is ordered by, and whether the other way round.
+    pub sort: thread::SortKey,
+    pub sort_reverse: bool,
+    /// Conversations folded to their first message, by that message.
+    pub folded: std::collections::HashSet<PathBuf>,
+    /// For the first message of each conversation: how many it has, how many unread.
+    pub thread_info: HashMap<PathBuf, (usize, usize)>,
     pub selected: Option<PathBuf>,
     /// The message in the reader.
     pub opened: Option<Rc<Opened>>,
@@ -80,6 +88,8 @@ pub struct State {
     /// The calendars, to compare an invitation with what is there.
     pub vdir: Option<rical_core::Vdir>,
     pub undo: Vec<Undo>,
+    /// Counts the readings of a place, so a slow one that finishes late is dropped.
+    pub generation: u64,
     /// Messages picked to act on together.
     pub picked: std::collections::BTreeSet<PathBuf>,
     /// The message last sent, while it can still be taken back.
@@ -93,6 +103,15 @@ pub type SharedState = Rc<RefCell<State>>;
 impl State {
     pub fn new(opts: Options, root: PathBuf, books: Option<Books>) -> State {
         let threaded = opts.threads;
+        // how it was left last time, else the setting
+        let (mut sort, mut sort_reverse) = (opts.sort, opts.sort_reverse);
+        if let Some(saved) = rical_ui::uistate::get("sort") {
+            let mut w = saved.split_whitespace();
+            if let Some(k) = w.next().and_then(thread::SortKey::parse) {
+                sort = k;
+                sort_reverse = w.next() == Some("reverse");
+            }
+        }
         let mut s = State {
             opts,
             root,
@@ -103,6 +122,10 @@ impl State {
             shown: Vec::new(),
             query: String::new(),
             threaded,
+            sort,
+            sort_reverse,
+            folded: Default::default(),
+            thread_info: HashMap::new(),
             selected: None,
             opened: None,
             outbox_notes: HashMap::new(),
@@ -110,6 +133,7 @@ impl State {
             books,
             vdir: None,
             undo: Vec::new(),
+            generation: 0,
             picked: Default::default(),
             last_sent: None,
             before_search: None,
@@ -123,7 +147,8 @@ impl State {
             .or(s.folders.first())
             .map(|f| f.path.clone());
         s.place = first.map_or(Place::Outbox, Place::Folder);
-        s.reload_messages();
+        // the messages are read by the window, away from it
+        s.arrange();
         s
     }
 
@@ -137,7 +162,7 @@ impl State {
     pub fn folder(&self) -> Option<&Folder> {
         match &self.place {
             Place::Folder(p) => self.folders.iter().find(|f| &f.path == p),
-            Place::Outbox | Place::Search(_) => None,
+            Place::Outbox | Place::Search(_) | Place::Unified(_) => None,
         }
     }
 
@@ -145,6 +170,7 @@ impl State {
         match &self.place {
             Place::Outbox => "Outbox".to_owned(),
             Place::Search(q) => format!("Search: {q}"),
+            Place::Unified(r) => unified_title(*r).to_owned(),
             Place::Folder(_) => self.folder().map_or("Mail".to_owned(), |f| f.name.clone()),
         }
     }
@@ -181,92 +207,21 @@ impl State {
             .map_or_else(|| self.root.join("Drafts"), |f| f.path.clone())
     }
 
-    pub fn archive_folder(&self) -> PathBuf {
-        self.opts
-            .archive
-            .as_deref()
-            .and_then(|d| self.find_folder(d))
-            .or_else(|| self.folder_with_role(Role::Archive))
-            .map_or_else(|| self.root.join("Archive"), |f| f.path.clone())
-    }
-
-    pub fn trash_folder(&self) -> PathBuf {
-        self.folder_with_role(Role::Trash)
-            .map_or_else(|| self.root.join("Trash"), |f| f.path.clone())
-    }
-
-    pub fn junk_folder(&self) -> PathBuf {
-        self.folder_with_role(Role::Junk)
-            .map_or_else(|| self.root.join("Junk"), |f| f.path.clone())
-    }
-
     pub fn in_drafts(&self) -> bool {
         self.folder().is_some_and(|f| f.role == Role::Drafts)
+            || self.place == Place::Unified(Role::Drafts)
     }
 
     pub fn in_trash(&self) -> bool {
         self.folder().is_some_and(|f| f.role == Role::Trash)
+            || self.place == Place::Unified(Role::Trash)
     }
 
     /// Read the messages of the place again.
+    #[cfg(test)]
     pub fn reload_messages(&mut self) {
-        match self.place.clone() {
-            Place::Folder(p) => {
-                self.messages = self
-                    .folders
-                    .iter()
-                    .find(|f| f.path == p)
-                    .map(|f| store::list_cached(f, cache_for(f)))
-                    .unwrap_or_default();
-                self.outbox_notes.clear();
-            }
-            Place::Outbox => self.load_outbox(),
-            Place::Search(q) => self.load_search(&q),
-        }
-        self.arrange();
-    }
-
-    fn load_outbox(&mut self) {
-        self.messages.clear();
-        self.outbox_notes.clear();
-        let Ok(queue) = rical_mail_queue::queue::Queue::open(&self.opts.queue) else {
-            return;
-        };
-        for e in queue.list().unwrap_or_default() {
-            let mut m = store::summarize(&e.path, "Outbox", false);
-            if let Some(m) = &mut m {
-                m.flags.seen = true;
-                let note = match e.state {
-                    rical_mail_queue::queue::State::Queued => match e.next_attempt {
-                        Some(t) if t > chrono::Utc::now() => {
-                            format!(
-                                "held back until {} (Undo, or delete it here)",
-                                t.with_timezone(&chrono::Local).format("%H:%M:%S")
-                            )
-                        }
-                        _ => "waiting to be sent".to_owned(),
-                    },
-                    rical_mail_queue::queue::State::Sending => "sending now".to_owned(),
-                    rical_mail_queue::queue::State::Retrying => format!(
-                        "will try again{}",
-                        e.last_error
-                            .as_deref()
-                            .map(|l| format!(" · {l}"))
-                            .unwrap_or_default()
-                    ),
-                    rical_mail_queue::queue::State::Failed => format!(
-                        "failed{}",
-                        e.last_error
-                            .as_deref()
-                            .map(|l| format!(" · {l}"))
-                            .unwrap_or_default()
-                    ),
-                };
-                self.outbox_notes.insert(m.path.clone(), note);
-            }
-            self.messages.extend(m);
-        }
-        self.messages.sort_by_key(|m| std::cmp::Reverse(m.date));
+        let job = self.load_job();
+        self.apply_loaded(job.run());
     }
 
     /// How many messages wait in the send queue.
@@ -278,29 +233,56 @@ impl State {
 
     /// Lay the messages out and apply the search.
     pub fn arrange(&mut self) {
-        self.rows = if self.threaded && !matches!(self.place, Place::Outbox | Place::Search(_)) {
-            thread::threads(&self.messages)
+        let threaded = self.threaded && !matches!(self.place, Place::Outbox | Place::Search(_));
+        self.rows = if threaded {
+            thread::threads_sorted(&self.messages, self.sort, self.sort_reverse)
         } else {
-            (0..self.messages.len())
-                .map(|index| Row {
-                    index,
-                    depth: 0,
-                    head: true,
-                })
-                .collect()
+            thread::sorted(&self.messages, self.sort, self.sort_reverse)
         };
+        // how big each conversation is, and how much of it is unread
+        self.thread_info.clear();
+        let mut at = 0;
+        while at < self.rows.len() {
+            let mut end = at + 1;
+            while end < self.rows.len() && !self.rows[end].head {
+                end += 1;
+            }
+            if end - at > 1 {
+                let unread = self.rows[at..end]
+                    .iter()
+                    .filter(|r| self.messages[r.index].unread())
+                    .count();
+                self.thread_info.insert(
+                    self.messages[self.rows[at].index].path.clone(),
+                    (end - at, unread),
+                );
+            }
+            at = end;
+        }
         self.apply_query();
     }
 
     pub fn apply_query(&mut self) {
         let q = Query::parse(&self.query);
         self.shown = if q.is_empty() {
-            (0..self.rows.len()).collect()
+            // a folded conversation shows its first message only
+            let mut head: Option<&PathBuf> = None;
+            (0..self.rows.len())
+                .filter(|&i| {
+                    let r = self.rows[i];
+                    if r.head {
+                        head = Some(&self.messages[r.index].path);
+                        true
+                    } else {
+                        !head.is_some_and(|h| self.folded.contains(h))
+                    }
+                })
+                .collect()
         } else {
             (0..self.rows.len())
                 .filter(|&i| {
                     let m = &self.messages[self.rows[i].index];
-                    q.matches(m) && q.matches_body(m)
+                    q.matches(m)
                 })
                 .collect()
         };
@@ -504,14 +486,6 @@ impl State {
     }
 }
 
-/// The header cache of a folder, kept with the app's state.
-fn cache_for(f: &Folder) -> rical_maildir::cache::Cache {
-    match rical_ui::app::state_dir() {
-        Some(d) => rical_maildir::cache::Cache::open(&d.join("cache"), &f.path),
-        None => rical_maildir::cache::Cache::none(),
-    }
-}
-
 impl State {
     /// What a command acts on: the picked messages, else the selected one.
     pub fn targets(&self) -> Vec<PathBuf> {
@@ -521,10 +495,14 @@ impl State {
             .filter(|m| self.picked.contains(&m.path))
             .map(|m| m.path.clone())
             .collect();
-        if picked.is_empty() {
-            self.selected.iter().cloned().collect()
-        } else {
-            picked
+        if !picked.is_empty() {
+            return picked;
+        }
+        // a folded conversation is one thing: all of it
+        match &self.selected {
+            Some(p) if self.folded.contains(p) => self.thread_of(p),
+            Some(p) => vec![p.clone()],
+            None => Vec::new(),
         }
     }
 }
@@ -537,35 +515,432 @@ impl State {
             .join("search")
             .join("results")
     }
+}
 
-    /// The results of `query`: what the tool left in the results folder, or
-    /// for the built-in search every folder's messages that match.
-    fn load_search(&mut self, query: &str) {
-        self.outbox_notes.clear();
-        self.messages = if self.opts.search == Backend::Builtin {
-            let q = rical_maildir::search::Query::parse(query);
-            let mut all: Vec<_> = Vec::new();
-            for f in &self.folders {
-                // junk and trash stay out of a search across everything, unless asked
-                if matches!(f.role, Role::Junk | Role::Trash) && q.folder.is_empty() {
-                    continue;
-                }
-                all.extend(
-                    store::list_cached(f, cache_for(f))
-                        .into_iter()
-                        .filter(|m| q.matches(m)),
-                );
-            }
-            all.retain(|m| q.matches_body(m));
-            all.sort_by_key(|m| std::cmp::Reverse(m.date));
-            all
-        } else {
-            store::list_links(&Self::search_dir())
-        };
-        for m in &self.messages {
-            self.outbox_notes
-                .insert(m.path.clone(), format!("in {}", m.folder));
+/// What a unified list is called.
+pub fn unified_title(role: Role) -> &'static str {
+    match role {
+        Role::Inbox => "All inboxes",
+        Role::Drafts => "All drafts",
+        Role::Sent => "All sent",
+        Role::Archive => "All archives",
+        Role::Junk => "All junk",
+        Role::Trash => "All trash",
+        Role::Other => "Everything",
+    }
+}
+
+/// The folder a role has by default, in a new account.
+fn default_name(role: Role) -> &'static str {
+    match role {
+        Role::Inbox => "INBOX",
+        Role::Drafts => "Drafts",
+        Role::Sent => "Sent",
+        Role::Archive => "Archive",
+        Role::Junk => "Junk",
+        Role::Trash => "Trash",
+        Role::Other => "Other",
+    }
+}
+
+/// One account: a top-level folder holding the folders of a mailbox.
+#[derive(Debug, Clone)]
+pub struct Account {
+    pub name: String,
+    /// Indexes into the state's folders.
+    pub folders: Vec<usize>,
+}
+
+impl State {
+    /// Whether the folders are in accounts (`work/INBOX`, `home/INBOX`…):
+    /// at least two top-level names that are not folders themselves.
+    pub fn grouped(&self) -> bool {
+        self.accounts_raw().len() >= 2
+    }
+
+    fn accounts_raw(&self) -> std::collections::BTreeSet<String> {
+        self.folders
+            .iter()
+            .filter_map(|f| f.name.split_once('/').map(|(a, _)| a.to_owned()))
+            .filter(|a| !self.folders.iter().any(|f| &f.name == a))
+            .collect()
+    }
+
+    /// The account a folder name belongs to, when there are accounts.
+    pub fn account_of(&self, name: &str) -> Option<String> {
+        if !self.grouped() {
+            return None;
         }
-        self.messages.truncate(5000);
+        let a = name.split_once('/')?.0;
+        self.accounts_raw().contains(a).then(|| a.to_owned())
+    }
+
+    /// The accounts, with their folders in a useful order: inbox, drafts,
+    /// sent, archive, junk, trash, then the rest by name.
+    pub fn accounts(&self) -> Vec<Account> {
+        let names = self.accounts_raw();
+        names
+            .into_iter()
+            .map(|name| {
+                let mut folders: Vec<usize> = (0..self.folders.len())
+                    .filter(|&i| self.account_of(&self.folders[i].name).as_deref() == Some(&name))
+                    .collect();
+                folders
+                    .sort_by_key(|&i| (self.folders[i].role, self.folders[i].name.to_lowercase()));
+                Account { name, folders }
+            })
+            .collect()
+    }
+
+    /// A folder's name without its account: `Inbox`, `[Gmail]/Drafts`.
+    pub fn short_name(&self, f: &Folder) -> String {
+        match self.account_of(&f.name) {
+            Some(a) => f.name[a.len() + 1..].to_owned(),
+            None => f.name.clone(),
+        }
+    }
+
+    /// The folders of a role, across accounts.
+    pub fn with_role(&self, role: Role) -> Vec<&Folder> {
+        self.folders.iter().filter(|f| f.role == role).collect()
+    }
+
+    /// Where a message moves to for `role` (archive, trash, junk): the folder
+    /// of that kind in the message's own account.
+    pub fn folder_for(&self, path: &std::path::Path, role: Role) -> PathBuf {
+        let home = path.parent().and_then(std::path::Path::parent);
+        let name = self
+            .folders
+            .iter()
+            .find(|f| Some(f.path.as_path()) == home)
+            .map(|f| f.name.clone());
+        let account = name.and_then(|n| self.account_of(&n));
+        let configured = (role == Role::Archive && account.is_none())
+            .then(|| {
+                self.opts
+                    .archive
+                    .as_deref()
+                    .and_then(|d| self.find_folder(d))
+            })
+            .flatten();
+        if let Some(f) = configured {
+            return f.path.clone();
+        }
+        let found = self
+            .folders
+            .iter()
+            .find(|f| f.role == role && self.account_of(&f.name) == account);
+        match (found, &account) {
+            (Some(f), _) => f.path.clone(),
+            (None, Some(a)) => self.root.join(a).join(default_name(role)),
+            (None, None) => self.root.join(default_name(role)),
+        }
+    }
+}
+
+impl State {
+    /// The messages of the conversation a message is in, first message first.
+    pub fn thread_of(&self, path: &std::path::Path) -> Vec<PathBuf> {
+        let Some(at) = self
+            .rows
+            .iter()
+            .position(|r| self.messages[r.index].path == path)
+        else {
+            return vec![path.to_owned()];
+        };
+        let mut start = at;
+        while start > 0 && !self.rows[start].head {
+            start -= 1;
+        }
+        let mut end = start + 1;
+        while end < self.rows.len() && !self.rows[end].head {
+            end += 1;
+        }
+        self.rows[start..end]
+            .iter()
+            .map(|r| self.messages[r.index].path.clone())
+            .collect()
+    }
+
+    /// Fold or open the conversation of the selected message. Returns what
+    /// it is now (true: folded).
+    pub fn fold_selected(&mut self, how: &str) -> Option<bool> {
+        let sel = self.selected.clone()?;
+        let head = self.thread_of(&sel).into_iter().next()?;
+        if !self.thread_info.contains_key(&head) {
+            return None;
+        }
+        let fold = match how {
+            "open" => false,
+            "close" => true,
+            _ => !self.folded.contains(&head),
+        };
+        if fold {
+            self.folded.insert(head.clone());
+            // the one in front is the first of it now
+            self.selected = Some(head);
+        } else {
+            self.folded.remove(&head);
+        }
+        self.apply_query();
+        Some(fold)
+    }
+
+    /// Fold every conversation, or open them all.
+    pub fn fold_all(&mut self, fold: bool) {
+        self.folded = if fold {
+            self.thread_info.keys().cloned().collect()
+        } else {
+            Default::default()
+        };
+        self.apply_query();
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rical_maildir::flags::Flags;
+
+    fn tree(root: &std::path::Path) {
+        for f in [
+            "home/INBOX",
+            "home/Archive",
+            "work/INBOX",
+            "work/Sent",
+            "gmail/[Gmail]/Drafts",
+            "gmail/INBOX",
+        ] {
+            for s in ["cur", "new", "tmp"] {
+                std::fs::create_dir_all(root.join(f).join(s)).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn accounts_unified_and_each_messages_own_archive() {
+        let d = tempfile::tempdir().unwrap();
+        tree(d.path());
+        let mut s = State::new(Options::default(), d.path().to_owned(), None);
+        s.reload_messages();
+        assert!(s.grouped());
+        let names: Vec<String> = s.accounts().into_iter().map(|a| a.name).collect();
+        assert_eq!(names, ["gmail", "home", "work"]);
+        let work = &s.accounts()[2];
+        let shown: Vec<String> = work
+            .folders
+            .iter()
+            .map(|&i| s.short_name(&s.folders[i]))
+            .collect();
+        assert_eq!(shown, ["INBOX", "Sent"]);
+        assert_eq!(s.with_role(Role::Inbox).len(), 3);
+
+        // a message in work/INBOX archives to work's Archive (made if needed),
+        // one in home/INBOX to home's
+        let w = store::deliver(
+            &d.path().join("work/INBOX"),
+            b"Subject: x\n\nx\n",
+            Flags::default(),
+            true,
+        )
+        .unwrap();
+        let h = store::deliver(
+            &d.path().join("home/INBOX"),
+            b"Subject: x\n\nx\n",
+            Flags::default(),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            s.folder_for(&w, Role::Archive),
+            d.path().join("work/Archive")
+        );
+        assert_eq!(
+            s.folder_for(&h, Role::Archive),
+            d.path().join("home/Archive")
+        );
+        assert_eq!(s.folder_for(&w, Role::Trash), d.path().join("work/Trash"));
+    }
+
+    #[test]
+    fn a_single_account_stays_flat() {
+        let d = tempfile::tempdir().unwrap();
+        for f in ["INBOX", "Sent"] {
+            for s in ["cur", "new", "tmp"] {
+                std::fs::create_dir_all(d.path().join(f).join(s)).unwrap();
+            }
+        }
+        let mut s = State::new(Options::default(), d.path().to_owned(), None);
+        s.reload_messages();
+        assert!(!s.grouped());
+        assert_eq!(s.account_of("INBOX"), None);
+    }
+}
+
+#[cfg(test)]
+mod conversation_tests {
+    use super::*;
+
+    fn deliver(root: &std::path::Path, id: &str, reply_to: Option<&str>, date: &str) -> PathBuf {
+        let mut raw = format!(
+            "From: a@x\nSubject: {}{id}\nDate: {date}\nMessage-ID: <{id}@x>\n",
+            if reply_to.is_some() { "Re: " } else { "" }
+        );
+        if let Some(r) = reply_to {
+            raw += &format!("In-Reply-To: <{r}@x>\n");
+        }
+        raw += "\nbody\n";
+        store::deliver(
+            &root.join("INBOX"),
+            raw.as_bytes(),
+            rical_maildir::flags::Flags {
+                seen: true,
+                ..Default::default()
+            },
+            false,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn folding_hides_replies_and_acts_on_the_whole_conversation() {
+        let d = tempfile::tempdir().unwrap();
+        let head = deliver(d.path(), "a", None, "Thu, 5 Nov 2026 10:00:00 +0000");
+        let r1 = deliver(d.path(), "b", Some("a"), "Thu, 5 Nov 2026 11:00:00 +0000");
+        let r2 = deliver(d.path(), "c", Some("b"), "Thu, 5 Nov 2026 12:00:00 +0000");
+        let other = deliver(d.path(), "z", None, "Wed, 4 Nov 2026 09:00:00 +0000");
+        let mut s = State::new(Options::default(), d.path().to_owned(), None);
+        s.reload_messages();
+        assert_eq!(s.shown.len(), 4);
+        s.selected = Some(s.thread_of(&r1)[0].clone());
+        assert_eq!(s.fold_selected("toggle"), Some(true));
+        // the conversation shows as its first message
+        assert_eq!(s.shown.len(), 2);
+        assert_eq!(s.selected.as_deref(), Some(head.as_path()));
+        assert_eq!(s.thread_info[&head].0, 3);
+        // acting on it acts on all three
+        let mut t = s.targets();
+        t.sort();
+        let mut want = vec![head.clone(), r1.clone(), r2.clone()];
+        want.sort();
+        assert_eq!(t, want);
+        // a message not in a conversation cannot be folded
+        s.selected = Some(other);
+        assert_eq!(s.fold_selected("toggle"), None);
+        s.fold_all(false);
+        assert_eq!(s.shown.len(), 4);
+    }
+
+    #[test]
+    fn sorting_changes_the_order_and_keeps_conversations_together() {
+        let d = tempfile::tempdir().unwrap();
+        deliver(d.path(), "a", None, "Thu, 5 Nov 2026 10:00:00 +0000");
+        deliver(d.path(), "b", Some("a"), "Thu, 5 Nov 2026 11:00:00 +0000");
+        deliver(d.path(), "z", None, "Wed, 4 Nov 2026 09:00:00 +0000");
+        let mut s = State::new(Options::default(), d.path().to_owned(), None);
+        s.reload_messages();
+        let subjects = |s: &State| -> Vec<String> {
+            (0..s.shown.len())
+                .map(|n| s.message_at(n).unwrap().subject.clone())
+                .collect()
+        };
+        assert_eq!(subjects(&s), ["a", "Re: b", "z"]);
+        s.sort = rical_maildir::thread::SortKey::Subject;
+        s.sort_reverse = true;
+        s.arrange();
+        assert_eq!(subjects(&s), ["z", "a", "Re: b"]);
+    }
+}
+
+/// An address you send from, and the account it belongs to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Identity {
+    pub mailbox: Mailbox,
+    pub account: Option<String>,
+}
+
+impl Identity {
+    /// As the From chooser shows it.
+    pub fn label(&self) -> String {
+        match &self.account {
+            Some(a) => format!("{} · {a}", self.mailbox.display()),
+            None => self.mailbox.display(),
+        }
+    }
+}
+
+impl State {
+    /// Every address you send from: each account's, then the rest of `me`.
+    pub fn identities(&self) -> Vec<Identity> {
+        let mut out: Vec<Identity> = Vec::new();
+        for (account, list) in &self.opts.accounts {
+            for m in list {
+                out.push(Identity {
+                    mailbox: m.clone(),
+                    account: Some(account.clone()),
+                });
+            }
+        }
+        for m in &self.opts.me {
+            if !out
+                .iter()
+                .any(|i| i.mailbox.address.eq_ignore_ascii_case(&m.address))
+            {
+                out.push(Identity {
+                    mailbox: m.clone(),
+                    account: None,
+                });
+            }
+        }
+        out
+    }
+
+    /// The account of the folder in front, if it is in one.
+    pub fn current_account(&self) -> Option<String> {
+        self.folder().and_then(|f| self.account_of(&f.name))
+    }
+
+    /// The account a message is in, by its file.
+    pub fn account_of_path(&self, path: &std::path::Path) -> Option<String> {
+        let home = path.parent().and_then(std::path::Path::parent)?;
+        let f = self.folders.iter().find(|f| f.path == home)?;
+        self.account_of(&f.name)
+    }
+
+    /// Where a draft is kept: the account's Drafts, else the usual one.
+    pub fn drafts_for(&self, account: Option<&str>) -> PathBuf {
+        account
+            .and_then(|a| {
+                self.folders.iter().find(|f| {
+                    f.role == Role::Drafts && self.account_of(&f.name).as_deref() == Some(a)
+                })
+            })
+            .map_or_else(|| self.drafts_folder(), |f| f.path.clone())
+    }
+
+    /// Where the copy of sent mail goes for an account, when it has a Sent.
+    pub fn sent_for(&self, account: Option<&str>) -> Option<PathBuf> {
+        let a = account?;
+        self.folders
+            .iter()
+            .find(|f| f.role == Role::Sent && self.account_of(&f.name).as_deref() == Some(a))
+            .map(|f| f.path.clone())
+    }
+}
+
+impl State {
+    /// Keep only these of what is shown (what a search inside the messages
+    /// found, after the headers matched).
+    pub fn restrict_shown(&mut self, keep: &std::collections::HashSet<PathBuf>) {
+        let rows = &self.rows;
+        let messages = &self.messages;
+        self.shown
+            .retain(|&i| keep.contains(&messages[rows[i].index].path));
+        if !self.selected.as_ref().is_some_and(|p| keep.contains(p)) {
+            self.selected = self
+                .shown
+                .first()
+                .map(|&i| self.messages[self.rows[i].index].path.clone());
+            self.opened = None;
+        }
     }
 }

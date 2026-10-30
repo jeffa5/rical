@@ -26,6 +26,8 @@ pub struct Headers {
     pub in_reply_to: Vec<String>,
     pub references: Vec<String>,
     pub attachments: bool,
+    #[serde(default)]
+    pub preview: String,
 }
 
 impl Headers {
@@ -41,6 +43,7 @@ impl Headers {
             in_reply_to: s.in_reply_to.clone(),
             references: s.references.clone(),
             attachments: s.attachments,
+            preview: s.preview.clone(),
         }
     }
 
@@ -66,6 +69,7 @@ impl Headers {
             references: self.references,
             size: self.size,
             attachments: self.attachments,
+            preview: self.preview,
         }
     }
 }
@@ -88,7 +92,8 @@ fn file_for(dir: &Path, folder: &Path) -> PathBuf {
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect();
     let tail = name.len().saturating_sub(120);
-    dir.join(format!("{}.json", &name[tail..]))
+    // v3: with the preview line (read as the reader reads it)
+    dir.join(format!("{}.v3.json", &name[tail..]))
 }
 
 impl Cache {

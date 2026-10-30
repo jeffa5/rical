@@ -337,6 +337,56 @@ END:VCALENDAR
 EOF
   echo "calendar with that event: $2"
 fi
+
+# With "accounts" as the third argument, the mail is in accounts: what is
+# above moves under home/, and work/ and gmail/ are made beside it.
+if [[ ${3:-} == accounts ]]; then
+  mkdir -p "$out/home"
+  for f in INBOX Sent Drafts Archive Trash Junk; do mv "$out/$f" "$out/home/$f"; done
+  for f in work/INBOX work/Sent work/Drafts work/Archive work/Trash "gmail/INBOX" "gmail/[Gmail]/Drafts" "gmail/[Gmail]/Sent Mail"; do
+    mkdir -p "$out/$f"/{cur,new,tmp}
+  done
+  msg work/INBOX new "" 4 <<'EOF'
+From: Dana Cole <dana@work.example>
+To: Andrew Jeffery <andrew@work.example>
+Subject: Sprint review notes
+Message-ID: <work-1@work.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Notes are in the wiki. Please add your demo by Friday.
+EOF
+  msg work/INBOX new "" 9 <<'EOF'
+From: IT Desk <it@work.example>
+To: Andrew Jeffery <andrew@work.example>
+Subject: Password expiry
+Message-ID: <work-2@work.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Your password expires in 7 days.
+EOF
+  msg gmail/INBOX new "" 6 <<'EOF'
+From: Mum <mum@family.example>
+To: andrew@gmail.example
+Subject: Sunday lunch
+Message-ID: <gm-1@family.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Are you coming on Sunday? One o'clock.
+EOF
+  msg "gmail/[Gmail]/Sent Mail" cur "S" 30 <<'EOF'
+From: Andrew <andrew@gmail.example>
+To: Mum <mum@family.example>
+Subject: Re: Birthday
+Message-ID: <gm-2@gmail.example>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Yes, see you then.
+EOF
+fi
 cat > "$out/README" <<EOF
 Demo mail from scripts/demo-mail.sh. Point rical-mail at it:
   RICAL_MAIL_MAIL=$out RICAL_MAIL_ME='Andrew Jeffery <andrew@jeffas.net>' rical-mail

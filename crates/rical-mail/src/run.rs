@@ -37,6 +37,12 @@ impl Values for StateValues<'_> {
         }
     }
     fn suggestions(&self, key: &str) -> Vec<String> {
+        if key == "tab" {
+            return ["next", "prev", "mail", "last", "1", "2", "3", "4"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+        }
         if key != "query" {
             return Vec::new();
         }
@@ -108,12 +114,22 @@ impl Window {
             .ok_or_else(|| "no message is selected".to_owned())
     }
 
+    /// The selected message, read: as the reader has it, or read now if the
+    /// reader has not caught up (a command straight after moving on).
     fn opened(&self) -> Result<Rc<read::Opened>, String> {
-        self.state
+        let path = self.selected_path()?;
+        if let Some(o) = self
+            .state
             .borrow()
             .opened
             .clone()
-            .ok_or_else(|| "no message is open".to_owned())
+            .filter(|o| o.path == path)
+        {
+            return Ok(o);
+        }
+        let o = Rc::new(read::open(&path).map_err(|e| format!("{e:#}"))?);
+        self.state.borrow_mut().opened = Some(o.clone());
+        Ok(o)
     }
 
     fn run(self: &Rc<Self>, p: &Parsed) -> Result<(), String> {
@@ -130,7 +146,6 @@ impl Window {
                 self.selected_path()?;
                 self.split.set_show_content(true);
                 self.reader.body.grab_focus();
-                self.mark(Some("read"))?;
             }
             "back" => self.back(),
             "folder" => {
@@ -144,6 +159,20 @@ impl Window {
                 self.go(Place::Folder(path));
             }
             "outbox" => self.go(Place::Outbox),
+            "unified" => {
+                let role = match p.arg(0).unwrap_or("inbox") {
+                    "drafts" => Role::Drafts,
+                    "sent" => Role::Sent,
+                    "archive" => Role::Archive,
+                    "junk" => Role::Junk,
+                    "trash" => Role::Trash,
+                    _ => Role::Inbox,
+                };
+                if self.state.borrow().with_role(role).is_empty() {
+                    return Err("no folder of that kind".into());
+                }
+                self.go(Place::Unified(role));
+            }
             "folders" => {
                 let on = self.outer.shows_sidebar();
                 self.outer.set_show_sidebar(!on);
@@ -159,6 +188,15 @@ impl Window {
                 None => crate::filters::open(self),
             },
             "search-helper" => crate::filters::open(self),
+            "search-box" => {
+                let text = self.search.text().to_string();
+                if text.trim().is_empty() {
+                    crate::filters::open(self);
+                } else {
+                    self.search.set_text("");
+                    self.run_search(&text)?;
+                }
+            }
             "index" => self.index()?,
             "threads" => {
                 let now = self.state.borrow().threaded;
@@ -226,14 +264,8 @@ impl Window {
                 }
                 crate::compose::open(self, d, Some(path));
             }
-            "archive" => {
-                let dest = self.state.borrow().archive_folder();
-                self.move_selected(&dest, "Archived")?;
-            }
-            "junk" => {
-                let dest = self.state.borrow().junk_folder();
-                self.move_selected(&dest, "Moved to junk")?;
-            }
+            "archive" => self.move_selected(Dest::Role(Role::Archive), "Archived")?,
+            "junk" => self.move_selected(Dest::Role(Role::Junk), "Moved to junk")?,
             "delete" => self.delete()?,
             "move" => {
                 let name = p.arg(0).ok_or("move to which folder?")?;
@@ -243,7 +275,7 @@ impl Window {
                         .map(|f| f.path.clone())
                         .ok_or(format!("no folder “{name}”"))?
                 };
-                self.move_selected(&dest, &format!("Moved to {name}"))?;
+                self.move_selected(Dest::Folder(dest), &format!("Moved to {name}"))?;
             }
             "mark" => self.mark(p.arg(0))?,
             "flag" => {
@@ -255,6 +287,8 @@ impl Window {
                 self.change_flags(&paths, |f| f.flagged = on)?;
             }
             "pick" => self.pick(p.arg(0).unwrap_or("toggle"))?,
+            "fold" => self.fold(p.arg(0).unwrap_or("toggle"))?,
+            "sort" => self.sort(p.arg(0).unwrap_or("date"), p.arg(1))?,
             "undo" => self.undo()?,
             "links" => self.show_links()?,
             "open-link" => {
@@ -269,9 +303,17 @@ impl Window {
             "unsubscribe" => self.unsubscribe()?,
             "rsvp" => self.rsvp(p.arg(0).unwrap_or("accept"))?,
             "contact" => self.open_contact()?,
+            "view" => {
+                let html = match p.arg(0) {
+                    Some("html") => true,
+                    Some("text") => false,
+                    _ => !self.reader.showing_html(),
+                };
+                self.reader.prefer_html.set(html);
+                self.show_message();
+            }
             "headers" => self.show_headers()?,
             "source" => self.show_source()?,
-            "sync" => self.sync()?,
             "mkdir" => {
                 let name = p.arg(0).ok_or("what should it be called?")?;
                 let root = self.state.borrow().root.clone();
@@ -311,7 +353,18 @@ impl Window {
                 rical_ui::help::dialog(&cmds::HELP, &self.binds, "list")
                     .present(Some(&self.window));
             }
-            "quit" => self.app.quit(),
+            "tab" => self.tab_command(p.arg(0).unwrap_or("next"))?,
+            "tab-close" => match self.current_compose() {
+                Some(c) => c.execute("discard")?,
+                None => return Err("the mail tab stays; close the window with :quit".into()),
+            },
+            "quit" => {
+                if self.unsaved_tab().is_some() {
+                    self.warn_unsaved();
+                } else {
+                    self.app.quit();
+                }
+            }
             other => return Err(format!("“{other}” is for the window you write in")),
         }
         Ok(())
@@ -333,7 +386,10 @@ impl Window {
             s.selected = None;
             s.opened = None;
             s.reload_folders();
-            s.reload_messages();
+            // empty until it is read, so the old place's messages do not show
+            s.messages.clear();
+            s.outbox_notes.clear();
+            s.arrange();
         }
         self.syncing.set(true);
         self.search.set_text("");
@@ -341,6 +397,7 @@ impl Window {
         self.refresh();
         self.split.set_show_content(false);
         self.focus_view();
+        self.load();
     }
 
     fn select(&self, which: &str) {
@@ -479,7 +536,7 @@ impl Window {
     }
 
     /// Move the picked messages (else the selected one) to a folder.
-    fn move_selected(self: &Rc<Self>, dest: &Path, said: &str) -> Result<(), String> {
+    fn move_selected(self: &Rc<Self>, dest: Dest, said: &str) -> Result<(), String> {
         if self.state.borrow().place == Place::Outbox {
             return Err("these are waiting to be sent: delete removes one".into());
         }
@@ -495,7 +552,12 @@ impl Window {
                 .and_then(Path::parent)
                 .map(Path::to_owned)
                 .ok_or("not in a folder")?;
-            let now = store::move_to(path, dest).map_err(|e| format!("{e:#}"))?;
+            // each to the right folder of its own account
+            let to = match &dest {
+                Dest::Folder(p) => p.clone(),
+                Dest::Role(r) => self.state.borrow().folder_for(path, *r),
+            };
+            let now = store::move_to(path, &to).map_err(|e| format!("{e:#}"))?;
             done.push(Undo::Moved { now, back_to: from });
         }
         let n = paths.len();
@@ -536,6 +598,24 @@ impl Window {
                 s.picked = all.into_iter().collect();
             }
             "none" => self.state.borrow_mut().picked.clear(),
+            "thread" => {
+                let path = self.selected_path()?;
+                {
+                    let mut s = self.state.borrow_mut();
+                    let all = s.thread_of(&path);
+                    // already all picked: let them go
+                    if all.iter().all(|p| s.picked.contains(p)) {
+                        for p in &all {
+                            s.picked.remove(p);
+                        }
+                    } else {
+                        s.picked.extend(all);
+                    }
+                }
+                self.fill_list();
+                self.update_picked_title();
+                return Ok(());
+            }
             _ => {
                 let path = self.selected_path()?;
                 {
@@ -580,8 +660,7 @@ impl Window {
             return Ok(());
         }
         if !in_trash {
-            let dest = self.state.borrow().trash_folder();
-            return self.move_selected(&dest, "Deleted");
+            return self.move_selected(Dest::Role(Role::Trash), "Deleted");
         }
         let dialog = adw::AlertDialog::builder()
             .heading("Delete for good?")
@@ -746,6 +825,26 @@ impl Window {
             .get(n.wrapping_sub(1))
             .ok_or(format!("this message has no link {n}"))?
             .clone();
+        self.confirm_link_of(l)
+    }
+
+    /// A link clicked in the HTML view: by its address, with what the text
+    /// view knows of its words (to say if they mislead).
+    pub fn confirm_url(self: &Rc<Self>, url: String) -> Result<(), String> {
+        let known = self
+            .opened()
+            .ok()
+            .and_then(|o| o.body.links.iter().find(|l| l.url == url).cloned());
+        let l = known.unwrap_or(rical_maildir::html::Link {
+            text: url.clone(),
+            url,
+            range: 0..0,
+            misleading: false,
+        });
+        self.confirm_link_of(l)
+    }
+
+    fn confirm_link_of(self: &Rc<Self>, l: rical_maildir::html::Link) -> Result<(), String> {
         let host = l
             .url
             .split_once("://")
@@ -1072,26 +1171,6 @@ impl Window {
                 Err(e) => w.toast(&format!("{command}: {e}")),
             }
         });
-    }
-
-    fn sync(self: &Rc<Self>) -> Result<(), String> {
-        let cmd = self.state.borrow().opts.sync.clone().ok_or(
-            "set `sync = …` (for example mbsync -a) in the settings to fetch mail from here",
-        )?;
-        // new mail is searchable once the index knows it
-        let index = {
-            let s = self.state.borrow();
-            s.opts
-                .index
-                .clone()
-                .or_else(|| s.opts.search.index_command().map(str::to_owned))
-        };
-        let cmd = match index {
-            Some(i) => format!("{{ {cmd}; }} && {{ {i}; }}"),
-            None => cmd,
-        };
-        self.run_shell(&cmd, "Fetching mail…", "Fetched", true);
-        Ok(())
     }
 
     pub fn wake(self: &Rc<Self>) -> Result<(), String> {
@@ -1442,6 +1521,66 @@ impl Window {
             "Search index updated",
             false,
         );
+        Ok(())
+    }
+}
+
+/// Where moved messages go: a folder, or each one's own account's folder of
+/// a kind (archive, trash, junk).
+pub enum Dest {
+    Folder(std::path::PathBuf),
+    Role(Role),
+}
+
+impl Window {
+    /// Fold a conversation to its first message, or open it.
+    fn fold(self: &Rc<Self>, how: &str) -> Result<(), String> {
+        match how {
+            "close-all" => self.state.borrow_mut().fold_all(true),
+            "open-all" => self.state.borrow_mut().fold_all(false),
+            h => {
+                let done = self.state.borrow_mut().fold_selected(h);
+                if done.is_none() {
+                    return Err("this message is not part of a conversation".into());
+                }
+            }
+        }
+        self.fill_list();
+        self.show_message();
+        Ok(())
+    }
+
+    /// Order the list.
+    fn sort(self: &Rc<Self>, by: &str, then: Option<&str>) -> Result<(), String> {
+        use rical_maildir::thread::SortKey;
+        {
+            let mut s = self.state.borrow_mut();
+            if by == "reverse" {
+                s.sort_reverse = !s.sort_reverse;
+            } else {
+                let key = SortKey::parse(by)
+                    .ok_or(format!("sort by date, from, subject or size, not “{by}”"))?;
+                s.sort = key;
+                s.sort_reverse = then == Some("reverse");
+            }
+            s.arrange();
+            rical_ui::uistate::set(
+                "sort",
+                &format!(
+                    "{}{}",
+                    s.sort.name(),
+                    if s.sort_reverse { " reverse" } else { "" }
+                ),
+            );
+        }
+        self.fill_list();
+        self.show_message();
+        let s = self.state.borrow();
+        self.toast(&format!(
+            "By {}{}",
+            s.sort.name(),
+            if s.sort_reverse { ", reversed" } else { "" }
+        ));
         Ok(())
     }
 }

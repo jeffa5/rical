@@ -54,7 +54,7 @@ pub static SPECS: &[Spec] = &[
             "Select the next, previous, first or last message, or the next unread",
         )
     },
-    spec("open", "Read the selected message (and mark it read)"),
+    spec("open", "Read the selected message"),
     spec("back", "Clear the search, or go back to the list"),
     Spec {
         aliases: &["cd", "go"],
@@ -62,6 +62,67 @@ pub static SPECS: &[Spec] = &[
         ..spec("folder", "Show a folder")
     },
     spec("outbox", "Show what is waiting to be sent"),
+    Spec {
+        aliases: &["za"],
+        args: &[arg(
+            "how",
+            Kind::Choice(&["toggle", "close", "open", "close-all", "open-all"]),
+        )],
+        ..spec(
+            "fold",
+            "Fold a conversation to its first message, or open it (toggle by default); acting on a folded one acts on all of it",
+        )
+    },
+    Spec {
+        args: &[
+            arg(
+                "by",
+                Kind::Choice(&["date", "from", "subject", "size", "reverse"]),
+            ),
+            Arg {
+                name: "then",
+                kind: Kind::Choice(&["reverse"]),
+                optional: true,
+                rest: false,
+            },
+        ],
+        ..spec(
+            "sort",
+            "Order the list: by date (newest first), from, subject or size; add reverse for the other way",
+        )
+    },
+    Spec {
+        contexts: ALL,
+        aliases: &["t"],
+        args: &[Arg {
+            name: "which",
+            kind: Kind::Text("tab"),
+            optional: true,
+            rest: false,
+        }],
+        ..spec(
+            "tab",
+            "Go to a tab: the mail, or a message being written (next, prev, mail, or a number)",
+        )
+    },
+    Spec {
+        contexts: ALL,
+        ..spec(
+            "tab-close",
+            "Close this message being written (asks if it is unsaved)",
+        )
+    },
+    Spec {
+        aliases: &["all"],
+        args: &[arg(
+            "kind",
+            Kind::Choice(&["inbox", "drafts", "sent", "archive", "junk", "trash"]),
+        )],
+        ..spec(
+            "unified",
+            "Show a kind of folder from every account together: all inboxes, all drafts…",
+        )
+    },
     spec("folders", "Show or hide the list of folders"),
     Spec {
         aliases: &["find"],
@@ -86,6 +147,10 @@ pub static SPECS: &[Spec] = &[
             "Build a search from a form: from, to, subject, dates, folders, flags",
         )
     },
+    spec(
+        "search-box",
+        "Search all mail for what is in the filter box (or open the search helper)",
+    ),
     spec(
         "index",
         "Update the search index (runs your `index` command, or the tool's own)",
@@ -138,10 +203,13 @@ pub static SPECS: &[Spec] = &[
     },
     spec("flag", "Flag or unflag the message (or the picked ones)"),
     Spec {
-        args: &[arg("which", Kind::Choice(&["toggle", "all", "none"]))],
+        args: &[arg(
+            "which",
+            Kind::Choice(&["toggle", "thread", "all", "none"]),
+        )],
         ..spec(
             "pick",
-            "Pick messages to act on together: toggle this one and move on, all, or none",
+            "Pick messages to act on together: toggle this one and move on, its whole conversation, all, or none",
         )
     },
     spec("undo", "Undo the last move or mark"),
@@ -188,10 +256,21 @@ pub static SPECS: &[Spec] = &[
             "Open the sender in the contacts (add them if new)",
         )
     },
+    Spec {
+        args: &[Arg {
+            name: "as",
+            kind: Kind::Choice(&["html", "text", "toggle"]),
+            optional: true,
+            rest: false,
+        }],
+        ..spec(
+            "view",
+            "Show a message as its HTML (nothing is fetched) or as text; toggles by default",
+        )
+    },
     spec("headers", "Show every header of the message"),
     spec("source", "Show the message as it is on disk"),
     // the outside
-    spec("sync", "Fetch new mail (runs your `sync` command)"),
     spec("reload", "Read the folders again"),
     Spec {
         args: &[text("name", "folder")],

@@ -337,6 +337,7 @@ mod tests {
             references: vec![],
             size: 0,
             attachments: false,
+            preview: String::new(),
         }
     }
 

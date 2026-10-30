@@ -28,11 +28,6 @@ use crate::{
     window::Window,
 };
 
-thread_local! {
-    /// The windows open, kept alive until they close.
-    static OPEN: RefCell<Vec<Rc<Compose>>> = const { RefCell::new(Vec::new()) };
-}
-
 /// A folder for files a message needs on disk for a while.
 pub fn scratch_dir(name: &str) -> PathBuf {
     let dir = rical_ui::app::state_dir()
@@ -135,11 +130,16 @@ pub fn open_reply(win: &Rc<Window>, d: Draft, top: bool) {
 }
 
 pub struct Compose {
-    pub window: adw::ApplicationWindow,
+    /// What the tab shows.
+    pub root: adw::ToastOverlay,
+    page: RefCell<Option<adw::TabPage>>,
     main: Rc<Window>,
     state: SharedState,
     from_choice: gtk::DropDown,
-    identities: Vec<String>,
+    identities: Vec<crate::state::Identity>,
+    from_entry: gtk::Entry,
+    /// The account of what it answers, or of the folder it was started in.
+    start_account: Option<String>,
     to: Rc<AddressEntry>,
     cc: Rc<AddressEntry>,
     bcc: Rc<AddressEntry>,
@@ -161,7 +161,9 @@ pub struct Compose {
     clean: RefCell<String>,
     leaving: Cell<bool>,
     markdown: Cell<bool>,
+    spell_timer: Cell<Option<glib::SourceId>>,
     calendar: RefCell<Option<(String, String)>>,
+    forwarded: Vec<PathBuf>,
     busy: Cell<bool>,
     pub history: RefCell<Vec<String>>,
     pending_keys: RefCell<Vec<rical_ui::binds::Key>>,
@@ -190,16 +192,30 @@ impl Compose {
     fn new(main: &Rc<Window>, d: Draft, editing: Option<PathBuf>, top: bool) -> Rc<Compose> {
         let state = main.state.clone();
         let markdown = d.markdown || (editing.is_none() && state.borrow().opts.markdown);
-        let (wrap, signature, identities) = {
+        let (wrap, signature, identities, start_account) = {
             let s = state.borrow();
+            // the account the message belongs to: what it answers, else the folder in front
+            let account = d
+                .answering
+                .as_deref()
+                .and_then(|p| s.account_of_path(p))
+                .or_else(|| s.current_account());
             (
                 s.opts.wrap,
                 signature_text(&s.opts.signature),
-                s.opts.me.iter().map(|m| m.display()).collect::<Vec<_>>(),
+                s.identities(),
+                account,
             )
         };
+        let labels: Vec<String> = identities.iter().map(|i| i.label()).collect();
         let from_choice =
-            gtk::DropDown::from_strings(&identities.iter().map(String::as_str).collect::<Vec<_>>());
+            gtk::DropDown::from_strings(&labels.iter().map(String::as_str).collect::<Vec<_>>());
+        from_choice.set_hexpand(true);
+        // with no address set yet, one is typed here (and kept)
+        let from_entry = gtk::Entry::builder()
+            .hexpand(true)
+            .placeholder_text("Your Name <you@example.com>")
+            .build();
         let to = AddressEntry::new(state.clone(), "To");
         let cc = AddressEntry::new(state.clone(), "Cc");
         let bcc = AddressEntry::new(state.clone(), "Bcc");
@@ -215,11 +231,28 @@ impl Compose {
             .margin_bottom(6)
             .build();
         let mut row = 0;
-        if identities.len() > 1 {
+        // always shown: which address, and so which account, it goes from
+        if identities.is_empty() {
+            field_row(&grid, row, "From", &from_entry);
+        } else {
             field_row(&grid, row, "From", &from_choice);
-            row += 1;
         }
+        row += 1;
         field_row(&grid, row, "To", &to.entry);
+        // Cc and Bcc, hidden until wanted, a click away
+        let extra = gtk::Box::builder().spacing(2).build();
+        for (label, what) in [("Cc", "field cc"), ("Bcc", "field bcc")] {
+            extra.append(
+                &gtk::Button::builder()
+                    .label(label)
+                    .css_classes(["flat"])
+                    .tooltip_text(format!("Add {label}"))
+                    .action_name("tab.run")
+                    .action_target(&what.to_variant())
+                    .build(),
+            );
+        }
+        grid.attach(&extra, 2, row, 1, 1);
         row += 1;
         let cc_row = field_row(&grid, row, "Cc", &cc.entry);
         row += 1;
@@ -280,51 +313,59 @@ impl Compose {
             )
             .css_classes(["suggested-action"])
             .tooltip_text("Queue it to be sent (Ctrl+Enter)")
-            .action_name("win.run")
+            .action_name("tab.run")
             .action_target(&"send".to_variant())
             .build();
         let save = gtk::Button::builder()
             .icon_name("document-save-symbolic")
             .tooltip_text("Keep as a draft (Ctrl+S)")
-            .action_name("win.run")
+            .action_name("tab.run")
             .action_target(&"save".to_variant())
             .build();
         let attach = gtk::Button::builder()
             .icon_name("mail-attachment-symbolic")
             .tooltip_text("Attach a file")
-            .action_name("win.run")
+            .action_name("tab.run")
             .action_target(&"attach".to_variant())
             .build();
         let menu = gio::Menu::new();
         let fields = gio::Menu::new();
-        fields.append(Some("Add _Cc"), Some("win.run::field cc"));
-        fields.append(Some("Add _Bcc"), Some("win.run::field bcc"));
+        fields.append(Some("Add _Cc"), Some("tab.run::field cc"));
+        fields.append(Some("Add _Bcc"), Some("tab.run::field bcc"));
         menu.append_section(None, &fields);
         let text = gio::Menu::new();
-        text.append(Some("_Wrap Paragraph"), Some("win.run::reflow"));
-        text.append(Some("Wrap _Everything"), Some("win.run::reflow all"));
-        text.append(Some("_Quote"), Some("win.run::quote"));
-        text.append(Some("_Add Signature"), Some("win.run::signature"));
-        text.append(Some("Edit in My _Editor"), Some("win.run::edit-external"));
-        text.append(Some("_Markdown"), Some("win.run::markdown toggle"));
-        text.append(Some("_Bold"), Some("win.run::format bold"));
-        text.append(Some("_Italic"), Some("win.run::format italic"));
-        text.append(Some("Insert _Link"), Some("win.run::format link"));
+        text.append(Some("_Wrap Paragraph"), Some("tab.run::reflow"));
+        text.append(Some("Wrap _Everything"), Some("tab.run::reflow all"));
+        text.append(Some("_Quote"), Some("tab.run::quote"));
+        text.append(Some("_Add Signature"), Some("tab.run::signature"));
+        text.append(Some("Edit in My _Editor"), Some("tab.run::edit-external"));
+        text.append(Some("_Markdown"), Some("tab.run::markdown toggle"));
+        text.append(Some("_Bold"), Some("tab.run::format bold"));
+        text.append(Some("_Italic"), Some("tab.run::format italic"));
+        text.append(Some("Insert _Link"), Some("tab.run::format link"));
         menu.append_section(None, &text);
         let more = gio::Menu::new();
-        more.append(Some("_Command Line"), Some("win.palette"));
-        more.append(Some("_Discard"), Some("win.run::discard"));
+        more.append(Some("_Command Line"), Some("tab.palette"));
+        more.append(Some("_Discard"), Some("tab.run::discard"));
         menu.append_section(None, &more);
         let menu_button = gtk::MenuButton::builder()
             .icon_name("view-more-symbolic")
             .menu_model(&menu)
             .build();
-        let title = adw::WindowTitle::new("New message", "");
-        let header = adw::HeaderBar::builder().title_widget(&title).build();
-        header.pack_start(&send);
-        header.pack_start(&save);
-        header.pack_start(&attach);
-        header.pack_end(&menu_button);
+        // what to do, above the message, in the tab (the window has the title bar)
+        let header = gtk::Box::builder()
+            .spacing(6)
+            .margin_start(8)
+            .margin_end(8)
+            .margin_top(6)
+            .margin_bottom(6)
+            .css_classes(["toolbar"])
+            .build();
+        header.append(&send);
+        header.append(&save);
+        header.append(&attach);
+        header.append(&gtk::Box::builder().hexpand(true).build());
+        header.append(&menu_button);
 
         let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
         column.append(&grid);
@@ -338,20 +379,16 @@ impl Compose {
         view.set_content(Some(&column));
         let toasts = adw::ToastOverlay::new();
         toasts.set_child(Some(&view));
-        let window = adw::ApplicationWindow::builder()
-            .application(&main.app)
-            .title("New message")
-            .default_width(820)
-            .default_height(700)
-            .content(&toasts)
-            .build();
 
         let this = Rc::new(Compose {
-            window,
+            root: toasts.clone(),
+            page: RefCell::new(None),
             main: main.clone(),
             state,
             from_choice,
             identities,
+            from_entry,
+            start_account,
             to,
             cc,
             bcc,
@@ -371,7 +408,9 @@ impl Compose {
             clean: RefCell::default(),
             leaving: Cell::new(false),
             markdown: Cell::new(markdown),
+            spell_timer: Cell::new(None),
             calendar: RefCell::new(d.calendar.clone()),
+            forwarded: d.forwarded.clone(),
             busy: Cell::new(false),
             history: Default::default(),
             pending_keys: Default::default(),
@@ -381,10 +420,9 @@ impl Compose {
         *this.me.borrow_mut() = Rc::downgrade(&this);
         this.fill(&d, &signature, top);
         this.refresh_attachments();
-        this.setup(&title, wrap);
-        OPEN.with(|o| o.borrow_mut().push(this.clone()));
+        this.setup(wrap);
         *this.clean.borrow_mut() = this.snapshot();
-        this.window.present();
+        main.add_tab(&this);
         // where to start: the first empty thing
         if d.to.trim().is_empty() {
             this.to.entry.grab_focus();
@@ -399,15 +437,23 @@ impl Compose {
     /// Put a draft in the fields.
     fn fill(&self, d: &Draft, signature: &str, top: bool) {
         self.quiet.set(true);
-        if let Some(i) = self.identities.iter().position(|m| {
-            addr::parse_list(m)
-                .first()
-                .map(|a| a.address.to_lowercase())
-                == addr::parse_list(&d.from)
-                    .first()
-                    .map(|a| a.address.to_lowercase())
-        }) {
+        // the address it was from, else the account's own, else the first
+        let want = addr::parse_list(&d.from)
+            .first()
+            .map(|a| a.address.to_lowercase());
+        let by_address = self
+            .identities
+            .iter()
+            .position(|i| Some(i.mailbox.address.to_lowercase()) == want);
+        let by_account = self
+            .identities
+            .iter()
+            .position(|i| i.account.is_some() && i.account == self.start_account);
+        if let Some(i) = by_address.or(by_account) {
             self.from_choice.set_selected(i as u32);
+        }
+        if self.identities.is_empty() {
+            self.from_entry.set_text(&d.from);
         }
         self.to.set(&d.to);
         self.cc.set(&d.cc);
@@ -459,10 +505,9 @@ impl Compose {
         self.quiet.set(false);
     }
 
-    fn setup(self: &Rc<Self>, title: &adw::WindowTitle, wrap: usize) {
+    fn setup(self: &Rc<Self>, wrap: usize) {
         // title and status follow the text
         let weak = Rc::downgrade(self);
-        let title = title.clone();
         let refresh = Rc::new(move || {
             let Some(c) = weak.upgrade() else { return };
             let s = c.subject.text();
@@ -471,8 +516,7 @@ impl Compose {
             } else {
                 s.to_string()
             };
-            title.set_title(&t);
-            c.window.set_title(Some(&t));
+            c.retitle(&t);
             c.update_status();
         });
         let r = refresh.clone();
@@ -490,6 +534,7 @@ impl Compose {
                 pending.set(false);
                 if let Some(c) = weak.upgrade() {
                     c.tag_text();
+                    c.spell_soon();
                 }
             });
         });
@@ -522,28 +567,47 @@ impl Compose {
         self.setup_actions();
         self.autosave();
         self.accept_drops();
-
-        let weak = Rc::downgrade(self);
-        self.window.connect_close_request(move |w| {
-            let Some(c) = weak.upgrade() else {
-                return glib::Propagation::Proceed;
-            };
-            if c.leaving.get() || !c.is_dirty() {
-                c.closed();
-                return glib::Propagation::Proceed;
-            }
-            let _ = w;
-            c.ask_leave();
-            glib::Propagation::Stop
-        });
     }
 
-    fn closed(&self) {
-        let me = self.me.borrow().upgrade();
-        OPEN.with(|o| {
-            o.borrow_mut()
-                .retain(|c| me.as_ref().is_none_or(|m| !Rc::ptr_eq(c, m)))
-        });
+    /// The tab's title: the subject, marked while there is something unsaved.
+    fn retitle(&self, subject: &str) {
+        if let Some(p) = self.page.borrow().as_ref() {
+            let dirty = self.clean.borrow().as_str() != self.snapshot();
+            p.set_title(&format!("{}{subject}", if dirty { "● " } else { "" }));
+        }
+    }
+
+    pub fn set_page(&self, page: adw::TabPage) {
+        *self.page.borrow_mut() = Some(page);
+    }
+
+    pub fn page(&self) -> Option<adw::TabPage> {
+        self.page.borrow().clone()
+    }
+
+    /// The window the tab is in, for dialogs.
+    fn parent(&self) -> adw::ApplicationWindow {
+        self.main.window.clone()
+    }
+
+    /// Bring this tab to the front.
+    pub fn show_tab(&self) {
+        if let Some(p) = self.page.borrow().as_ref() {
+            self.main.tabs.set_selected_page(p);
+        }
+    }
+
+    /// Close the tab, whatever is unsaved.
+    fn close_tab(&self) {
+        self.leaving.set(true);
+        if let Some(p) = self.page.borrow().clone() {
+            self.main.tabs.close_page(&p);
+        }
+    }
+
+    /// Whether closing would lose something.
+    pub fn is_unsaved(&self) -> bool {
+        !self.leaving.get() && self.is_dirty()
     }
 
     /// Typing in the body: wrapping at the margin, and Enter that carries
@@ -675,11 +739,10 @@ impl Compose {
     }
 
     fn collect(&self) -> Draft {
-        let from = self
-            .identities
-            .get(self.from_choice.selected() as usize)
-            .cloned()
-            .unwrap_or_default();
+        let from = match self.identities.get(self.from_choice.selected() as usize) {
+            Some(i) => i.mailbox.display(),
+            None => self.from_entry.text().to_string(),
+        };
         Draft {
             from,
             to: self.to.entry.text().to_string(),
@@ -693,6 +756,7 @@ impl Compose {
             answering: self.answering.borrow().clone(),
             markdown: self.markdown.get(),
             calendar: self.calendar.borrow().clone(),
+            forwarded: self.forwarded.clone(),
         }
     }
 
@@ -781,7 +845,7 @@ impl Compose {
                 .icon_name("window-close-symbolic")
                 .css_classes(["flat", "circular"])
                 .tooltip_text("Remove")
-                .action_name("win.run")
+                .action_name("tab.run")
                 .action_target(&format!("detach {}", rical_ui::command::quote(&name)).to_variant())
                 .build();
             b.append(&x);
@@ -792,6 +856,7 @@ impl Compose {
     // ---- commands ----
 
     fn setup_actions(self: &Rc<Self>) {
+        let group = gio::SimpleActionGroup::new();
         let run = gio::SimpleAction::new("run", Some(glib::VariantTy::STRING));
         let weak = Rc::downgrade(self);
         run.connect_activate(move |_, param| {
@@ -802,7 +867,7 @@ impl Compose {
                 c.toast(&e);
             }
         });
-        self.window.add_action(&run);
+        group.add_action(&run);
         let open = gio::SimpleAction::new("palette", None);
         let weak = Rc::downgrade(self);
         open.connect_activate(move |_, _| {
@@ -810,21 +875,18 @@ impl Compose {
                 palette::open(&c, "");
             }
         });
-        self.window.add_action(&open);
-        let keys = gtk::EventControllerKey::new();
-        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
-        let weak = Rc::downgrade(self);
-        keys.connect_key_pressed(move |_, key, _, mods| match weak.upgrade() {
-            Some(c) => c.handle_key(key, mods),
-            None => glib::Propagation::Proceed,
-        });
-        self.window.add_controller(keys);
+        group.add_action(&open);
+        self.root.insert_action_group("tab", Some(&group));
     }
 
     /// Keys here are chords: plain keys are typing.
-    fn handle_key(self: &Rc<Self>, keyval: gdk::Key, mods: gdk::ModifierType) -> glib::Propagation {
+    pub fn handle_key(
+        self: &Rc<Self>,
+        keyval: gdk::Key,
+        mods: gdk::ModifierType,
+    ) -> glib::Propagation {
         use glib::Propagation::{Proceed, Stop};
-        if self.window.visible_dialog().is_some() || self.busy.get() {
+        if self.main.window.visible_dialog().is_some() || self.busy.get() {
             return Proceed;
         }
         let Some(key) = key_of(keyval, mods) else {
@@ -907,7 +969,7 @@ impl Compose {
                 let i = self
                     .identities
                     .iter()
-                    .position(|m| m.to_lowercase().contains(&want))
+                    .position(|i| i.label().to_lowercase().contains(&want))
                     .ok_or(format!("none of your addresses matches “{want}”"))?;
                 self.from_choice.set_selected(i as u32);
             }
@@ -950,9 +1012,11 @@ impl Compose {
             "about" => self.main.execute("about")?,
             "help" => {
                 rical_ui::help::dialog(&cmds::HELP, &self.main.binds, "write")
-                    .present(Some(&self.window));
+                    .present(Some(&self.parent()));
             }
-            "quit" => self.main.app.quit(),
+            "tab" => self.main.tab_command(p.arg(0).unwrap_or("next"))?,
+            "tab-close" => self.discard(),
+            "quit" => self.main.execute("quit")?,
             other => return Err(format!("“{other}” is for the list of mail")),
         }
         Ok(())
@@ -1000,7 +1064,7 @@ impl Compose {
     fn choose_attachment(self: &Rc<Self>) {
         let dialog = gtk::FileDialog::builder().title("Attach files").build();
         let weak = Rc::downgrade(self);
-        dialog.open_multiple(Some(&self.window), None::<&gio::Cancellable>, move |r| {
+        dialog.open_multiple(Some(&self.parent()), None::<&gio::Cancellable>, move |r| {
             let (Some(c), Ok(files)) = (weak.upgrade(), r) else {
                 return;
             };
@@ -1186,7 +1250,7 @@ impl Compose {
                 Err(e) => c.toast(&format!("{}: {e}", file.display())),
             }
             let _ = std::fs::remove_file(&file);
-            c.window.present();
+            c.show_tab();
             c.body.grab_focus();
         });
         Ok(())
@@ -1219,7 +1283,7 @@ impl Compose {
                     if let Some(i) = self
                         .identities
                         .iter()
-                        .position(|m| m.eq_ignore_ascii_case(v))
+                        .position(|i| v.to_lowercase().contains(&i.mailbox.address.to_lowercase()))
                     {
                         self.from_choice.set_selected(i as u32);
                     }
@@ -1275,10 +1339,26 @@ impl Compose {
                     c.toast(&e);
                 }
             });
-            dialog.present(Some(&self.window));
+            dialog.present(Some(&self.parent()));
             return Ok(());
         }
-        let bytes = d.to_bytes(Local::now()).map_err(|e| format!("{e:#}"))?;
+        let mut bytes = d.to_bytes(Local::now()).map_err(|e| format!("{e:#}"))?;
+        // its copy goes to its own account's Sent
+        let account = self.account();
+        if let Some(sent) = self.state.borrow().sent_for(account.as_deref()) {
+            bytes = rical_mail_queue::message::set_header(
+                &bytes,
+                rical_mail_queue::queue::SENT_FOLDER,
+                &sent.to_string_lossy(),
+            );
+        }
+        // an address typed in, with none set, is kept for next time
+        if self.identities.is_empty()
+            && !d.from.trim().is_empty()
+            && let Some(path) = rical_ui::config::config_path()
+        {
+            let _ = rical_ui::config::save(&path, "me", Some(d.from.trim()));
+        }
         let queue_dir = self.state.borrow().opts.queue.clone();
         let queue =
             rical_mail_queue::queue::Queue::open(&queue_dir).map_err(|e| format!("{e:#}"))?;
@@ -1301,7 +1381,7 @@ impl Compose {
             let _ = store::remove(&p);
         }
         self.leaving.set(true);
-        self.window.close();
+        self.close_tab();
         self.main.quiet();
         self.main.reload();
         self.main.after_queued(delay);
@@ -1313,7 +1393,8 @@ impl Compose {
         let bytes = d
             .to_draft_bytes(Local::now())
             .map_err(|e| format!("{e:#}"))?;
-        let folder = self.state.borrow().drafts_folder();
+        let account = self.account();
+        let folder = self.state.borrow().drafts_for(account.as_deref());
         let flags = Flags {
             draft: true,
             seen: true,
@@ -1333,13 +1414,13 @@ impl Compose {
     fn discard(self: &Rc<Self>) {
         if !self.is_dirty() {
             self.leaving.set(true);
-            self.window.close();
+            self.close_tab();
             return;
         }
         self.ask_leave();
     }
 
-    fn ask_leave(self: &Rc<Self>) {
+    pub fn ask_leave(self: &Rc<Self>) {
         let dialog = adw::AlertDialog::builder()
             .heading("Keep this message?")
             .body("It has not been sent or saved.")
@@ -1360,18 +1441,18 @@ impl Compose {
                 "save" => match c.save() {
                     Ok(()) => {
                         c.leaving.set(true);
-                        c.window.close();
+                        c.close_tab();
                     }
                     Err(e) => c.toast(&e),
                 },
                 "discard" => {
                     c.leaving.set(true);
-                    c.window.close();
+                    c.close_tab();
                 }
                 _ => {}
             }
         });
-        dialog.present(Some(&self.window));
+        dialog.present(Some(&self.parent()));
     }
 }
 
@@ -1396,7 +1477,7 @@ impl palette::Host for Compose {
     }
 
     fn window(&self) -> adw::ApplicationWindow {
-        self.window.clone()
+        self.parent()
     }
 
     fn complete(&self, line: &str) -> rical_ui::command::Completion {
@@ -1459,7 +1540,22 @@ impl Compose {
             make("quote3", 0.46),
         ];
         let sig = make("signature", 0.6);
-        buf.remove_all_tags(&buf.start_iter(), &buf.end_iter());
+        // all but the spelling, which has its own pace
+        for name in [
+            "quote1",
+            "quote2",
+            "quote3",
+            "signature",
+            "md-bold",
+            "md-italic",
+            "md-code",
+            "md-heading",
+            "md-link",
+        ] {
+            if let Some(t) = table.lookup(name) {
+                buf.remove_tag(&t, &buf.start_iter(), &buf.end_iter());
+            }
+        }
         let mut in_sig = false;
         for n in 0..buf.line_count().min(3000) {
             let Some(a) = buf.iter_at_line(n) else { break };
@@ -1683,7 +1779,134 @@ impl Compose {
             }
             true
         });
-        self.window.add_controller(drop);
+        self.root.add_controller(drop);
+    }
+}
+
+impl Compose {
+    /// Put the cursor where writing starts: the first thing empty.
+    pub fn focus_first(&self) {
+        if self.to.entry.text().trim().is_empty() {
+            self.to.entry.grab_focus();
+        } else if self.subject.text().trim().is_empty() {
+            self.subject.grab_focus();
+        } else {
+            self.body.grab_focus();
+        }
+    }
+}
+
+impl Compose {
+    /// The account this message is from: its address's, else where it started.
+    fn account(&self) -> Option<String> {
+        self.identities
+            .get(self.from_choice.selected() as usize)
+            .and_then(|i| i.account.clone())
+            .or_else(|| self.start_account.clone())
+    }
+}
+
+impl Compose {
+    /// Check the spelling of what you wrote (not what is quoted, the
+    /// signature or links) once typing pauses, with the `spell` command, and
+    /// underline what it says is wrong.
+    pub fn spell_soon(self: &Rc<Self>) {
+        let Some(cmd) = self.state.borrow().opts.spell.clone() else {
+            return;
+        };
+        if let Some(id) = self.spell_timer.take() {
+            id.remove();
+        }
+        let weak = Rc::downgrade(self);
+        let id = glib::timeout_add_local_once(std::time::Duration::from_millis(800), move || {
+            let Some(c) = weak.upgrade() else { return };
+            c.spell_timer.set(None);
+            let text = c.body_text();
+            let (mine, _) = lib::split_signature(&text);
+            let words: String = mine
+                .lines()
+                .filter(|l| !l.starts_with('>'))
+                .map(|l| {
+                    l.split_whitespace()
+                        .filter(|w| !w.contains("://") && !w.contains('@'))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let proc = match gio::Subprocess::newv(
+                &[
+                    std::ffi::OsStr::new("sh"),
+                    std::ffi::OsStr::new("-c"),
+                    std::ffi::OsStr::new(&cmd),
+                ],
+                gio::SubprocessFlags::STDIN_PIPE | gio::SubprocessFlags::STDOUT_PIPE,
+            ) {
+                Ok(p) => p,
+                Err(e) => {
+                    log::warn!("spell: {e}");
+                    return;
+                }
+            };
+            let weak = Rc::downgrade(&c);
+            proc.communicate_utf8_async(Some(words), None::<&gio::Cancellable>, move |r| {
+                let (Some(c), Ok((Some(out), _))) = (weak.upgrade(), r) else {
+                    return;
+                };
+                let wrong: std::collections::HashSet<String> = out
+                    .lines()
+                    .map(|w| w.trim().to_owned())
+                    .filter(|w| !w.is_empty())
+                    .collect();
+                c.underline(&wrong);
+            });
+        });
+        self.spell_timer.set(Some(id));
+    }
+
+    fn underline(&self, wrong: &std::collections::HashSet<String>) {
+        let buf = self.body.buffer();
+        let table = buf.tag_table();
+        let tag = table.lookup("misspelt").unwrap_or_else(|| {
+            let t = gtk::TextTag::builder()
+                .name("misspelt")
+                .underline(gtk::pango::Underline::Error)
+                .build();
+            table.add(&t);
+            t
+        });
+        buf.remove_tag(&tag, &buf.start_iter(), &buf.end_iter());
+        if wrong.is_empty() {
+            return;
+        }
+        let text = self.body_text();
+        let mut at = 0usize; // in characters
+        let mut in_sig = false;
+        for line in text.split('\n') {
+            if line == "-- " {
+                in_sig = true;
+            }
+            if !in_sig && !line.starts_with('>') {
+                let mut word = String::new();
+                let mut start = 0;
+                for (i, ch) in line.chars().chain(std::iter::once(' ')).enumerate() {
+                    if ch.is_alphanumeric() || ch == '\'' {
+                        if word.is_empty() {
+                            start = i;
+                        }
+                        word.push(ch);
+                    } else {
+                        if wrong.contains(&word) {
+                            let a = buf.iter_at_offset((at + start) as i32);
+                            let b = buf.iter_at_offset((at + start + word.chars().count()) as i32);
+                            buf.apply_tag(&tag, &a, &b);
+                        }
+                        word.clear();
+                    }
+                }
+            }
+            at += line.chars().count() + 1;
+        }
     }
 }
 #[cfg(test)]

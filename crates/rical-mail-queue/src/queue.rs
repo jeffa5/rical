@@ -38,10 +38,13 @@ pub const ATTEMPTS: &str = "X-Rical-Attempts";
 pub const LAST_ERROR: &str = "X-Rical-Last-Error";
 pub const NEXT_ATTEMPT: &str = "X-Rical-Next-Attempt";
 pub const SENT_AT: &str = "X-Rical-Sent";
+/// Where the copy of a sent message goes, when the app that queued it knows
+/// better than the setting (each account its own Sent).
+pub const SENT_FOLDER: &str = "X-Rical-Sent-Folder";
 
 /// Whether a header is the queue's own, and is not for the wire.
 pub fn is_ours(name: &str) -> bool {
-    name.len() >= 9 && name[..9].eq_ignore_ascii_case("X-Rical-")
+    name.len() >= 8 && name[..8].eq_ignore_ascii_case("X-Rical-")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -265,3 +265,22 @@ fn a_message_held_back_is_not_sent_until_its_time_and_can_be_taken_back() {
         .unwrap();
     assert_eq!(f.run(now + chrono::Duration::seconds(31)).sent, 1);
 }
+
+#[test]
+fn a_message_can_say_which_sent_folder_its_copy_goes_to() {
+    let f = Fixture::new("cat > OUT");
+    let own = f.dir.path().join("work/Sent");
+    let raw = format!(
+        "X-Rical-Sent-Folder: {}\n{}",
+        own.display(),
+        String::from_utf8_lossy(MAIL)
+    );
+    f.queue.enqueue(raw.as_bytes()).unwrap();
+    assert_eq!(f.run(Utc::now()).sent, 1);
+    assert_eq!(files(&own.join("cur")).len(), 1);
+    assert!(files(&f.dir.path().join("Sent/cur")).is_empty());
+    // the header is the queue's own: not on the wire, not in the copy
+    assert!(!f.out().contains("X-Rical-Sent-Folder"));
+    let copy = fs::read(own.join("cur").join(&files(&own.join("cur"))[0])).unwrap();
+    assert!(message::header(&copy, "X-Rical-Sent-Folder").is_none());
+}

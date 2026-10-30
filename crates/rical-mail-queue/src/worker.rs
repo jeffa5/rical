@@ -89,7 +89,7 @@ impl Worker<'_> {
         match &outcome {
             Outcome::Sent => {
                 let mut copy = message::remove_headers(&claim.raw, |h| {
-                    [queue::LAST_ERROR, queue::NEXT_ATTEMPT]
+                    [queue::LAST_ERROR, queue::NEXT_ATTEMPT, queue::SENT_FOLDER]
                         .iter()
                         .any(|n| n.eq_ignore_ascii_case(h))
                 });
@@ -97,7 +97,10 @@ impl Worker<'_> {
                 // What happened has happened: if the copy cannot be filed
                 // the message must still not go again, so fall back to
                 // the queue's own folder, and failing that say so and carry on.
-                let dir = self.config.sent_dir();
+                let dir = message::header(&claim.raw, queue::SENT_FOLDER)
+                    .map(std::path::PathBuf::from)
+                    .filter(|p| p.is_absolute())
+                    .unwrap_or_else(|| self.config.sent_dir());
                 if let Err(e) = queue::file_sent(&dir, &claim.id, &copy) {
                     log::error!(
                         "{}: sent, but could not file a copy in {}: {e:#}",

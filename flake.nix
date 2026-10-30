@@ -25,6 +25,19 @@
             nativeBuildInputs = [pkgs.pkg-config];
             buildInputs = [pkgs.libadwaita pkgs.gtk4];
           };
+          # the mail app's HTML view (WebKitGTK for GTK 4)
+          webkit6-sys = _: {
+            nativeBuildInputs = [pkgs.pkg-config];
+            buildInputs = [pkgs.webkitgtk_6_0 pkgs.gtk4 pkgs.libsoup_3];
+          };
+          javascriptcore6-sys = _: {
+            nativeBuildInputs = [pkgs.pkg-config];
+            buildInputs = [pkgs.webkitgtk_6_0];
+          };
+          soup3-sys = _: {
+            nativeBuildInputs = [pkgs.pkg-config];
+            buildInputs = [pkgs.libsoup_3];
+          };
         };
     };
 
@@ -40,7 +53,7 @@
       preFixup = ''
         gappsWrapperArgs+=(--suffix XDG_DATA_DIRS : "${pkgs.adwaita-icon-theme}/share:${pkgs.hicolor-icon-theme}/share")
       '';
-      buildInputs = [pkgs.gtk4 pkgs.libadwaita];
+      buildInputs = [pkgs.gtk4 pkgs.libadwaita pkgs.webkitgtk_6_0];
       installPhase = ''
         mkdir -p $out/bin
         cp ${cargoNix.workspaceMembers.rical.build}/bin/rical $out/bin/
@@ -242,6 +255,9 @@
         pkgs.pkg-config
         pkgs.gtk4
         pkgs.libadwaita
+        # rical-mail's HTML view
+        pkgs.webkitgtk_6_0
+        pkgs.libsoup_3
 
         # headless GUI screenshots (scripts/screenshot.sh)
         pkgs.sway

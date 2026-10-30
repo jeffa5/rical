@@ -2,7 +2,8 @@
 
 `rical-mail` is a keyboard-first mail client for Maildir folders: what
 mbsync or offlineimap keep in sync with your server. It reads and writes
-the files; fetching is your sync tool's job and sending is
+the files; fetching is your sync tool's job (run it however you like: the
+app watches the folders and shows new mail as it lands) and sending is
 [`rical-mail-queue`](mail-queue.md)'s, so mail stays files you can see and back up.
 Like the calendar and contacts, every action is a `:command`, and keys bind
 to commands (`?` lists them).
@@ -18,19 +19,27 @@ RICAL_MAIL_ME='You <you@example.com>' rical-mail
 
 ## Settings
 
+The first time it runs without a `mail` folder it asks for one, your
+address and your contacts folder, and saves them.
+
 `~/.config/rical-mail/config`, or Preferences (`Ctrl+,`). The important
 ones: `mail` (the Maildir root), `me` (your addresses), `contacts` (for
-completing addresses), `sync` (e.g. `mbsync -a`, run by `Ctrl+R`), `send`
+completing addresses), `account NAME = Name <addr>` (your address in each
+account), `send`
 (e.g. `rical-mail-queue run --once`, run when you send; leave it empty if a
-service sends), `editor`, `wrap`, `signature`, `markdown`. `--help` lists
+service sends), `editor`, `wrap`, `signature`, `markdown`, `spell` (e.g.
+`aspell list`; misspelt words are underlined). `--help` lists
 them all.
 
 ## Private by default
 
-- Nothing in a message is loaded: no images, no styles, no fonts, no
-  frames. Mail with only an HTML part is shown as text (its words, lists
-  and links), and a banner says what it would have fetched, including
-  tracking pixels.
+- Nothing in a message is fetched. HTML mail is drawn as HTML (`h`, or
+  `:view html|text`, switches to its text) in a view with scripts off, no
+  storage and a content policy that allows only the images the message
+  carries itself; remote images, styles, fonts, frames, prefetching and
+  referrers are all blocked, and a banner says what it would have fetched,
+  including tracking pixels. Clicking a link never navigates the view: it
+  asks first, like any other link.
 - A link says where it goes before it opens, and warns when its words
   name one site and it goes to another.
 - A read receipt request is shown and never answered.
@@ -40,14 +49,23 @@ them all.
 
 ## Reading
 
-`j`/`k` move, `Enter` reads (and marks read after a second; `read-after`),
-`n`/`N` find unread, `/` searches (`from:ann subject:"q4 plan" unread
+`j`/`k` move, `Enter` reads. Reading does not mark a message read: `U` does
+(or the button in the message's header); set `read-after` to `2s` to mark
+after a while on screen. `Ctrl+R` reads the folders again. Loading and
+searching run in the background, with a spinner. `n`/`N` find unread, `/`
+filters (`from:ann subject:"q4 plan" unread
 flagged attachment body:budget`), `t` switches conversations, `F` folders,
 `gi gs gd ga gt go` go to Inbox, Sent, Drafts, Archive, Trash and the
 Outbox (what rical-mail-queue has queued, with why it is waiting).
 
 `a` archive, `d` delete (to Trash; from Trash it deletes for good), `!`
 junk, `m` move, `s` flag, `U` read or unread, `u` undo.
+
+**With the mouse**: every row has a menu on right-click (reply, forward,
+archive, move to…, mark, flag, delete), messages drag onto a folder to move
+there, and the message header has buttons for flag, read and a menu for the
+rest. Rows show the first words of a message under its subject, and image
+attachments show as thumbnails.
 
 In a message: `o` lists its links (open one with a number), `w` saves the
 attachments, `i` opens an invitation in the calendar app, `@` opens the
@@ -56,7 +74,9 @@ sender in the contacts app (adding them if new), `H` headers, `V` source.
 ## Writing
 
 `c` writes, `r` replies, `R` replies to all, `f` forwards. Replies are from
-the address the message was sent to. Messages are plain text, wrapped at
+the address the message was sent to, new mail from the account you are
+looking at; the **From** list (`:from`) changes it, and the draft and sent
+copy go to that account's Drafts and Sent. Messages are plain text, wrapped at
 `wrap` (72) as you type, with a guide at that column:
 
 - `Enter` carries quote marks, indentation and list markers on, and ends a
@@ -90,9 +110,7 @@ running. Invitations and people go the other way: see `calendar` and
 
 ## Not here (yet)
 
-Spell checking, searching all folders at once,
-are read when you open it), signing and encryption, and answering
-invitations from the mail (the calendar app does that).
+Signing and encryption.
 
 ## What an invitation changes
 
@@ -145,7 +163,8 @@ applies it; the mail app never writes to the calendar.
 ## Searching
 
 `/` filters the folder you are in as you type (`from:ann unread budget
-date:1w..`). `:search QUERY` (`g/`) searches everything, and `S` opens the
+date:1w..`); `Shift+Enter` in the box, or the button beside it, searches
+everywhere instead. `:search QUERY` (`g/`) searches everything, and `S` opens the
 **search helper**: a form for words, from, to, subject, the text, a folder,
 a date range (with presets) and unread, flagged and attachments, with the
 query it writes shown above as you fill it in, in the words of whatever
@@ -162,11 +181,49 @@ Searching is configurable with `search`:
   mu fills a Maildir with symlinks to the matches (`--format=links`) and the
   app shows that as a list of its own. Acting on a result (read, archive,
   delete, reply) acts on the real message. Keep the index current with
-  `:index`, which also runs after `:sync` (`mu index`; set `index` for
-  something else).
+  `:index` (`mu index`; set `index` for something else), or after your
+  sync tool runs.
 - `notmuch` asks `notmuch search --output=files` and makes the links itself.
 - Or your own command: with `{query}` and `{dir}` it should leave a Maildir of
   links in `{dir}`; with only `{query}` it should print file names.
 
 `Esc` leaves the results and goes back to where you were; `F5` runs the
 search again.
+
+## Accounts and tabs
+
+**Accounts.** When your mail is in accounts (`work/INBOX`, `home/INBOX`,
+`gmail/[Gmail]/Drafts`: a folder per account), the folder list is grouped:
+**All accounts** first, with **All inboxes**, **All drafts**, **All sent**…
+(`:unified inbox`, `gI`) that put the same kind of folder from every account
+in one list, each message labelled with its account; then each account as a
+fold-away section with its folders, open when it has something unread (click
+a name to fold or open it; it is remembered). Archive, delete and junk send
+each message to the folder of that kind in *its own* account.
+
+**Tabs.** A message you are writing opens in a tab, so you can leave it to
+read, search or look something up and come back: the mail view is the first
+tab and the tab bar appears when there is more than one. `gt` / `gT`,
+`Ctrl+PageDown` / `Ctrl+PageUp` move between tabs, `Alt+1` is the mail and
+`Alt+2`… the others (`:tab next|prev|mail|N`), and `:tab-close` (or `Ctrl+W` while writing)
+closes one, asking if it holds something unsaved; so does closing the window.
+A dot marks a tab with unsaved changes.
+
+## Conversations and order
+
+Replies are shown under what they answer (`t` turns that on or off). They
+are found by `In-Reply-To` and `References`, and a reply that lost those is
+put under the latest earlier message with the same subject (without the
+`Re:` and `Fwd:`) within six weeks.
+
+- **Fold** a conversation to its first message with `za` (or `zc` / `zo`;
+  `zM` and `zR` fold and open all). A folded one shows how many it holds, is
+  bold if any of it is unread, and **acting on it acts on all of it**: archive,
+  delete, move, flag and mark read take the whole conversation.
+- **Pick** a whole conversation with `T` (`:pick thread`), to act on it
+  together with other things you have picked.
+- **Order** the list with `:sort date|from|subject|size`, adding `reverse`
+  for the other way (`os` types the command). Date is newest first (a
+  conversation by its newest message), from and subject A to Z, size biggest
+  first. The `sort` setting is the default; what you choose with `:sort` is
+  remembered.

@@ -24,6 +24,9 @@ struct Span {
 /// Told the number of a link that was clicked.
 pub type LinkHandler = Rc<dyn Fn(usize)>;
 
+/// Told the address of a link clicked in the HTML view.
+pub type UrlHandler = Rc<dyn Fn(String)>;
+
 pub struct Reader {
     pub widget: gtk::Stack,
     subject: gtk::Label,
@@ -38,6 +41,12 @@ pub struct Reader {
     scroller: gtk::ScrolledWindow,
     /// Told the number of a link that was clicked.
     pub on_link: RefCell<Option<LinkHandler>>,
+    /// Told the address of a link clicked in the HTML view.
+    pub on_url: RefCell<Option<UrlHandler>>,
+    web: webkit::WebView,
+    body_stack: gtk::Stack,
+    /// Show HTML as HTML (when there is any), else as text.
+    pub prefer_html: std::cell::Cell<bool>,
 }
 
 pub fn full_date(ts: i64) -> String {
@@ -146,7 +155,12 @@ impl Reader {
         column.append(&banner);
         column.append(&invites);
         column.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-        column.append(&body);
+        // the text, or the HTML as it was meant to look (nothing fetched)
+        let web = html_view();
+        let body_stack = gtk::Stack::builder().vhomogeneous(false).build();
+        body_stack.add_named(&body, Some("text"));
+        body_stack.add_named(&web, Some("html"));
+        column.append(&body_stack);
         let fold_button = gtk::Button::builder()
             .halign(gtk::Align::Start)
             .css_classes(["flat", "pill"])
@@ -178,8 +192,13 @@ impl Reader {
             spans: RefCell::default(),
             scroller,
             on_link: RefCell::default(),
+            on_url: RefCell::default(),
+            web,
+            body_stack,
+            prefer_html: std::cell::Cell::new(true),
         });
         reader.setup_links();
+        reader.setup_html();
         let weak = Rc::downgrade(&reader);
         reader.fold_button.connect_clicked(move |b| {
             let Some(r) = weak.upgrade() else { return };
@@ -255,6 +274,8 @@ impl Reader {
         } else {
             &o.subject
         });
+        // selectable, but not selected just because it was shown
+        self.subject.select_region(0, 0);
 
         // who, when
         while let Some(c) = self.heads.first_child() {
@@ -314,6 +335,7 @@ impl Reader {
         self.show_privacy(o);
         self.show_invites(o, diffs);
         self.show_body(o);
+        self.show_html(o);
         self.show_attachments(o);
         self.widget.set_visible_child_name("message");
         self.body.queue_resize();
@@ -364,15 +386,16 @@ impl Reader {
                 if p.misleading_links == 1 { "es" } else { "" },
             ));
         }
-        if o.body.kind == BodyKind::Html {
+        if o.has_html && self.prefer_html.get() {
             lines.push(
-                "This message is HTML. It is shown as text, with no styling or images.".to_owned(),
+                "Shown as its HTML, with nothing loaded from the web. h shows it as text."
+                    .to_owned(),
             );
+        } else if o.body.kind == BodyKind::Html {
+            lines.push("This message is HTML, shown as text. h shows its HTML.".to_owned());
         }
-        for (i, l) in lines.iter().enumerate() {
-            let warn = i < lines.len() - usize::from(o.body.kind == BodyKind::Html)
-                && p.misleading_links > 0
-                && l.contains("link");
+        for l in &lines {
+            let warn = p.misleading_links > 0 && l.contains("link") && !l.contains("HTML");
             let b = gtk::Box::builder().spacing(8).build();
             b.add_css_class("card");
             b.set_margin_top(0);
@@ -618,7 +641,22 @@ impl Reader {
             } else {
                 "mail-attachment-symbolic"
             });
-            row.add_prefix(&icon);
+            // a picture shows itself (it is in the message: nothing is fetched)
+            let thumb = (a.mime.starts_with("image/") && a.size < 8 * 1024 * 1024)
+                .then(|| rical_maildir::read::part_bytes(&o.path, a.part).ok())
+                .flatten()
+                .and_then(|b| gdk::Texture::from_bytes(&glib::Bytes::from_owned(b)).ok());
+            match thumb {
+                Some(t) => {
+                    let pic = gtk::Picture::for_paintable(&t);
+                    pic.set_content_fit(gtk::ContentFit::Cover);
+                    pic.set_size_request(56, 56);
+                    pic.set_valign(gtk::Align::Center);
+                    pic.add_css_class("card");
+                    row.add_prefix(&pic);
+                }
+                None => row.add_prefix(&icon),
+            }
             let open = gtk::Button::builder()
                 .label("Open")
                 .valign(gtk::Align::Center)
@@ -816,4 +854,118 @@ fn rsvp_row() -> adw::ActionRow {
         );
     }
     row
+}
+
+/// A web view that shows one page and fetches nothing: no scripts in the
+/// page, no storage, a session thrown away, and (from the page itself) a
+/// Content-Security-Policy that blocks every load. Links are not followed.
+fn html_view() -> webkit::WebView {
+    use webkit::prelude::*;
+    let settings = webkit::Settings::new();
+    settings.set_enable_javascript_markup(false);
+    settings.set_javascript_can_open_windows_automatically(false);
+    settings.set_enable_page_cache(false);
+    settings.set_enable_html5_local_storage(false);
+    settings.set_enable_html5_database(false);
+    settings.set_enable_webgl(false);
+    settings.set_auto_load_images(true);
+    settings.set_hardware_acceleration_policy(webkit::HardwareAccelerationPolicy::Never);
+    let web = webkit::WebView::builder()
+        .network_session(&webkit::NetworkSession::new_ephemeral())
+        .settings(&settings)
+        .build();
+    web.set_height_request(240);
+    web.set_hexpand(true);
+    web.update_property(&[gtk::accessible::Property::Label("Message")]);
+    web
+}
+
+impl Reader {
+    /// Wire the HTML view: links go to the app, it grows to fit its page.
+    pub fn setup_html(self: &Rc<Self>) {
+        use webkit::prelude::*;
+        let weak = Rc::downgrade(self);
+        self.web.connect_decide_policy(move |_, decision, kind| {
+            use webkit::PolicyDecisionType as T;
+            if !matches!(kind, T::NavigationAction | T::NewWindowAction) {
+                return false;
+            }
+            let uri = decision
+                .downcast_ref::<webkit::NavigationPolicyDecision>()
+                .and_then(|d| d.navigation_action())
+                .and_then(|a| a.request())
+                .and_then(|r| r.uri())
+                .map(|u| u.to_string())
+                .unwrap_or_default();
+            // the page itself, and nothing else
+            if uri == "about:blank" && kind == T::NavigationAction {
+                return false;
+            }
+            decision.ignore();
+            let clicked = decision
+                .downcast_ref::<webkit::NavigationPolicyDecision>()
+                .and_then(|d| d.navigation_action())
+                .is_some_and(|a| a.navigation_type() == webkit::NavigationType::LinkClicked);
+            if clicked
+                && let Some(r) = weak.upgrade()
+                && let Some(h) = r.on_url.borrow().clone()
+            {
+                h(uri);
+            }
+            true
+        });
+        // as tall as its page, so the reader scrolls it with the rest
+        let weak = Rc::downgrade(self);
+        self.web.connect_load_changed(move |web, ev| {
+            if ev != webkit::LoadEvent::Finished {
+                return;
+            }
+            let Some(r) = weak.upgrade() else { return };
+            r.fit_html(web);
+            let (w, r2) = (web.clone(), Rc::downgrade(&r));
+            glib::timeout_add_local_once(std::time::Duration::from_millis(400), move || {
+                if let Some(r) = r2.upgrade() {
+                    r.fit_html(&w);
+                }
+            });
+        });
+    }
+
+    fn fit_html(&self, web: &webkit::WebView) {
+        use webkit::prelude::*;
+        let w = web.clone();
+        web.evaluate_javascript(
+            "Math.max(document.body ? document.body.scrollHeight : 0, document.documentElement.scrollHeight)",
+            None,
+            None,
+            None::<&gtk::gio::Cancellable>,
+            move |r| {
+                if let Ok(v) = r {
+                    let h = v.to_int32().clamp(60, 40_000);
+                    w.set_height_request(h + 16);
+                }
+            },
+        );
+    }
+
+    /// Show the message's HTML, if it has some and that is wanted.
+    fn show_html(&self, o: &Opened) {
+        use webkit::prelude::*;
+        let doc = (o.has_html && self.prefer_html.get())
+            .then(|| rical_maildir::read::html_document(&o.path).ok().flatten())
+            .flatten();
+        match doc {
+            Some(doc) => {
+                self.web.set_height_request(240);
+                self.web.load_html(&doc, None);
+                self.body_stack.set_visible_child_name("html");
+            }
+            None => self.body_stack.set_visible_child_name("text"),
+        }
+    }
+
+    /// Whether the message in front is shown as HTML.
+    pub fn showing_html(&self) -> bool {
+        self.body_stack.visible_child_name().as_deref() == Some("html")
+    }
 }

@@ -162,8 +162,19 @@ impl AddressEntry {
         if let Some(row) = self.list.row_at_index(0) {
             self.list.select_row(Some(&row));
         }
+        // under the address being typed, not the start of the entry
+        let chars = text[..start].chars().count();
+        let x = self
+            .entry
+            .delegate()
+            .and_downcast::<gtk::Text>()
+            .and_then(|t| {
+                let (strong, _) = t.compute_cursor_extents(chars);
+                t.compute_point(&self.entry, &gtk::graphene::Point::new(strong.x(), 0.0))
+            })
+            .map_or(0, |p| p.x() as i32);
         self.popover
-            .set_pointing_to(Some(&gdk::Rectangle::new(0, 0, 1, self.entry.height())));
+            .set_pointing_to(Some(&gdk::Rectangle::new(x, 0, 1, self.entry.height())));
         self.popover.popup();
     }
 

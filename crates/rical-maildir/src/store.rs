@@ -159,6 +159,8 @@ pub struct Summary {
     pub references: Vec<String>,
     pub size: u64,
     pub attachments: bool,
+    /// The start of what it says, on one line, for the list.
+    pub preview: String,
 }
 
 impl Summary {
@@ -197,7 +199,8 @@ pub fn summarize(path: &Path, folder: &str, is_new: bool) -> Option<Summary> {
         flags.seen = false;
     }
     let (head, size, mtime) = read_head(path).ok()?;
-    let msg = MessageParser::new().parse_headers(&head)?;
+    // the head and the start of the body: enough for the list's preview line
+    let msg = MessageParser::new().parse(&head)?;
     let root = msg.root();
     let from = root.from().and_then(|l| l.first());
     let to = root
@@ -246,6 +249,7 @@ pub fn summarize(path: &Path, folder: &str, is_new: bool) -> Option<Summary> {
             .unwrap_or_default(),
         size,
         attachments,
+        preview: preview_of(&root),
     })
 }
 
@@ -791,4 +795,34 @@ pub fn relocate(path: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// The start of what a message says, on one line: its text, or its HTML
+/// read the way the reader reads it (hidden "preheader" text left out).
+fn preview_of(root: &mail_parser::MessageRef) -> String {
+    let text = root.text_body().next().and_then(|p| {
+        if p.is_content_type("text", "html") {
+            p.text().map(|h| crate::html::convert(&h).text)
+        } else {
+            p.text().map(|t| t.into_owned())
+        }
+    });
+    let flat = text
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('>'))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let words: Vec<&str> = flat.split_whitespace().collect();
+    let mut out = String::new();
+    for w in words {
+        if out.len() + w.len() > 200 {
+            break;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(w);
+    }
+    out
 }

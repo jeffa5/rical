@@ -2717,7 +2717,7 @@ rec {
           "v2_88" = [ "v2_86" "gio-sys/v2_88" "glib/v2_88" ];
           "v2_90" = [ "v2_88" "gio-sys/v2_90" "glib/v2_90" ];
         };
-        resolvedDefaultFeatures = [ "v2_58" "v2_60" "v2_62" "v2_64" "v2_66" ];
+        resolvedDefaultFeatures = [ "v2_58" "v2_60" "v2_62" "v2_64" "v2_66" "v2_68" "v2_70" ];
       };
       "gio-sys" = rec {
         crateName = "gio-sys";
@@ -2772,7 +2772,7 @@ rec {
           "v2_88" = [ "v2_86" ];
           "v2_90" = [ "v2_88" ];
         };
-        resolvedDefaultFeatures = [ "v2_58" "v2_60" "v2_62" "v2_64" "v2_66" ];
+        resolvedDefaultFeatures = [ "v2_58" "v2_60" "v2_62" "v2_64" "v2_66" "v2_68" "v2_70" ];
       };
       "glib" = rec {
         crateName = "glib";
@@ -2878,7 +2878,7 @@ rec {
           "v2_88" = [ "v2_86" "glib-sys/v2_88" ];
           "v2_90" = [ "v2_88" "glib-sys/v2_90" ];
         };
-        resolvedDefaultFeatures = [ "default" "futures" "futures-channel" "futures-core" "futures-executor" "futures-task" "futures-util" "gio" "gio-sys" "v2_58" "v2_60" "v2_62" "v2_64" "v2_66" ];
+        resolvedDefaultFeatures = [ "default" "futures" "futures-channel" "futures-core" "futures-executor" "futures-task" "futures-util" "gio" "gio-sys" "v2_58" "v2_60" "v2_62" "v2_64" "v2_66" "v2_68" "v2_70" ];
       };
       "glib-macros" = rec {
         crateName = "glib-macros";
@@ -2954,7 +2954,7 @@ rec {
           "v2_88" = [ "v2_86" ];
           "v2_90" = [ "v2_88" ];
         };
-        resolvedDefaultFeatures = [ "v2_58" "v2_60" "v2_62" "v2_64" "v2_66" ];
+        resolvedDefaultFeatures = [ "v2_58" "v2_60" "v2_62" "v2_64" "v2_66" "v2_68" "v2_70" ];
       };
       "gobject-sys" = rec {
         crateName = "gobject-sys";
@@ -2995,7 +2995,7 @@ rec {
           "v2_84" = [ "v2_82" ];
           "v2_86" = [ "v2_84" ];
         };
-        resolvedDefaultFeatures = [ "v2_58" "v2_62" "v2_66" ];
+        resolvedDefaultFeatures = [ "v2_58" "v2_62" "v2_66" "v2_68" "v2_70" ];
       };
       "graphene-rs" = rec {
         crateName = "graphene-rs";
@@ -3687,6 +3687,65 @@ rec {
         ];
         features = {
           "no-panic" = [ "dep:no-panic" ];
+        };
+      };
+      "javascriptcore6" = rec {
+        crateName = "javascriptcore6";
+        version = "0.6.0";
+        edition = "2024";
+        sha256 = "1nrd6rrygxr6r1vg6xdnar6rbkwahgvnwfvjd1hdriknv5j4z3cd";
+        authors = [
+          "Bilal Elmoussaoui <bil.elmoussaoui@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "glib";
+            packageId = "glib";
+          }
+          {
+            name = "javascriptcore6-sys";
+            packageId = "javascriptcore6-sys";
+            rename = "ffi";
+          }
+          {
+            name = "libc";
+            packageId = "libc";
+          }
+        ];
+        features = {
+          "v2_48" = [ "ffi/v2_48" ];
+        };
+      };
+      "javascriptcore6-sys" = rec {
+        crateName = "javascriptcore6-sys";
+        version = "0.6.0";
+        edition = "2024";
+        sha256 = "1xlwwgdj1pwkfxn3qr75wl7lpbqz9ly5kf69c5q9m568h5spifgj";
+        libName = "javascriptcore6_sys";
+        authors = [
+          "Bilal Elmoussaoui <bil.elmoussaoui@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "glib-sys";
+            packageId = "glib-sys";
+          }
+          {
+            name = "gobject-sys";
+            packageId = "gobject-sys";
+          }
+          {
+            name = "libc";
+            packageId = "libc";
+          }
+        ];
+        buildDependencies = [
+          {
+            name = "system-deps";
+            packageId = "system-deps 7.0.8";
+          }
+        ];
+        features = {
         };
       };
       "jiff" = rec {
@@ -5911,6 +5970,11 @@ rec {
             name = "rical-ui";
             packageId = "rical-ui";
           }
+          {
+            name = "webkit6";
+            packageId = "webkit6";
+            rename = "webkit";
+          }
         ];
         devDependencies = [
           {
@@ -6738,6 +6802,89 @@ rec {
           "unty" = [ "dep:unty" ];
         };
         resolvedDefaultFeatures = [ "const_generics" "const_new" "union" ];
+      };
+      "soup3" = rec {
+        crateName = "soup3";
+        version = "0.9.0";
+        edition = "2024";
+        sha256 = "0alnb9h78786wh5cc8y2ks85n76n0ify2dykxww2ac3dzxcqplwj";
+        libName = "soup";
+        authors = [
+          "The Gtk-rs Project Developers"
+        ];
+        dependencies = [
+          {
+            name = "futures-channel";
+            packageId = "futures-channel";
+          }
+          {
+            name = "gio";
+            packageId = "gio";
+            features = [ "v2_70" ];
+          }
+          {
+            name = "glib";
+            packageId = "glib";
+            features = [ "v2_66" ];
+          }
+          {
+            name = "libc";
+            packageId = "libc";
+          }
+          {
+            name = "soup3-sys";
+            packageId = "soup3-sys";
+            rename = "ffi";
+          }
+        ];
+        features = {
+          "default" = [ "ffi/v3_0" ];
+          "v3_2" = [ "ffi/v3_2" ];
+          "v3_4" = [ "v3_2" "ffi/v3_4" ];
+          "v3_6" = [ "v3_4" "ffi/v3_6" ];
+          "v3_8" = [ "v3_6" "ffi/v3_8" ];
+        };
+        resolvedDefaultFeatures = [ "default" ];
+      };
+      "soup3-sys" = rec {
+        crateName = "soup3-sys";
+        version = "0.9.0";
+        edition = "2024";
+        sha256 = "1slvdxd7zmmvsbb6xbr1vpy4avdmfdcw737zg0xzh1mv4m9d5mbr";
+        libName = "soup3_sys";
+        authors = [
+          "The Gtk-rs Project Developers"
+        ];
+        dependencies = [
+          {
+            name = "gio-sys";
+            packageId = "gio-sys";
+          }
+          {
+            name = "glib-sys";
+            packageId = "glib-sys";
+          }
+          {
+            name = "gobject-sys";
+            packageId = "gobject-sys";
+          }
+          {
+            name = "libc";
+            packageId = "libc";
+          }
+        ];
+        buildDependencies = [
+          {
+            name = "system-deps";
+            packageId = "system-deps 7.0.8";
+          }
+        ];
+        features = {
+          "v3_4" = [ "v3_2" ];
+          "v3_6" = [ "v3_4" ];
+          "v3_8" = [ "v3_6" ];
+        };
+        resolvedDefaultFeatures = [ "v3_0" ];
       };
       "stable_deref_trait" = rec {
         crateName = "stable_deref_trait";
@@ -7848,6 +7995,124 @@ rec {
           }
         ];
 
+      };
+      "webkit6" = rec {
+        crateName = "webkit6";
+        version = "0.6.1";
+        edition = "2024";
+        sha256 = "0w1blamii4hy2g6pjkwv33zvqc1hl12i7rrlw4m4ngc1j8mdsna9";
+        authors = [
+          "Bilal Elmoussaoui <bil.elmoussaoui@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "gdk4";
+            packageId = "gdk4";
+            rename = "gdk";
+          }
+          {
+            name = "gio";
+            packageId = "gio";
+          }
+          {
+            name = "glib";
+            packageId = "glib";
+          }
+          {
+            name = "gtk4";
+            packageId = "gtk4";
+            rename = "gtk";
+          }
+          {
+            name = "javascriptcore6";
+            packageId = "javascriptcore6";
+            rename = "javascriptcore";
+          }
+          {
+            name = "libc";
+            packageId = "libc";
+          }
+          {
+            name = "soup3";
+            packageId = "soup3";
+            rename = "soup";
+          }
+          {
+            name = "webkit6-sys";
+            packageId = "webkit6-sys";
+            rename = "ffi";
+          }
+        ];
+        features = {
+          "gtk_v4_18" = [ "gtk/v4_18" ];
+          "v2_42" = [ "ffi/v2_42" ];
+          "v2_44" = [ "ffi/v2_44" "v2_42" ];
+          "v2_46" = [ "ffi/v2_46" "v2_44" ];
+          "v2_48" = [ "ffi/v2_48" "v2_46" ];
+          "v2_50" = [ "ffi/v2_50" "v2_48" ];
+          "v2_52" = [ "ffi/v2_52" "v2_50" ];
+        };
+      };
+      "webkit6-sys" = rec {
+        crateName = "webkit6-sys";
+        version = "0.6.0";
+        edition = "2024";
+        sha256 = "1095y3falmhpkigw2rvjjl7rw3lvd9z2bj04g7w1n17z0g77hq13";
+        libName = "webkit6_sys";
+        authors = [
+          "Bilal Elmoussaoui <bil.elmoussaoui@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "gdk4-sys";
+            packageId = "gdk4-sys";
+            rename = "gdk-sys";
+          }
+          {
+            name = "gio-sys";
+            packageId = "gio-sys";
+          }
+          {
+            name = "glib-sys";
+            packageId = "glib-sys";
+          }
+          {
+            name = "gobject-sys";
+            packageId = "gobject-sys";
+          }
+          {
+            name = "gtk4-sys";
+            packageId = "gtk4-sys";
+            rename = "gtk-sys";
+          }
+          {
+            name = "javascriptcore6-sys";
+            packageId = "javascriptcore6-sys";
+            rename = "javascriptcore-sys";
+          }
+          {
+            name = "libc";
+            packageId = "libc";
+          }
+          {
+            name = "soup3-sys";
+            packageId = "soup3-sys";
+            rename = "soup-sys";
+          }
+        ];
+        buildDependencies = [
+          {
+            name = "system-deps";
+            packageId = "system-deps 7.0.8";
+          }
+        ];
+        features = {
+          "v2_44" = [ "v2_42" ];
+          "v2_46" = [ "v2_44" ];
+          "v2_48" = [ "v2_46" ];
+          "v2_50" = [ "v2_48" ];
+          "v2_52" = [ "v2_50" ];
+        };
       };
       "winapi" = rec {
         crateName = "winapi";

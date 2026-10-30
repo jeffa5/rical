@@ -17,7 +17,9 @@ pub const SETTINGS: &[(&str, &str)] = &[
     (
         "me",
         "Your addresses, as `Name <address>` separated by commas. The first is what \
-         new mail is from; replies are from the one they were sent to.",
+         new mail is from; replies are from the one they were sent to. With accounts, \
+         give each its own as `account work = Me <me@work.example>` lines: mail from \
+         one keeps its draft and sent copy in that account.",
     ),
     (
         "contacts",
@@ -38,10 +40,6 @@ pub const SETTINGS: &[(&str, &str)] = &[
         "send",
         "A command run after a message is queued, so it goes at once: for example \
          `rical-mail-queue run --once`. Default none: your rical-mail-queue service sends it.",
-    ),
-    (
-        "sync",
-        "The command that fetches mail, run by :sync (for example `mbsync -a`). Default none.",
     ),
     (
         "drafts",
@@ -91,6 +89,17 @@ pub const SETTINGS: &[(&str, &str)] = &[
          :sync. Default: mu index or notmuch new for those.",
     ),
     (
+        "sort",
+        "How lists are ordered: date (newest first, the default), from, subject or size; add \
+         reverse for the other way (for example 'from reverse'). :sort changes it for now.",
+    ),
+    (
+        "spell",
+        "A spell checker that reads text and prints the misspelt words, one a line: \
+         for example 'aspell list' or 'hunspell -l -d en_GB'. Misspelt words are underlined \
+         as you write. Default none.",
+    ),
+    (
         "signature",
         "A file with your signature, or the text itself. Added after `-- `.",
     ),
@@ -110,7 +119,7 @@ pub const SETTINGS: &[(&str, &str)] = &[
     ("threads", "Show messages in conversations. Default true."),
     (
         "read-after",
-        "How long a message is on screen before it counts as read: 0s, 2s… or never. Default 1s.",
+        "How long a message is on screen before it counts as read: 0s, 2s… or never (the default: only marking it does, U).",
     ),
     (
         "font",
@@ -132,11 +141,13 @@ pub const SETTINGS: &[(&str, &str)] = &[
 pub struct Options {
     pub mail: Option<PathBuf>,
     pub me: Vec<Mailbox>,
+    /// Addresses by account (`account work = Me <me@work.example>`): mail
+    /// from one is kept in that account's Drafts and Sent.
+    pub accounts: Vec<(String, Vec<Mailbox>)>,
     pub contacts: Option<PathBuf>,
     pub vdir: Option<PathBuf>,
     pub queue: PathBuf,
     pub send: Option<String>,
-    pub sync: Option<String>,
     pub drafts: Option<String>,
     pub archive: Option<String>,
     pub wrap: usize,
@@ -144,6 +155,9 @@ pub struct Options {
     pub markdown: bool,
     pub send_delay: u32,
     pub notify: bool,
+    pub spell: Option<String>,
+    pub sort: rical_maildir::thread::SortKey,
+    pub sort_reverse: bool,
     /// Where searching happens.
     pub search: rical_maildir::backend::Backend,
     /// The command that brings the search index up to date.
@@ -172,11 +186,11 @@ impl Default for Options {
         Self {
             mail: None,
             me: Vec::new(),
+            accounts: Vec::new(),
             contacts: None,
             vdir: None,
             queue: data.join("rical-mail-queue/outbox"),
             send: None,
-            sync: None,
             drafts: None,
             archive: None,
             wrap: 72,
@@ -184,6 +198,9 @@ impl Default for Options {
             markdown: false,
             send_delay: 10,
             notify: true,
+            spell: None,
+            sort: rical_maildir::thread::SortKey::Date,
+            sort_reverse: false,
             search: rical_maildir::backend::Backend::Builtin,
             index: None,
             reply_top: false,
@@ -192,7 +209,7 @@ impl Default for Options {
             calendar: "rical-calendar".to_owned(),
             contacts_app: "rical-contacts".to_owned(),
             threads: true,
-            read_after: Some(1),
+            read_after: None,
             proportional: false,
             binds: None,
             renderer: Some("cairo".to_owned()),
@@ -248,6 +265,18 @@ impl Options {
         base: &std::path::Path,
         origin: &str,
     ) -> Result<(), String> {
+        // an account's addresses: `account work = Me <me@work.example>`
+        if let Some(account) = name.strip_prefix("account ").map(str::trim) {
+            let list = addr::parse_list(value);
+            if list.is_empty() {
+                return Err(format!(
+                    "{origin}: account {account} is addresses like Name <you@example.com>"
+                ));
+            }
+            self.accounts.retain(|(a, _)| a != account);
+            self.accounts.push((account.to_owned(), list));
+            return Ok(());
+        }
         match name {
             "mail" => self.mail = Some(expand(value, base)),
             "contacts" => self.contacts = Some(expand(value, base)),
@@ -263,7 +292,6 @@ impl Options {
                 }
             }
             "send" => self.send = Some(value.to_owned()).filter(|v| !v.is_empty()),
-            "sync" => self.sync = Some(value.to_owned()).filter(|v| !v.is_empty()),
             "drafts" => self.drafts = Some(value.to_owned()).filter(|v| !v.is_empty()),
             "archive" => self.archive = Some(value.to_owned()).filter(|v| !v.is_empty()),
             "signature" => self.signature = Some(value.to_owned()).filter(|v| !v.is_empty()),
@@ -282,6 +310,15 @@ impl Options {
             "auto-wrap" => self.auto_wrap = flag(value, origin)?,
             "markdown" => self.markdown = flag(value, origin)?,
             "notify" => self.notify = flag(value, origin)?,
+            "spell" => self.spell = Some(value.to_owned()).filter(|v| !v.is_empty()),
+            "sort" => {
+                let mut words = value.split_whitespace();
+                self.sort = words
+                    .next()
+                    .and_then(rical_maildir::thread::SortKey::parse)
+                    .ok_or(format!("{origin}: sort is date, from, subject or size, then optionally reverse, not “{value}”"))?;
+                self.sort_reverse = words.next().is_some_and(|w| w == "reverse");
+            }
             "search" => self.search = rical_maildir::backend::Backend::from_setting(value),
             "index" => self.index = Some(value.to_owned()).filter(|v| !v.is_empty()),
             "send-delay" => {

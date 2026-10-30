@@ -18,7 +18,7 @@ use rical_ui::{
 
 use crate::{
     reader::Reader,
-    state::{Place, SharedState},
+    state::{Place, SharedState, unified_title},
 };
 
 pub struct Window {
@@ -38,11 +38,18 @@ pub struct Window {
     reader_title: adw::WindowTitle,
     list_stack: gtk::Stack,
     pub toasts: adw::ToastOverlay,
+    /// The mail view and the messages being written, as tabs.
+    pub tabs: adw::TabView,
+    /// The folders, for "Move to" in the message menus.
+    move_menu: gio::Menu,
+    pub composes: RefCell<Vec<Rc<crate::compose::Compose>>>,
     pub history: RefCell<Vec<String>>,
     pending_keys: RefCell<Vec<rical_ui::binds::Key>>,
     monitors: RefCell<Vec<gio::FileMonitor>>,
     debounce: RefCell<Option<glib::SourceId>>,
     read_timer: RefCell<Option<glib::SourceId>>,
+    /// Which opening of a message the reader waits for.
+    reader_ticket: Cell<u64>,
     /// Changes the app makes itself raise no reload until this has passed.
     pub quiet_until: Cell<Option<Instant>>,
     pub syncing: Cell<bool>,
@@ -73,7 +80,7 @@ impl Window {
         let main_menu = gio::Menu::new();
         let doing = gio::Menu::new();
         doing.append(Some("_Command Line"), Some("win.palette"));
-        doing.append(Some("_Fetch Mail"), Some("win.run::sync"));
+
         doing.append(Some("_Reload"), Some("win.run::reload"));
         main_menu.append_section(None, &doing);
         let app_items = gio::Menu::new();
@@ -115,12 +122,6 @@ impl Window {
             .action_name("win.run")
             .action_target(&"compose".to_variant())
             .build();
-        let fetch = gtk::Button::builder()
-            .icon_name("view-refresh-symbolic")
-            .tooltip_text("Fetch mail (Ctrl+R)")
-            .action_name("win.run")
-            .action_target(&"sync".to_variant())
-            .build();
         let fold = gtk::Button::builder()
             .icon_name("sidebar-show-symbolic")
             .tooltip_text("Folders (F)")
@@ -130,9 +131,8 @@ impl Window {
         let list_header = adw::HeaderBar::builder().title_widget(&title).build();
         list_header.pack_start(&fold);
         list_header.pack_start(&compose);
-        list_header.pack_end(&fetch);
         let search = gtk::SearchEntry::builder()
-            .placeholder_text("Search mail: from:ann unread budget… (/)")
+            .placeholder_text("Filter this folder… (/)")
             .hexpand(true)
             .build();
         let top = gtk::Box::builder()
@@ -142,6 +142,16 @@ impl Window {
             .margin_bottom(6)
             .build();
         top.append(&search);
+        // the other kind: everything, everywhere (the search tool, or every folder)
+        let everywhere = gtk::Button::builder()
+            .icon_name("system-search-symbolic")
+            .tooltip_text("Search all mail for this (Shift+Enter; S builds a search)")
+            .css_classes(["flat"])
+            .action_name("win.run")
+            .action_target(&"search-box".to_variant())
+            .build();
+        top.set_spacing(4);
+        top.append(&everywhere);
         let model = gtk::StringList::new(&[]);
         let selection = gtk::SingleSelection::builder()
             .model(&model)
@@ -169,6 +179,16 @@ impl Window {
         let list_stack = gtk::Stack::new();
         list_stack.add_named(&scroller, Some("list"));
         list_stack.add_named(&nothing, Some("none"));
+        let loading = adw::StatusPage::builder()
+            .title("Reading the folder…")
+            .child(
+                &adw::Spinner::builder()
+                    .width_request(32)
+                    .height_request(32)
+                    .build(),
+            )
+            .build();
+        list_stack.add_named(&loading, Some("loading"));
         let list_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
         list_box.append(&top);
         list_box.append(&list_stack);
@@ -209,6 +229,31 @@ impl Window {
                 reader_header.pack_start(&b);
             }
         }
+        // what else can be done to it: the same menu as a right click
+        let move_menu = gio::Menu::new();
+        let more = gtk::MenuButton::builder()
+            .icon_name("view-more-symbolic")
+            .tooltip_text("More for this message")
+            .menu_model(&message_menu(&move_menu))
+            .build();
+        reader_header.pack_end(&more);
+        for (icon, tip, line) in [
+            ("starred-symbolic", "Flag or unflag (s)", "flag"),
+            (
+                "mail-unread-symbolic",
+                "Mark read or unread (U)",
+                "mark toggle",
+            ),
+        ] {
+            reader_header.pack_end(
+                &gtk::Button::builder()
+                    .icon_name(icon)
+                    .tooltip_text(tip)
+                    .action_name("win.run")
+                    .action_target(&line.to_variant())
+                    .build(),
+            );
+        }
         let reader = Reader::new(proportional);
         let reader_view = adw::ToolbarView::new();
         reader_view.add_top_bar(&reader_header);
@@ -233,7 +278,17 @@ impl Window {
             .show_sidebar(true)
             .build();
         let toasts = adw::ToastOverlay::new();
-        toasts.set_child(Some(&outer));
+        // the mail view is the first tab; each message being written gets its own
+        let tabs = adw::TabView::new();
+        let mail_page = tabs.append_pinned(&outer);
+        mail_page.set_title("Mail");
+        mail_page.set_icon(Some(&gio::ThemedIcon::new("mail-unread-symbolic")));
+        let tab_bar = adw::TabBar::builder().view(&tabs).autohide(true).build();
+        let tabbed = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        tabbed.append(&tab_bar);
+        tabs.set_vexpand(true);
+        tabbed.append(&tabs);
+        toasts.set_child(Some(&tabbed));
         let window = adw::ApplicationWindow::builder()
             .application(app)
             .title(crate::APP_NAME)
@@ -267,16 +322,28 @@ impl Window {
             reader_title,
             list_stack,
             toasts,
+            tabs,
+            move_menu,
+            composes: RefCell::default(),
             history: Default::default(),
             pending_keys: Default::default(),
             monitors: Default::default(),
             debounce: Default::default(),
             read_timer: Default::default(),
+            reader_ticket: Cell::new(0),
             quiet_until: Cell::new(None),
             syncing: Cell::new(false),
             me: Default::default(),
         });
         *this.me.borrow_mut() = Rc::downgrade(&this);
+        let weak = Rc::downgrade(&this);
+        *this.reader.on_url.borrow_mut() = Some(Rc::new(move |url| {
+            if let Some(w) = weak.upgrade()
+                && let Err(e) = w.confirm_url(url)
+            {
+                w.toast(&e);
+            }
+        }));
         let weak = Rc::downgrade(&this);
         *this.reader.on_link.borrow_mut() = Some(Rc::new(move |n| {
             if let Some(w) = weak.upgrade()
@@ -287,9 +354,11 @@ impl Window {
         }));
         this.setup_rows(&factory);
         this.setup_signals();
+        this.setup_tabs();
         this.setup_actions();
         this.watch();
         this.refresh();
+        this.load();
         this.focus_view();
         this
     }
@@ -315,7 +384,9 @@ impl Window {
 
     /// Each row of the list: who, when, the subject, and what is on it.
     fn setup_rows(self: &Rc<Self>, factory: &gtk::SignalListItemFactory) {
-        factory.connect_setup(|_, item| {
+        let weak = Rc::downgrade(self);
+        let menu = message_menu(&self.move_menu);
+        factory.connect_setup(move |_, item| {
             let item = item.downcast_ref::<gtk::ListItem>().unwrap();
             let outer = gtk::Box::builder()
                 .spacing(8)
@@ -369,9 +440,54 @@ impl Window {
             text.append(&first);
             text.append(&second);
             text.append(&note);
+            // the start of what it says, dim, one line
+            let preview = gtk::Label::builder()
+                .xalign(0.0)
+                .ellipsize(pango::EllipsizeMode::End)
+                .single_line_mode(true)
+                .css_classes(["dim-label", "caption"])
+                .build();
+            text.append(&preview);
             outer.append(&dot);
             outer.append(&text);
             item.set_child(Some(&outer));
+            // a right click: that message, and what can be done to it
+            let click = gtk::GestureClick::builder().button(3).build();
+            let (w, it, m) = (weak.clone(), item.clone(), menu.clone());
+            click.connect_pressed(move |g, _, x, y| {
+                let Some(w) = w.upgrade() else { return };
+                w.select_position(it.position() as usize);
+                let Some(widget) = g.widget() else { return };
+                let pop = gtk::PopoverMenu::from_model(Some(&m));
+                pop.set_parent(&widget);
+                pop.set_has_arrow(false);
+                pop.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+                pop.connect_closed(|p| {
+                    let p = p.clone();
+                    glib::idle_add_local_once(move || p.unparent());
+                });
+                pop.popup();
+            });
+            outer.add_controller(click);
+            // dragged onto a folder, it moves there (with what is picked)
+            let drag = gtk::DragSource::builder()
+                .actions(gdk::DragAction::MOVE)
+                .build();
+            let (w, it) = (weak.clone(), item.clone());
+            drag.connect_prepare(move |_, _, _| {
+                let w = w.upgrade()?;
+                let at = it.position() as usize;
+                let picked = w
+                    .state
+                    .borrow()
+                    .message_at(at)
+                    .is_some_and(|m| w.state.borrow().picked.contains(&m.path));
+                if !picked {
+                    w.select_position(at);
+                }
+                Some(gdk::ContentProvider::for_value(&DRAG_MESSAGES.to_value()))
+            });
+            outer.add_controller(drag);
         });
         let state = self.state.clone();
         factory.connect_bind(move |_, item| {
@@ -399,8 +515,13 @@ impl Window {
             let clip = subject.next_sibling().unwrap();
             let flag = clip.next_sibling().unwrap();
             let note = second.next_sibling().and_downcast::<gtk::Label>().unwrap();
+            let preview = note.next_sibling().and_downcast::<gtk::Label>().unwrap();
             let outbox = s.place == Place::Outbox;
-            let unread = m.unread() && !outbox;
+            // a folded conversation is unread if any of it is
+            let unread = (m.unread()
+                || s.folded.contains(&m.path)
+                    && s.thread_info.get(&m.path).is_some_and(|(_, u)| *u > 0))
+                && !outbox;
             let picked = s.picked.contains(&m.path);
             if let Some(img) = dot.downcast_ref::<gtk::Image>() {
                 img.set_icon_name(Some(if picked {
@@ -415,7 +536,8 @@ impl Window {
             let who = if outbox
                 || (s
                     .folder()
-                    .is_some_and(|f| matches!(f.role, Role::Sent | Role::Drafts)))
+                    .is_some_and(|f| matches!(f.role, Role::Sent | Role::Drafts))
+                    || matches!(s.place, Place::Unified(Role::Sent | Role::Drafts)))
             {
                 if m.to.is_empty() {
                     "(no recipient)".to_owned()
@@ -426,6 +548,11 @@ impl Window {
                 "(unknown sender)".to_owned()
             } else {
                 m.from_shown().to_owned()
+            };
+            // a folded conversation says how many it holds
+            let who = match s.thread_info.get(&m.path) {
+                Some((n, _)) if s.folded.contains(&m.path) => format!("{who}  ({n})"),
+                _ => who,
             };
             from.set_label(&who);
             if unread {
@@ -443,9 +570,24 @@ impl Window {
             });
             clip.set_visible(m.attachments);
             flag.set_visible(m.flags.flagged);
+            // the Outbox says why each waits; elsewhere where it is, by the date
             let extra = s.outbox_notes.get(&m.path).cloned();
-            note.set_visible(extra.is_some());
-            note.set_label(&extra.unwrap_or_default());
+            if outbox {
+                note.set_visible(extra.is_some());
+                note.set_label(&extra.unwrap_or_default());
+                preview.set_visible(false);
+            } else {
+                if let Some(e) = extra {
+                    when.set_label(&format!(
+                        "{} · {}",
+                        e.trim_start_matches("in "),
+                        short_date(m.date)
+                    ));
+                }
+                note.set_visible(false);
+                preview.set_label(&m.preview);
+                preview.set_visible(!m.preview.is_empty());
+            }
         });
     }
 
@@ -458,6 +600,22 @@ impl Window {
             }
             w.search_now();
         });
+        // Shift+Enter in the box searches everywhere
+        let keys = gtk::EventControllerKey::new();
+        let weak = Rc::downgrade(self);
+        keys.connect_key_pressed(move |_, key, _, mods| {
+            if matches!(key, gdk::Key::Return | gdk::Key::KP_Enter)
+                && mods.contains(gdk::ModifierType::SHIFT_MASK)
+                && let Some(w) = weak.upgrade()
+            {
+                if let Err(e) = w.execute("search-box") {
+                    w.toast(&e);
+                }
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+        self.search.add_controller(keys);
         let weak = Rc::downgrade(self);
         self.search.connect_activate(move |_| {
             if let Some(w) = weak.upgrade() {
@@ -498,6 +656,10 @@ impl Window {
             let name = row.widget_name();
             if name == "outbox" {
                 let _ = w.execute("outbox");
+            } else if let Some(account) = name.strip_prefix("account:") {
+                w.toggle_account(account);
+            } else if let Some(role) = name.strip_prefix("unified:") {
+                let _ = w.execute(&format!("unified {role}"));
             } else if let Some(f) = w
                 .state
                 .borrow()
@@ -552,6 +714,10 @@ impl Window {
     /// Key presses go to the bindings, except while typing or in a dialog.
     fn handle_key(self: &Rc<Self>, keyval: gdk::Key, mods: gdk::ModifierType) -> glib::Propagation {
         use glib::Propagation::{Proceed, Stop};
+        // a message being written has its own keys
+        if let Some(c) = self.current_compose() {
+            return c.handle_key(keyval, mods);
+        }
         if self.window.visible_dialog().is_some() {
             return Proceed;
         }
@@ -627,6 +793,7 @@ impl Window {
         }
         self.fill_list();
         self.show_message();
+        self.search_body();
     }
 
     /// Everything shown, from the state.
@@ -640,27 +807,103 @@ impl Window {
         while let Some(c) = self.folder_list.first_child() {
             self.folder_list.remove(&c);
         }
+        // "Move to" lists the folders, by the name the move command takes
+        self.move_menu.remove_all();
+        for f in &self.state.borrow().folders {
+            let i = gio::MenuItem::new(Some(&f.name.replace('_', "__")), None);
+            i.set_action_and_target_value(
+                Some("win.run"),
+                Some(&format!("move {}", rical_ui::command::quote(&f.name)).to_variant()),
+            );
+            self.move_menu.append_item(&i);
+        }
         let s = self.state.borrow();
         let mut select: Option<gtk::ListBoxRow> = None;
-        for f in &s.folders {
-            let icon = match f.role {
-                Role::Inbox => "mail-unread-symbolic",
-                Role::Drafts => "document-edit-symbolic",
-                Role::Sent => "mail-send-symbolic",
-                Role::Archive => "folder-symbolic",
-                Role::Junk => "mail-mark-junk-symbolic",
-                Role::Trash => "user-trash-symbolic",
-                Role::Other => "folder-symbolic",
-            };
-            let row = folder_row(icon, &f.name, f.unread);
-            row.set_widget_name(&f.path.to_string_lossy());
-            self.folder_list.append(&row);
-            if s.place == Place::Folder(f.path.clone()) {
-                select = Some(row);
+        let icon = |role: Role| match role {
+            Role::Inbox => "mail-unread-symbolic",
+            Role::Drafts => "document-edit-symbolic",
+            Role::Sent => "mail-send-symbolic",
+            Role::Archive => "folder-symbolic",
+            Role::Junk => "mail-mark-junk-symbolic",
+            Role::Trash => "user-trash-symbolic",
+            Role::Other => "folder-symbolic",
+        };
+        if s.grouped() {
+            // everything together, then each account
+            self.folder_list.append(&heading_row("All accounts"));
+            for role in [
+                Role::Inbox,
+                Role::Drafts,
+                Role::Sent,
+                Role::Archive,
+                Role::Junk,
+                Role::Trash,
+            ] {
+                let of = s.with_role(role);
+                if of.is_empty() || (role != Role::Inbox && of.len() < 2) {
+                    continue;
+                }
+                let unread = if role == Role::Trash || role == Role::Junk {
+                    0
+                } else {
+                    of.iter().map(|f| f.unread).sum()
+                };
+                let row = folder_row(icon(role), unified_title(role), unread, 0);
+                row.set_widget_name(&format!("unified:{}", unified_key(role)));
+                self.folder_list.append(&row);
+                if s.place == Place::Unified(role) {
+                    select = Some(row);
+                }
+            }
+            let remembered = rical_ui::uistate::get("accounts").unwrap_or_default();
+            for a in s.accounts() {
+                let unread: usize = a
+                    .folders
+                    .iter()
+                    .filter(|&&i| !matches!(s.folders[i].role, Role::Junk | Role::Trash))
+                    .map(|&i| s.folders[i].unread)
+                    .sum();
+                // open when asked to be, else when it has something unread
+                let open = match remembered.split(',').find_map(|e| {
+                    e.strip_suffix('+')
+                        .filter(|n| *n == a.name)
+                        .map(|_| true)
+                        .or_else(|| e.strip_suffix('-').filter(|n| *n == a.name).map(|_| false))
+                }) {
+                    Some(v) => v,
+                    None => unread > 0,
+                };
+                let head = account_row(&a.name, unread, open);
+                head.set_widget_name(&format!("account:{}", a.name));
+                self.folder_list.append(&head);
+                if !open {
+                    continue;
+                }
+                for &i in &a.folders {
+                    let f = &s.folders[i];
+                    let row = folder_row(icon(f.role), &s.short_name(f), f.unread, 1);
+                    row.set_widget_name(&f.path.to_string_lossy());
+                    self.droppable(&row, &f.name);
+                    self.folder_list.append(&row);
+                    if s.place == Place::Folder(f.path.clone()) {
+                        select = Some(row);
+                    }
+                }
+            }
+            self.folder_list.append(&heading_row("Outgoing"));
+        } else {
+            for f in &s.folders {
+                let row = folder_row(icon(f.role), &f.name, f.unread, 0);
+                row.set_widget_name(&f.path.to_string_lossy());
+                self.droppable(&row, &f.name);
+                self.folder_list.append(&row);
+                if s.place == Place::Folder(f.path.clone()) {
+                    select = Some(row);
+                }
             }
         }
         let n = s.outbox_count();
-        let row = folder_row("network-transmit-symbolic", "Outbox", n);
+        let row = folder_row("network-transmit-symbolic", "Outbox", n, 0);
         row.set_widget_name("outbox");
         self.folder_list.append(&row);
         if s.place == Place::Outbox {
@@ -672,6 +915,37 @@ impl Window {
             self.folder_list.select_row(Some(&r));
             self.syncing.set(false);
         }
+    }
+
+    /// Fold or open an account's folders, and remember which.
+    pub fn toggle_account(&self, name: &str) {
+        let (open_now, remembered) = {
+            let s = self.state.borrow();
+            let remembered = rical_ui::uistate::get("accounts").unwrap_or_default();
+            let unread: usize = s
+                .accounts()
+                .iter()
+                .find(|a| a.name == name)
+                .map_or(0, |a| a.folders.iter().map(|&i| s.folders[i].unread).sum());
+            let open = remembered
+                .split(',')
+                .find_map(|e| {
+                    e.strip_suffix('+')
+                        .filter(|n| *n == name)
+                        .map(|_| true)
+                        .or_else(|| e.strip_suffix('-').filter(|n| *n == name).map(|_| false))
+                })
+                .unwrap_or(unread > 0);
+            (open, remembered)
+        };
+        let mut entries: Vec<String> = remembered
+            .split(',')
+            .filter(|e| !e.is_empty() && e[..e.len() - 1] != *name)
+            .map(str::to_owned)
+            .collect();
+        entries.push(format!("{name}{}", if open_now { '-' } else { '+' }));
+        rical_ui::uistate::set("accounts", &entries.join(","));
+        self.fill_folders();
     }
 
     /// Show the list for the search, keeping the selection.
@@ -696,6 +970,8 @@ impl Window {
         };
         let refs: Vec<&str> = items.iter().map(String::as_str).collect();
         self.model.splice(0, self.model.n_items(), &refs);
+        self.list_stack
+            .set_visible_child_name(if refs.is_empty() { "none" } else { "list" });
         match selected {
             Some(p) => {
                 self.selection.set_selected(p);
@@ -713,6 +989,13 @@ impl Window {
         let s = self.state.borrow();
         let q = !s.query.is_empty();
         let mut text = format!("{count} message{}", if count == 1 { "" } else { "s" });
+        if s.sort != rical_maildir::thread::SortKey::Date || s.sort_reverse {
+            text += &format!(
+                " · by {}{}",
+                s.sort.name(),
+                if s.sort_reverse { " (reversed)" } else { "" }
+            );
+        }
         if unread > 0 {
             text += &format!(" · {unread} unread");
         }
@@ -768,7 +1051,7 @@ impl Window {
         if let Some(id) = self.read_timer.borrow_mut().take() {
             id.remove();
         }
-        let (path, in_contacts, note, delay) = {
+        let (path, note, delay) = {
             let s = self.state.borrow();
             let Some(m) = s.selected_summary() else {
                 drop(s);
@@ -777,10 +1060,8 @@ impl Window {
                 self.reader_title.set_title("");
                 return;
             };
-            let in_contacts = false;
             (
                 m.path.clone(),
-                in_contacts,
                 s.outbox_notes
                     .get(&m.path)
                     .filter(|_| s.place == Place::Outbox)
@@ -788,27 +1069,49 @@ impl Window {
                 s.opts.read_after,
             )
         };
-        match read::open(&path) {
-            Ok(o) => {
-                let in_contacts = in_contacts
-                    || o.from
-                        .first()
-                        .is_some_and(|f| self.state.borrow().is_contact(&f.address));
-                self.reader_title.set_title(&o.subject);
-                let diffs = if o.invites.is_empty() {
-                    Vec::new()
-                } else {
-                    self.state.borrow_mut().invite_diffs(&path)
-                };
-                self.reader.show(&o, in_contacts, note.as_deref(), &diffs);
-                self.state.borrow_mut().opened = Some(Rc::new(o));
+        // a big message is parsed away from the window
+        self.state.borrow_mut().opened = None;
+        let ticket = self.reader_ticket.get() + 1;
+        self.reader_ticket.set(ticket);
+        let weak = Rc::downgrade(self);
+        let p = path.clone();
+        glib::spawn_future_local(async move {
+            let opened = gio::spawn_blocking(move || read::open(&p)).await;
+            let Some(w) = weak.upgrade() else { return };
+            // another was chosen meanwhile
+            if w.reader_ticket.get() != ticket {
+                return;
             }
-            Err(e) => {
-                self.state.borrow_mut().opened = None;
-                self.reader.clear();
-                self.toast(&format!("{e:#}"));
+            match opened {
+                Ok(Ok(o)) => w.shown_opened(o, &path, note.as_deref(), delay),
+                Ok(Err(e)) => {
+                    w.reader.clear();
+                    w.toast(&format!("{e:#}"));
+                }
+                Err(_) => w.reader.clear(),
             }
-        }
+        });
+    }
+
+    fn shown_opened(
+        self: &Rc<Self>,
+        o: read::Opened,
+        path: &std::path::Path,
+        note: Option<&str>,
+        delay: Option<u32>,
+    ) {
+        let in_contacts = o
+            .from
+            .first()
+            .is_some_and(|f| self.state.borrow().is_contact(&f.address));
+        self.reader_title.set_title(&o.subject);
+        let diffs = if o.invites.is_empty() {
+            Vec::new()
+        } else {
+            self.state.borrow_mut().invite_diffs(path)
+        };
+        self.reader.show(&o, in_contacts, note, &diffs);
+        self.state.borrow_mut().opened = Some(Rc::new(o));
         let unread = self
             .state
             .borrow()
@@ -824,6 +1127,65 @@ impl Window {
             });
             *self.read_timer.borrow_mut() = Some(id);
         }
+    }
+
+    /// Read the messages of the place in front, away from the window, and
+    /// show them when they are read. A spinner shows while the list is empty.
+    pub fn load(self: &Rc<Self>) {
+        let job = self.state.borrow_mut().load_job();
+        if self.state.borrow().messages.is_empty() {
+            self.list_stack.set_visible_child_name("loading");
+        }
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let loaded = gio::spawn_blocking(move || job.run()).await;
+            let Some(w) = weak.upgrade() else { return };
+            let Ok(l) = loaded else { return };
+            let applied = w.state.borrow_mut().apply_loaded(l);
+            if applied {
+                w.fill_list();
+                w.search_body();
+                w.show_message();
+            }
+        });
+    }
+
+    /// A search inside the messages (`body:`) reads them: away from the
+    /// window, narrowing what the headers matched when it is done.
+    pub fn search_body(self: &Rc<Self>) {
+        let (query, candidates) = {
+            let s = self.state.borrow();
+            let q = rical_maildir::search::Query::parse(&s.query);
+            if !q.needs_body() {
+                return;
+            }
+            let c: Vec<rical_maildir::store::Summary> = (0..s.shown.len())
+                .filter_map(|n| s.message_at(n).cloned())
+                .collect();
+            (s.query.clone(), c)
+        };
+        self.title.set_subtitle("Searching inside the messages…");
+        let weak = Rc::downgrade(self);
+        let q = query.clone();
+        glib::spawn_future_local(async move {
+            let found = gio::spawn_blocking(move || {
+                let parsed = rical_maildir::search::Query::parse(&q);
+                candidates
+                    .into_iter()
+                    .filter(|m| parsed.matches_body(m))
+                    .map(|m| m.path)
+                    .collect::<std::collections::HashSet<_>>()
+            })
+            .await;
+            let Some(w) = weak.upgrade() else { return };
+            let Ok(found) = found else { return };
+            if w.state.borrow().query != query {
+                return;
+            }
+            w.state.borrow_mut().restrict_shown(&found);
+            w.fill_list();
+            w.show_message();
+        });
     }
 
     pub fn focus_view(&self) {
@@ -911,18 +1273,18 @@ impl Window {
         {
             let mut s = self.state.borrow_mut();
             s.reload_folders();
-            s.reload_messages();
         }
         self.refresh();
+        self.load();
     }
 }
 
-fn folder_row(icon: &str, name: &str, unread: usize) -> gtk::ListBoxRow {
+fn folder_row(icon: &str, name: &str, unread: usize, indent: i32) -> gtk::ListBoxRow {
     let b = gtk::Box::builder()
         .spacing(10)
         .margin_top(6)
         .margin_bottom(6)
-        .margin_start(4)
+        .margin_start(4 + indent * 18)
         .margin_end(4)
         .build();
     b.append(&gtk::Image::from_icon_name(icon));
@@ -990,5 +1352,238 @@ impl Window {
             )));
         }
         self.app.send_notification(Some("new-mail"), &n);
+    }
+}
+
+/// The key for a unified place, as the command takes it.
+pub fn unified_key(role: Role) -> &'static str {
+    match role {
+        Role::Inbox => "inbox",
+        Role::Drafts => "drafts",
+        Role::Sent => "sent",
+        Role::Archive => "archive",
+        Role::Junk => "junk",
+        Role::Trash => "trash",
+        Role::Other => "other",
+    }
+}
+
+/// A label between groups of folders: not a place.
+fn heading_row(text: &str) -> gtk::ListBoxRow {
+    let l = gtk::Label::builder()
+        .label(text)
+        .xalign(0.0)
+        .css_classes(["dim-label", "caption-heading"])
+        .margin_top(10)
+        .margin_bottom(2)
+        .margin_start(8)
+        .build();
+    let row = gtk::ListBoxRow::new();
+    row.set_child(Some(&l));
+    row.set_selectable(false);
+    row.set_activatable(false);
+    row
+}
+
+/// An account's name over its folders, folding them away when clicked.
+fn account_row(name: &str, unread: usize, open: bool) -> gtk::ListBoxRow {
+    let b = gtk::Box::builder()
+        .spacing(8)
+        .margin_top(6)
+        .margin_bottom(6)
+        .margin_start(4)
+        .margin_end(4)
+        .build();
+    b.append(&gtk::Image::from_icon_name(if open {
+        "pan-down-symbolic"
+    } else {
+        "pan-end-symbolic"
+    }));
+    let label = gtk::Label::builder()
+        .label(name)
+        .xalign(0.0)
+        .hexpand(true)
+        .ellipsize(pango::EllipsizeMode::End)
+        .css_classes(["heading"])
+        .build();
+    b.append(&label);
+    if unread > 0 {
+        b.append(
+            &gtk::Label::builder()
+                .label(unread.to_string())
+                .css_classes(["dim-label", "caption", "numeric"])
+                .build(),
+        );
+    }
+    let row = gtk::ListBoxRow::new();
+    row.set_child(Some(&b));
+    row.set_selectable(false);
+    row
+}
+
+impl Window {
+    /// The message being written in the tab in front, if that is the one.
+    pub fn current_compose(&self) -> Option<Rc<crate::compose::Compose>> {
+        let page = self.tabs.selected_page()?;
+        self.composes
+            .borrow()
+            .iter()
+            .find(|c| c.page().as_ref() == Some(&page))
+            .cloned()
+    }
+
+    /// Put a message being written in a tab of its own, and go to it.
+    pub fn add_tab(self: &Rc<Self>, c: &Rc<crate::compose::Compose>) {
+        let page = self.tabs.append(&c.root);
+        page.set_title("New message");
+        page.set_icon(Some(&gio::ThemedIcon::new("mail-message-new-symbolic")));
+        c.set_page(page.clone());
+        self.composes.borrow_mut().push(c.clone());
+        self.tabs.set_selected_page(&page);
+    }
+
+    /// Tabs: the tab in front changed, a tab asked to close.
+    fn setup_tabs(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        self.tabs.connect_selected_page_notify(move |_| {
+            let Some(w) = weak.upgrade() else { return };
+            match w.current_compose() {
+                Some(c) => c.focus_first(),
+                None => w.focus_view(),
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.tabs.connect_close_page(move |tabs, page| {
+            let Some(w) = weak.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
+            let found = w
+                .composes
+                .borrow()
+                .iter()
+                .find(|c| c.page().as_ref() == Some(page))
+                .cloned();
+            match found {
+                // asks, if it would lose what was written
+                Some(c) if c.is_unsaved() => {
+                    tabs.close_page_finish(page, false);
+                    c.ask_leave();
+                }
+                Some(c) => {
+                    w.composes.borrow_mut().retain(|o| !Rc::ptr_eq(o, &c));
+                    tabs.close_page_finish(page, true);
+                }
+                // the mail view stays
+                None => tabs.close_page_finish(page, false),
+            }
+            glib::Propagation::Stop
+        });
+        // closing the window with something unsaved asks first
+        let weak = Rc::downgrade(self);
+        self.window
+            .connect_close_request(move |_| match weak.upgrade() {
+                Some(w) if w.unsaved_tab().is_some() => {
+                    w.warn_unsaved();
+                    glib::Propagation::Stop
+                }
+                _ => glib::Propagation::Proceed,
+            });
+    }
+
+    pub fn unsaved_tab(&self) -> Option<Rc<crate::compose::Compose>> {
+        self.composes
+            .borrow()
+            .iter()
+            .find(|c| c.is_unsaved())
+            .cloned()
+    }
+
+    /// Go to the message with something unsaved, and ask what to do with it.
+    pub fn warn_unsaved(&self) {
+        if let Some(c) = self.unsaved_tab() {
+            c.show_tab();
+            self.toast("This message is not sent or saved");
+        }
+    }
+
+    /// `:tab next|prev|mail|N`: go to a tab.
+    pub fn tab_command(&self, which: &str) -> Result<(), String> {
+        let n = self.tabs.n_pages();
+        let at = self
+            .tabs
+            .selected_page()
+            .map_or(0, |p| self.tabs.page_position(&p));
+        let to = match which.trim() {
+            "" | "next" => (at + 1) % n,
+            "prev" | "previous" => (at + n - 1) % n,
+            "mail" | "first" => 0,
+            "last" => n - 1,
+            num => num
+                .parse::<i32>()
+                .ok()
+                .filter(|v| (1..=n).contains(v))
+                .map(|v| v - 1)
+                .ok_or(format!("no tab “{num}” (there are {n})"))?,
+        };
+        self.tabs.set_selected_page(&self.tabs.nth_page(to));
+        Ok(())
+    }
+}
+
+/// What can be done to a message, for its menu and a right click.
+fn message_menu(move_menu: &gio::Menu) -> gio::Menu {
+    let menu = gio::Menu::new();
+    let item = |m: &gio::Menu, label: &str, line: &str| {
+        let i = gio::MenuItem::new(Some(label), None);
+        i.set_action_and_target_value(Some("win.run"), Some(&line.to_variant()));
+        m.append_item(&i);
+    };
+    let write = gio::Menu::new();
+    item(&write, "_Reply", "reply");
+    item(&write, "Reply to _All", "replyall");
+    item(&write, "_Forward", "forward");
+    menu.append_section(None, &write);
+    let deal = gio::Menu::new();
+    item(&deal, "Mark Read or _Unread", "mark toggle");
+    item(&deal, "_Flag", "flag");
+    item(&deal, "_Archive", "archive");
+    item(&deal, "_Delete", "delete");
+    item(&deal, "_Junk", "junk");
+    deal.append_submenu(Some("_Move To"), move_menu);
+    item(&deal, "Pick the _Conversation", "pick thread");
+    menu.append_section(None, &deal);
+    let look = gio::Menu::new();
+    item(&look, "_Links", "links");
+    item(&look, "HTML or _Text", "view");
+    item(&look, "_Headers", "headers");
+    item(&look, "Message _Source", "source");
+    item(&look, "_Save as File", "export");
+    item(&look, "Sender in _Contacts", "contact");
+    item(&look, "_Unsubscribe", "unsubscribe");
+    menu.append_section(None, &look);
+    menu
+}
+
+/// What a dragged message carries: the move takes what is selected or picked.
+const DRAG_MESSAGES: &str = "rical-mail:messages";
+
+impl Window {
+    /// A folder row takes dragged messages: they move into it.
+    fn droppable(&self, row: &gtk::ListBoxRow, folder: &str) {
+        let drop = gtk::DropTarget::new(glib::Type::STRING, gdk::DragAction::MOVE);
+        let (weak, folder) = (self.me.borrow().clone(), folder.to_owned());
+        drop.connect_drop(move |_, value, _, _| {
+            if value.get::<String>().ok().as_deref() != Some(DRAG_MESSAGES) {
+                return false;
+            }
+            let Some(w) = weak.upgrade() else {
+                return false;
+            };
+            if let Err(e) = w.execute(&format!("move {}", rical_ui::command::quote(&folder))) {
+                w.toast(&e);
+            }
+            true
+        });
+        row.add_controller(drop);
     }
 }

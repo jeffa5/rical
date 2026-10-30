@@ -75,6 +75,8 @@ pub struct Opened {
     pub in_reply_to: Vec<String>,
     pub references: Vec<String>,
     pub list_id: Option<String>,
+    /// Where List-Post says to write to the list.
+    pub list_post: Option<String>,
     /// Where List-Unsubscribe says to go: `mailto:` or `https:` addresses.
     pub unsubscribe: Vec<String>,
     /// Every header, decoded, as it came.
@@ -84,6 +86,8 @@ pub struct Opened {
     pub invites: Vec<Invite>,
     pub privacy: Privacy,
     pub size: usize,
+    /// It has an HTML part (that the HTML view can show).
+    pub has_html: bool,
 }
 
 fn mailboxes(list: Option<mail_parser::AddressList<'_>>) -> Vec<Mailbox> {
@@ -279,6 +283,15 @@ pub fn parse(path: &Path, bytes: &[u8]) -> Result<Opened> {
             .find(|(k, _)| k.eq_ignore_ascii_case("List-Unsubscribe"))
             .map(|(_, v)| unsubscribe_targets(v))
             .unwrap_or_default(),
+        list_post: headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("List-Post"))
+            .and_then(|(_, v)| {
+                unsubscribe_targets(v)
+                    .into_iter()
+                    .find(|u| u.to_lowercase().starts_with("mailto:"))
+            })
+            .map(|u| u[7..].split('?').next().unwrap_or("").to_owned()),
         list_id: root
             .list_id()
             .and_then(|l| l.first())
@@ -289,6 +302,7 @@ pub fn parse(path: &Path, bytes: &[u8]) -> Result<Opened> {
         invites,
         privacy,
         size: bytes.len(),
+        has_html: root.html_body().any(|p| p.is_content_type("text", "html")),
     })
 }
 
@@ -443,5 +457,87 @@ mod unsubscribe_tests {
             ]
         );
         assert!(unsubscribe_targets("garbage").is_empty());
+    }
+}
+
+/// What the HTML view is allowed to load: nothing from anywhere, only what
+/// the page itself holds (inline styles, and images embedded in the message).
+pub const HTML_POLICY: &str = "default-src 'none'; img-src data:; style-src 'unsafe-inline' data:; font-src data:; media-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'";
+
+/// The message's HTML, ready to show with nothing fetched: its own images
+/// (`cid:`) put inline, and a Content-Security-Policy in front that blocks
+/// any other load (remote images, styles, fonts, frames, prefetches).
+/// None if it has no HTML.
+pub fn html_document(path: &Path) -> Result<Option<String>> {
+    use base64::Engine as _;
+    let bytes = std::fs::read(path)?;
+    let msg = MessageParser::new()
+        .parse(&bytes)
+        .context("not a mail message")?;
+    let root = msg.root();
+    let Some(mut html) = root.html_body().find_map(|p| {
+        p.is_content_type("text", "html")
+            .then(|| p.text().map(|t| t.into_owned()))
+            .flatten()
+    }) else {
+        return Ok(None);
+    };
+    // the message's own images, by Content-ID, as data: URIs (up to 8 MB in all)
+    let mut budget: usize = 8 * 1024 * 1024;
+    for p in msg.parts() {
+        let Some(id) = p.content_id() else { continue };
+        let id = id.trim_matches(['<', '>']);
+        let needle = format!("cid:{id}");
+        if !html.contains(&needle) {
+            continue;
+        }
+        let data = p.decoded();
+        if data.len() > budget {
+            continue;
+        }
+        budget -= data.len();
+        let mime = p
+            .content_type()
+            .map_or("application/octet-stream".to_owned(), |c| {
+                format!("{}/{}", c.ctype(), c.subtype().unwrap_or("octet-stream"))
+            });
+        let uri = format!(
+            "data:{mime};base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&data)
+        );
+        html = html.replace(&needle, &uri);
+    }
+    Ok(Some(format!(
+        "<meta http-equiv=\"Content-Security-Policy\" content=\"{HTML_POLICY}\">\n\
+         <meta http-equiv=\"x-dns-prefetch-control\" content=\"off\">\n\
+         <meta name=\"referrer\" content=\"no-referrer\">\n{html}"
+    )))
+}
+
+#[cfg(test)]
+mod html_tests {
+    use super::*;
+
+    #[test]
+    fn the_document_blocks_loads_and_keeps_its_own_images() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("m");
+        std::fs::write(
+            &f,
+            "From: a@x\nSubject: s\nMIME-Version: 1.0\nContent-Type: multipart/related; boundary=B\n\n--B\nContent-Type: text/html\n\n<p>Hi <img src=\"cid:logo@x\"> <img src=\"https://t.example/p.gif\"></p>\n--B\nContent-Type: image/png\nContent-ID: <logo@x>\nContent-Transfer-Encoding: base64\n\niVBORw0KGgo=\n--B--\n",
+        )
+        .unwrap();
+        let doc = html_document(&f).unwrap().unwrap();
+        assert!(doc.starts_with("<meta http-equiv=\"Content-Security-Policy\""));
+        assert!(doc.contains("default-src 'none'"));
+        assert!(
+            doc.contains("src=\"data:image/png;base64,iVBORw0KGgo=\""),
+            "{doc}"
+        );
+        // the remote one is still in the page, and the policy keeps it out
+        assert!(doc.contains("https://t.example/p.gif"));
+        let plain = dir.path().join("p");
+        std::fs::write(&plain, "From: a@x\nSubject: s\n\nplain\n").unwrap();
+        assert!(html_document(&plain).unwrap().is_none());
     }
 }

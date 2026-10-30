@@ -5,6 +5,7 @@
 //!   press        press the left button
 //!   release      release the left button
 //!   click        press and release
+//!   rclick       press and release the right button
 //!
 //! The pointer stays attached for as long as the program runs, so clients
 //! see a seat with a pointer (headless sway has none of its own).
@@ -21,6 +22,7 @@ use wayland_protocols_wlr::virtual_pointer::v1::client::{
 };
 
 const BTN_LEFT: u32 = 0x110;
+const BTN_RIGHT: u32 = 0x111;
 
 #[derive(Default)]
 struct State {
@@ -113,6 +115,11 @@ fn main() {
                 pointer.button(tick(), BTN_LEFT, ButtonState::Pressed);
                 pointer.frame();
                 pointer.button(tick(), BTN_LEFT, ButtonState::Released);
+            }
+            ["rclick"] => {
+                pointer.button(tick(), BTN_RIGHT, ButtonState::Pressed);
+                pointer.frame();
+                pointer.button(tick(), BTN_RIGHT, ButtonState::Released);
             }
             [] => continue,
             _ => {

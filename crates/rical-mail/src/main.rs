@@ -11,6 +11,8 @@ mod compose;
 mod config;
 mod editor;
 mod filters;
+mod load;
+mod onboarding;
 mod prefs;
 mod reader;
 mod run;
@@ -82,6 +84,10 @@ fn main() -> glib::ExitCode {
             let Some(options) = options.borrow_mut().take() else {
                 return;
             };
+            // no mail folder yet: the first-run window asks for one
+            if options.mail.as_ref().is_none_or(|m| !m.is_dir()) {
+                return;
+            }
             match setup(options) {
                 Ok(v) => *ui.borrow_mut() = Some(v),
                 Err(e) => {
@@ -93,14 +99,35 @@ fn main() -> glib::ExitCode {
     }
     let window: Rc<RefCell<Option<Rc<window::Window>>>> = Default::default();
     let show = Rc::new({
-        let (ui, window) = (ui.clone(), window.clone());
+        let (ui, window, failed) = (ui.clone(), window.clone(), failed.clone());
         move |app: &adw::Application| -> Option<Rc<window::Window>> {
             if let Some(w) = window.borrow().as_ref() {
                 w.present();
                 return Some(w.clone());
             }
             let Some((state, binds)) = ui.borrow().clone() else {
-                app.quit();
+                if failed.get() {
+                    app.quit();
+                    return None;
+                }
+                // the first run: ask, then start as usual
+                let (ui, window, app2) = (ui.clone(), window.clone(), app.clone());
+                onboarding::open(
+                    app,
+                    Rc::new(move || {
+                        let ready = config::Options::load().and_then(setup);
+                        match ready {
+                            Ok(v) => {
+                                let (state, binds) = v.clone();
+                                *ui.borrow_mut() = Some(v);
+                                let w = window::Window::new(&app2, state, binds);
+                                w.present();
+                                *window.borrow_mut() = Some(w);
+                            }
+                            Err(e) => eprintln!("rical-mail: {e}"),
+                        }
+                    }),
+                );
                 return None;
             };
             let w = window::Window::new(app, state, binds);

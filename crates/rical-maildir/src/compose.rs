@@ -32,6 +32,8 @@ pub struct Draft {
     pub markdown: bool,
     /// A calendar message to send along (iMIP): its METHOD and the iCalendar.
     pub calendar: Option<(String, String)>,
+    /// Messages to send as attachments (forwarding as an attachment).
+    pub forwarded: Vec<PathBuf>,
 }
 
 fn local(ts: i64) -> DateTime<Local> {
@@ -157,6 +159,7 @@ pub fn reply(o: &Opened, me: &[Mailbox], all: bool, width: usize) -> Draft {
         answering: Some(o.path.clone()),
         markdown: false,
         calendar: None,
+        forwarded: Vec::new(),
     }
 }
 
@@ -208,6 +211,7 @@ impl Draft {
             attachments: Vec::new(),
             answering: None,
             calendar: None,
+            forwarded: Vec::new(),
             markdown: o
                 .headers
                 .iter()
@@ -614,7 +618,7 @@ impl Draft {
         };
 
         let mut out = head;
-        if self.attachments.is_empty() {
+        if self.attachments.is_empty() && self.forwarded.is_empty() {
             out += &text_part;
             out.pop();
             return Ok(out.into_bytes());
@@ -634,6 +638,29 @@ impl Draft {
                 name.chars()
                     .map(|c| if c.is_ascii() && c != '"' { c } else { '_' })
                     .collect::<String>(),
+                filename_params(&name)
+            );
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+            for chunk in b64.as_bytes().chunks(76) {
+                out += std::str::from_utf8(chunk).unwrap_or("");
+                out.push('\n');
+            }
+        }
+        for path in &self.forwarded {
+            let data = std::fs::read(path).with_context(|| format!("{}", path.display()))?;
+            let subject = crate::read::parse(path, &data)
+                .map(|o| o.subject)
+                .unwrap_or_default();
+            let name = format!(
+                "{}.eml",
+                if subject.is_empty() {
+                    "message".to_owned()
+                } else {
+                    subject
+                }
+            );
+            out += &format!(
+                "--{boundary}\nContent-Type: message/rfc822\nContent-Transfer-Encoding: base64\nContent-Disposition: attachment; {}\n\n",
                 filename_params(&name)
             );
             let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
@@ -795,6 +822,28 @@ mod tests {
                 .unwrap()
                 .contains("UID:abc@x")
         );
+    }
+
+    #[test]
+    fn a_message_can_go_as_an_attachment() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("1");
+        std::fs::write(&f, "From: a@x\nSubject: Original\n\nHello\n").unwrap();
+        let d = Draft {
+            from: "me@y.example".into(),
+            to: "bo@z.example".into(),
+            body: "See the message attached".into(),
+            forwarded: vec![f],
+            ..Draft::default()
+        };
+        let bytes = d.to_bytes(Local::now()).unwrap();
+        let text = String::from_utf8(bytes.clone()).unwrap();
+        assert!(
+            text.contains("message/rfc822") && text.contains("Original.eml"),
+            "{text}"
+        );
+        let o = read::parse(std::path::Path::new("x"), &bytes).unwrap();
+        assert_eq!(o.attachments[0].name, "Original.eml");
     }
 
     #[test]
