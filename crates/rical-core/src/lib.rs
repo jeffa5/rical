@@ -3,6 +3,7 @@ pub mod alarm;
 pub use compact_ics as compact;
 pub mod component;
 pub mod convert;
+pub mod diff;
 pub mod doc;
 pub mod files;
 pub mod history;

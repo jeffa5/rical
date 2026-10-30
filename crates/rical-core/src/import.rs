@@ -119,7 +119,7 @@ fn file_name(uid: &str) -> String {
 
 impl Vdir {
     /// The file holding `uid`, in any calendar.
-    fn path_of(&self, uid: &str) -> Option<std::path::PathBuf> {
+    pub(crate) fn path_of(&self, uid: &str) -> Option<std::path::PathBuf> {
         self.components()
             .find(|(_, c)| c.get_uid() == Some(uid))
             .map(|(_, c)| c.path().to_owned())

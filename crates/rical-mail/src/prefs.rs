@@ -9,7 +9,7 @@ use rical_ui::prefs::{Prefs, is_true, owned};
 use crate::{config::SETTINGS, window::Window};
 
 /// Settings that only take effect when the app starts.
-const AT_START: &[&str] = &["mail", "contacts", "binds", "renderer", "font"];
+const AT_START: &[&str] = &["mail", "contacts", "vdir", "binds", "renderer", "font"];
 
 pub fn show(win: &Rc<Window>) {
     let weak = Rc::downgrade(win);
@@ -59,20 +59,45 @@ pub fn show(win: &Rc<Window>) {
         env("contacts"),
         true,
     ));
+    mail.add(&ctx.path_row(
+        "vdir",
+        "Calendar folder",
+        "vdirsyncer's folder: invitations are compared with the event in it",
+        value("vdir"),
+        env("vdir"),
+        true,
+    ));
+
+    mail.add(&ctx.combo_row(
+        "search",
+        "Search with",
+        &owned(&[
+            ("builtin", "This app (every folder's headers)"),
+            ("mu", "mu (indexed; results as links)"),
+            ("notmuch", "notmuch (indexed)"),
+        ]),
+        value("search").unwrap_or_else(|| "builtin".to_owned()),
+        env("search"),
+    ));
 
     let sending = ctx.group("Fetching and sending");
     sending.add(&text("sync", "Fetch command (mbsync -a)", any));
+    sending.add(&text(
+        "index",
+        "Update the search index with (mu index)",
+        any,
+    ));
     sending.add(&ctx.path_row(
         "queue",
         "Send queue",
-        "Where rical-mail takes messages from. Default ~/.local/share/rical-mail/outbox",
+        "Where rical-mail-queue takes messages from. Default ~/.local/share/rical-mail-queue/outbox",
         value("queue"),
         env("queue"),
         true,
     ));
     sending.add(&text(
         "send",
-        "Send at once with (rical-mail run --once)",
+        "Send at once with (rical-mail-queue run --once)",
         any,
     ));
 
@@ -133,6 +158,15 @@ pub fn show(win: &Rc<Window>) {
         env("font"),
     ));
 
+    reading.add(&ctx.switch_row(
+        "notify",
+        "Notify of new mail",
+        "A notice with the sender and subject, when the window is not in front",
+        value("notify").is_none_or(|v| is_true(&v)),
+        env("notify"),
+        |on| Some(on.to_string()),
+    ));
+
     let apps = ctx.group("Other apps");
     apps.add(&text("calendar", "Opens invitations (rical-calendar)", any));
     apps.add(&text("contacts-app", "Opens people (rical-contacts)", any));
@@ -141,7 +175,7 @@ pub fn show(win: &Rc<Window>) {
     advanced.add(&ctx.path_row(
         "binds",
         "Key bindings file",
-        "Default ~/.config/rical-mailbox/binds.conf",
+        "Default ~/.config/rical-mail/binds.conf",
         value("binds"),
         env("binds"),
         false,

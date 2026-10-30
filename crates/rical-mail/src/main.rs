@@ -1,153 +1,191 @@
-//! `rical-mail`: put messages in the send queue, look at it, and run the
-//! worker that sends them.
+//! Mail (rical): a keyboard-first mail client for Maildir folders.
 
-use std::{io::Read as _, path::PathBuf, sync::atomic::AtomicBool};
+use std::{cell::RefCell, rc::Rc};
 
-use anyhow::{Context as _, Result, bail};
-use chrono::Utc;
-use clap::Parser as _;
-use rical_mail::{
-    config::{self, Config},
-    queue::Queue,
-    worker::Worker,
-};
+use adw::prelude::*;
+use gtk::glib;
 
-#[derive(Debug, clap::Parser)]
-#[command(
-    version,
-    about = "A send queue of files, with the sending left to any command"
-)]
-struct Args {
-    /// The settings file
-    #[clap(long, env = "RICAL_MAIL_CONFIG", global = true)]
-    config: Option<PathBuf>,
+mod address;
+mod cmds;
+mod compose;
+mod config;
+mod editor;
+mod filters;
+mod prefs;
+mod reader;
+mod run;
+mod state;
+mod window;
 
-    /// The queue folder, over the settings file
-    #[clap(long, env = "RICAL_MAIL_QUEUE", global = true)]
-    queue: Option<PathBuf>,
+pub const APP_ID: &str = "net.jeffas.Rical.Mail";
+/// What the app is called: everyday, and where it sits beside others.
+pub const APP_NAME: &str = "Mail";
+pub const APP_FULL_NAME: &str = "Mail (rical)";
 
-    /// More logging: -v for what happens to each message, -vv for more
-    #[clap(short, action = clap::ArgAction::Count, global = true)]
-    verbose: u8,
+/// The window's look on top of the shared one.
+const CSS: &str = "
+.rical-body { background: transparent; }
+";
 
-    #[clap(subcommand)]
-    cmd: Cmd,
-}
-
-#[derive(Debug, clap::Subcommand)]
-enum Cmd {
-    /// Add a message (a file, or stdin) to the queue and print its id
-    Enqueue { file: Option<PathBuf> },
-    /// Show what is in the queue
-    List,
-    /// Send what is due; keep going and look again unless --once
-    Run {
-        #[clap(long)]
-        once: bool,
-    },
-    /// Move failed messages back into the queue (one by id, or all)
-    Retry { id: Option<String> },
-}
-
-fn load(args: &Args) -> Result<Config> {
-    let mut config = match &args.config {
-        Some(p) => Config::load(p)?,
-        None => {
-            let p = config::default_path();
-            if p.exists() {
-                Config::load(&p)?
-            } else {
-                Config::default()
-            }
+fn main() -> glib::ExitCode {
+    rical_ui::app::init(rical_ui::app::App {
+        id: APP_ID,
+        name: APP_NAME,
+        full_name: APP_FULL_NAME,
+        env_prefix: "RICAL_MAIL_",
+        folder: None,
+        dir: "rical-mail",
+    });
+    rical_ui::logfile::init();
+    glib::set_application_name(APP_NAME);
+    log::info!("rical mail {} starting", env!("CARGO_PKG_VERSION"));
+    let options = match config::Options::load() {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("rical-mail: {e}");
+            return glib::ExitCode::FAILURE;
         }
     };
-    if let Some(q) = &args.queue {
-        config.queue = q.clone();
+    if let Some(r) = &options.renderer
+        && std::env::var_os("GSK_RENDERER").is_none()
+    {
+        // SAFETY: before GTK starts, while this is the only thread
+        unsafe { std::env::set_var("GSK_RENDERER", r) };
     }
-    Ok(config)
+
+    // one instance: a mailto: link from another app opens a new message
+    // in the running one
+    let app = adw::Application::builder()
+        .application_id(APP_ID)
+        .flags(gtk::gio::ApplicationFlags::HANDLES_OPEN)
+        .build();
+    app.set_option_context_parameter_string(Some("[mailto:ADDRESS…]"));
+    app.set_option_context_summary(Some(
+        "Mail for Maildir folders. A mailto: link given is opened as a new message.",
+    ));
+    app.set_option_context_description(Some(&config::help()));
+    app.connect_startup(|_| {
+        if let Some(display) = gtk::gdk::Display::default() {
+            gtk::IconTheme::for_display(&display)
+                .add_search_path(concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/icons"));
+        }
+        gtk::Window::set_default_icon_name(APP_ID);
+        rical_ui::util::install_css(CSS);
+    });
+
+    let ui: Rc<RefCell<Option<(state::SharedState, rical_ui::binds::Binds)>>> = Default::default();
+    let failed = Rc::new(std::cell::Cell::new(false));
+    let options = RefCell::new(Some(options));
+    {
+        let (ui, failed) = (ui.clone(), failed.clone());
+        app.connect_startup(move |_| {
+            let Some(options) = options.borrow_mut().take() else {
+                return;
+            };
+            match setup(options) {
+                Ok(v) => *ui.borrow_mut() = Some(v),
+                Err(e) => {
+                    eprintln!("rical-mail: {e}");
+                    failed.set(true);
+                }
+            }
+        });
+    }
+    let window: Rc<RefCell<Option<Rc<window::Window>>>> = Default::default();
+    let show = Rc::new({
+        let (ui, window) = (ui.clone(), window.clone());
+        move |app: &adw::Application| -> Option<Rc<window::Window>> {
+            if let Some(w) = window.borrow().as_ref() {
+                w.present();
+                return Some(w.clone());
+            }
+            let Some((state, binds)) = ui.borrow().clone() else {
+                app.quit();
+                return None;
+            };
+            let w = window::Window::new(app, state, binds);
+            w.present();
+            *window.borrow_mut() = Some(w.clone());
+            Some(w)
+        }
+    });
+    {
+        let show = show.clone();
+        app.connect_activate(move |app| {
+            show(app);
+        });
+    }
+    app.connect_open(move |app, files, _| {
+        if let Some(w) = show(app) {
+            for f in files {
+                let uri = f.uri().to_string();
+                if uri.starts_with("mailto:") {
+                    compose::open_mailto(&w, &uri);
+                } else {
+                    w.toast(&format!("Can't open {uri}: only mailto: links"));
+                }
+            }
+        }
+    });
+
+    let code = app.run();
+    if failed.get() {
+        glib::ExitCode::FAILURE
+    } else {
+        code
+    }
 }
 
-fn main() -> Result<()> {
-    let args = Args::parse();
-    env_logger::Builder::new()
-        .filter_level(match args.verbose {
-            0 => log::LevelFilter::Warn,
-            1 => log::LevelFilter::Info,
-            2 => log::LevelFilter::Debug,
-            _ => log::LevelFilter::Trace,
-        })
-        .init();
-    let config = load(&args)?;
-    let queue = Queue::open(&config.queue)?;
-    match args.cmd {
-        Cmd::Enqueue { file } => {
-            let mut raw = Vec::new();
-            match file {
-                Some(p) => raw = std::fs::read(&p).with_context(|| format!("{}", p.display()))?,
-                None => {
-                    std::io::stdin().read_to_end(&mut raw)?;
-                }
+/// The state and bindings, from the settings.
+fn setup(o: config::Options) -> Result<(state::SharedState, rical_ui::binds::Binds), String> {
+    let root = o.mail.clone().ok_or(
+        "which mail folder? Set `mail = PATH` in ~/.config/rical-mail/config, \
+         or RICAL_MAIL_MAIL (see --help)",
+    )?;
+    let started = std::time::Instant::now();
+    let books = o
+        .contacts
+        .as_ref()
+        .and_then(|c| match rical_cards::Books::load(c) {
+            Ok(b) => Some(b),
+            Err(e) => {
+                log::warn!("contacts {}: {e:#}", c.display());
+                None
             }
-            println!("{}", queue.enqueue(&raw)?);
-        }
-        Cmd::List => {
-            let entries = queue.list()?;
-            if entries.is_empty() {
-                println!("The queue is empty.");
+        });
+    let mut st = state::State::new(o.clone(), root, books);
+    st.vdir = o
+        .vdir
+        .as_ref()
+        .and_then(|v| match rical_core::Vdir::load(v) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                log::warn!("calendar {}: {e:#}", v.display());
+                None
             }
-            for e in entries {
-                let next = e
-                    .next_attempt
-                    .map(|t| format!(", next {}", t.format("%H:%M:%S")))
-                    .unwrap_or_default();
-                println!(
-                    "{}  {}  {} → {}  {:?}",
-                    e.id,
-                    e.state.label(),
-                    e.from,
-                    e.to,
-                    e.subject
-                );
-                if e.attempts > 0 {
-                    println!(
-                        "    {} attempt{}{next}: {}",
-                        e.attempts,
-                        if e.attempts == 1 { "" } else { "s" },
-                        e.last_error.unwrap_or_default()
-                    );
-                }
-            }
-        }
-        Cmd::Run { once } => {
-            if config.send.is_none() && config.routes.is_empty() {
-                bail!(
-                    "no send command: set `send = …` in {}",
-                    config::default_path().display()
-                );
-            }
-            let worker = Worker {
-                queue: &queue,
-                config: &config,
-            };
-            if once {
-                let r = worker.run_once(Utc::now())?;
-                println!(
-                    "{} sent, {} to retry, {} failed",
-                    r.sent, r.retrying, r.failed
-                );
-            } else {
-                // no signal handling to pull in: the kernel drops our locks
-                // when we are killed, which is the case the queue is built for
-                worker.run(&AtomicBool::new(false))?;
-            }
-        }
-        Cmd::Retry { id } => {
-            let n = queue.retry(id.as_deref())?;
-            println!(
-                "{n} message{} back in the queue",
-                if n == 1 { "" } else { "s" }
-            );
-        }
+        });
+    log::info!(
+        "{} folders, {} messages in {}: ready in {:?}",
+        st.folders.len(),
+        st.messages.len(),
+        st.place_name(),
+        started.elapsed()
+    );
+    let binds = load_binds(o.binds.as_deref())?;
+    Ok((Rc::new(RefCell::new(st)), binds))
+}
+
+/// The default bindings with the user's on top.
+fn load_binds(path: Option<&std::path::Path>) -> Result<rical_ui::binds::Binds, String> {
+    use rical_ui::binds::Binds;
+    let mut binds =
+        Binds::parse(include_str!("binds.conf")).map_err(|e| format!("built-in binds: {e}"))?;
+    let path = path
+        .map(ToOwned::to_owned)
+        .or_else(|| rical_ui::app::config_file("binds.conf").filter(|p| p.exists()));
+    if let Some(path) = path {
+        let text = std::fs::read_to_string(&path).map_err(|e| format!("{path:?}: {e}"))?;
+        binds.merge(Binds::parse(&text).map_err(|e| format!("{path:?}: {e}"))?);
     }
-    Ok(())
+    Ok(binds)
 }

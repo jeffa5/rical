@@ -251,21 +251,44 @@ pub fn summarize(path: &Path, folder: &str, is_new: bool) -> Option<Summary> {
 
 /// Every message in a folder, newest first.
 pub fn list(folder: &Folder) -> Vec<Summary> {
+    list_cached(folder, crate::cache::Cache::none())
+}
+
+/// The same, reading headers only for messages the cache does not know,
+/// and saving it again.
+pub fn list_cached(folder: &Folder, mut cache: crate::cache::Cache) -> Vec<Summary> {
     let mut out = Vec::new();
     for (sub, is_new) in [("new", true), ("cur", false)] {
         let Ok(rd) = fs::read_dir(folder.path.join(sub)) else {
             continue;
         };
         for e in rd.flatten() {
-            if e.file_name().to_string_lossy().starts_with('.') {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            let (unique, mut flags) = split_name(&name);
+            if is_new {
+                flags.seen = false;
+            }
+            let size = e.metadata().map_or(0, |m| m.len());
+            if let Some(h) = cache.get(unique, size) {
+                out.push(
+                    h.clone()
+                        .into_summary(e.path(), &folder.name, flags, is_new),
+                );
                 continue;
             }
             match summarize(&e.path(), &folder.name, is_new) {
-                Some(s) => out.push(s),
+                Some(s) => {
+                    cache.put(unique, crate::cache::Headers::of(&s));
+                    out.push(s);
+                }
                 None => log::debug!("{}: not a message", e.path().display()),
             }
         }
     }
+    cache.save();
     out.sort_by(|a, b| b.date.cmp(&a.date).then_with(|| a.path.cmp(&b.path)));
     out
 }
@@ -453,4 +476,319 @@ mod tests {
         assert!(list(&now[1])[0].flags.flagged);
         remove(&q).unwrap();
     }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    #[test]
+    fn a_second_listing_comes_from_the_cache() {
+        let d = tempfile::tempdir().unwrap();
+        let inbox = d.path().join("INBOX");
+        for i in 0..50 {
+            let raw = format!(
+                "From: A <a{i}@x.example>\nSubject: Hello {i}\nDate: Thu, 5 Nov 2026 14:00:{:02} +0000\nMessage-ID: <m{i}@x>\n\nHi\n",
+                i % 60
+            );
+            deliver(&inbox, raw.as_bytes(), Flags::default(), true).unwrap();
+        }
+        let folder = &folders(d.path()).unwrap()[0];
+        let cache_dir = d.path().join("cache");
+        let first = list_cached(folder, crate::cache::Cache::open(&cache_dir, &folder.path));
+        assert!(fs::read_dir(&cache_dir).unwrap().count() == 1);
+        // break every message: only the cache can answer now
+        for e in fs::read_dir(inbox.join("new")).unwrap().flatten() {
+            let len = e.metadata().unwrap().len() as usize;
+            fs::write(e.path(), vec![b'x'; len]).unwrap();
+        }
+        let second = list_cached(folder, crate::cache::Cache::open(&cache_dir, &folder.path));
+        assert_eq!(first, second);
+        assert_eq!(second.len(), 50);
+        // a message that goes leaves the cache
+        let gone = second[0].path.clone();
+        fs::remove_file(&gone).unwrap();
+        assert_eq!(
+            list_cached(folder, crate::cache::Cache::open(&cache_dir, &folder.path)).len(),
+            49
+        );
+    }
+}
+
+#[cfg(test)]
+mod timing {
+    use super::*;
+
+    /// `cargo test -p rical-maildir --release big_folder -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn big_folder_timing() {
+        let d = tempfile::tempdir().unwrap();
+        let inbox = d.path().join("INBOX");
+        for i in 0..20_000 {
+            let raw = format!(
+                "From: A <a{i}@x.example>\nTo: me@y.example\nSubject: Hello number {i}\nDate: Thu, 5 Nov 2026 14:00:00 +0000\nMessage-ID: <m{i}@x>\n\n{}\n",
+                "body text ".repeat(40)
+            );
+            deliver(
+                &inbox,
+                raw.as_bytes(),
+                Flags {
+                    seen: true,
+                    ..Flags::default()
+                },
+                false,
+            )
+            .unwrap();
+        }
+        let folder = &folders(d.path()).unwrap()[0];
+        let cache_dir = d.path().join("cache");
+        for pass in ["cold", "warm"] {
+            let t = std::time::Instant::now();
+            let n = list_cached(folder, crate::cache::Cache::open(&cache_dir, &folder.path)).len();
+            println!("{pass}: {n} messages in {:?}", t.elapsed());
+        }
+        let t = std::time::Instant::now();
+        let rows = crate::thread::threads(&list(folder));
+        println!(
+            "uncached list + threads: {} rows in {:?}",
+            rows.len(),
+            t.elapsed()
+        );
+    }
+}
+
+/// Make a folder (a Maildir) called `name`, in the layout the tree uses:
+/// `.a.b` beside the others if they are that way (Maildir++), else nested.
+pub fn create_folder(root: &Path, name: &str) -> Result<PathBuf> {
+    let name = name.trim().trim_matches('/');
+    if name.is_empty()
+        || name
+            .split('/')
+            .any(|p| p.is_empty() || p == "." || p == "..")
+    {
+        bail!("not a folder name: “{name}”");
+    }
+    let dotted = fs::read_dir(root)
+        .map(|rd| {
+            rd.flatten().any(|e| {
+                let n = e.file_name().to_string_lossy().into_owned();
+                n.starts_with('.') && n.len() > 1 && is_maildir(&e.path())
+            })
+        })
+        .unwrap_or(false);
+    let path = if dotted {
+        root.join(format!(".{}", name.replace('/', ".")))
+    } else {
+        root.join(name)
+    };
+    if is_maildir(&path) {
+        bail!("there is already a folder “{name}”");
+    }
+    for sub in ["tmp", "new", "cur"] {
+        fs::create_dir_all(path.join(sub))?;
+    }
+    Ok(path)
+}
+
+#[cfg(test)]
+mod folder_tests {
+    use super::*;
+
+    #[test]
+    fn new_folders_follow_the_layout() {
+        let d = tempfile::tempdir().unwrap();
+        for s in ["cur", "new", "tmp"] {
+            fs::create_dir_all(d.path().join("INBOX").join(s)).unwrap();
+        }
+        let p = create_folder(d.path(), "work/Projects").unwrap();
+        assert_eq!(p, d.path().join("work/Projects"));
+        assert!(create_folder(d.path(), "work/Projects").is_err());
+        assert!(create_folder(d.path(), "../x").is_err());
+
+        let dotted = tempfile::tempdir().unwrap();
+        for s in ["cur", "new", "tmp"] {
+            fs::create_dir_all(dotted.path().join(".Sent").join(s)).unwrap();
+        }
+        let p = create_folder(dotted.path(), "work/Projects").unwrap();
+        assert_eq!(p, dotted.path().join(".work.Projects"));
+        assert!(
+            folders(dotted.path())
+                .unwrap()
+                .iter()
+                .any(|f| f.name == "work/Projects")
+        );
+    }
+}
+
+/// The messages a search left as a Maildir of symlinks (mu's links format):
+/// each is the message it points to, so changing one changes the real file.
+pub fn list_links(dir: &Path) -> Vec<Summary> {
+    let mut out = Vec::new();
+    for sub in ["new", "cur"] {
+        let Ok(rd) = fs::read_dir(dir.join(sub)) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            if e.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            // the target may have been renamed since the search tool made
+            // the link (read, flagged): follow it by its unique name
+            let real = match fs::canonicalize(e.path()) {
+                Ok(r) => r,
+                Err(_) => match fs::read_link(e.path()).ok().and_then(|t| relocate(&t)) {
+                    Some(r) => r,
+                    None => continue,
+                },
+            };
+            out.push(real);
+        }
+    }
+    summaries_of(out)
+}
+
+/// Summaries of message files wherever they are, newest first.
+pub fn summaries_of(paths: Vec<PathBuf>) -> Vec<Summary> {
+    let mut out: Vec<Summary> = Vec::new();
+    for real in paths {
+        let in_new = real
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|n| n == "new");
+        let folder = real
+            .parent()
+            .and_then(Path::parent)
+            .and_then(Path::file_name)
+            .map(|n| {
+                n.to_string_lossy()
+                    .trim_start_matches('.')
+                    .replace('.', "/")
+            })
+            .unwrap_or_default();
+        if let Some(s) = summarize(&real, &folder, in_new)
+            && !out.iter().any(|o| o.path == s.path)
+        {
+            out.push(s);
+        }
+    }
+    out.sort_by(|a, b| b.date.cmp(&a.date).then_with(|| a.path.cmp(&b.path)));
+    out
+}
+
+/// Make `dir` a Maildir of symlinks to `paths`, as a search command that
+/// only lists files leaves for us to do. What was there is cleared.
+pub fn write_links(dir: &Path, paths: &[PathBuf]) -> Result<()> {
+    for sub in ["new", "cur"] {
+        let d = dir.join(sub);
+        if d.is_dir() {
+            for e in fs::read_dir(&d)?.flatten() {
+                let _ = fs::remove_file(e.path());
+            }
+        }
+        fs::create_dir_all(&d)?;
+    }
+    fs::create_dir_all(dir.join("tmp"))?;
+    for (i, p) in paths.iter().enumerate() {
+        let name = p
+            .file_name()
+            .map_or(i.to_string(), |n| n.to_string_lossy().into_owned());
+        let sub = if p
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|n| n == "new")
+        {
+            "new"
+        } else {
+            "cur"
+        };
+        let link = dir.join(sub).join(format!("{i}-{name}"));
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(p, &link).with_context(|| format!("{}", link.display()))?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+
+    #[test]
+    fn results_are_the_real_messages() {
+        let d = tempfile::tempdir().unwrap();
+        let a = deliver(
+            &d.path().join("Sent"),
+            b"From: a@x\nSubject: one\nDate: Thu, 5 Nov 2026 14:00:00 +0000\n\nx\n",
+            Flags {
+                seen: true,
+                ..Flags::default()
+            },
+            false,
+        )
+        .unwrap();
+        let b = deliver(
+            &d.path().join("work/Projects"),
+            b"From: b@x\nSubject: two\nDate: Fri, 6 Nov 2026 14:00:00 +0000\n\nx\n",
+            Flags::default(),
+            true,
+        )
+        .unwrap();
+        let links = d.path().join("results");
+        write_links(&links, &[a.clone(), b.clone()]).unwrap();
+        let found = list_links(&links);
+        let by: Vec<(&str, &str, bool)> = found
+            .iter()
+            .map(|s| (s.subject.as_str(), s.folder.as_str(), s.is_new))
+            .collect();
+        assert_eq!(by, [("two", "Projects", true), ("one", "Sent", false)]);
+        // acting on a result acts on the message, not the link
+        assert_eq!(found[1].path, fs::canonicalize(&a).unwrap());
+        // a message renamed after the search (read) is still found
+        let read = set_flags(
+            &b,
+            Flags {
+                seen: true,
+                ..Flags::default()
+            },
+        )
+        .unwrap();
+        let after = list_links(&links);
+        assert_eq!(after.len(), 2);
+        assert!(
+            after
+                .iter()
+                .any(|s| s.path == fs::canonicalize(&read).unwrap())
+        );
+        let b = read;
+        // one that has gone is not listed
+        fs::remove_file(&a).unwrap();
+        assert_eq!(list_links(&links).len(), 1);
+        // searching again clears the old results
+        write_links(&links, &[b]).unwrap();
+        assert_eq!(
+            fs::read_dir(links.join("new")).unwrap().count()
+                + fs::read_dir(links.join("cur")).unwrap().count(),
+            1
+        );
+    }
+}
+
+/// Where a message is now if its name has changed (flags rename files, and
+/// so does opening one from `new/`), found by the unique part of its name.
+pub fn relocate(path: &Path) -> Option<PathBuf> {
+    if path.exists() {
+        return Some(path.to_owned());
+    }
+    let folder = path.parent()?.parent()?;
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    let unique = split_name(&name).0.to_owned();
+    for sub in ["cur", "new"] {
+        for e in fs::read_dir(folder.join(sub)).ok()?.flatten() {
+            let n = e.file_name().to_string_lossy().into_owned();
+            if split_name(&n).0 == unique {
+                return Some(e.path());
+            }
+        }
+    }
+    None
 }

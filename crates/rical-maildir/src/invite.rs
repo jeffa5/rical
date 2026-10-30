@@ -220,3 +220,149 @@ mod tests {
         assert!(parse("BEGIN:VCALENDAR\nEND:VCALENDAR\n").is_none());
     }
 }
+
+/// An answer to an invitation, to send back to the organiser as mail
+/// (iMIP: `text/calendar; method=REPLY`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reply {
+    /// The iCalendar to send.
+    pub ics: String,
+    /// The organiser's address.
+    pub to: String,
+    pub subject: String,
+    /// A line saying it in words, for the plain-text part.
+    pub words: String,
+}
+
+fn mailto_of(value: &str) -> String {
+    let v = value.trim();
+    v.get(..7)
+        .filter(|p| p.eq_ignore_ascii_case("mailto:"))
+        .map_or(v, |_| &v[7..])
+        .to_owned()
+}
+
+/// The answer `partstat` (ACCEPTED, TENTATIVE or DECLINED) from `me` (an
+/// address) to the first event of the invitation `ics`.
+pub fn reply_to(
+    ics: &str,
+    me: &str,
+    name: &str,
+    partstat: &str,
+    now: DateTime<Utc>,
+) -> Option<Reply> {
+    let mut in_event = false;
+    let mut kept: Vec<String> = Vec::new();
+    let mut organiser = String::new();
+    let mut summary = String::new();
+    let mut mine: Option<String> = None;
+    let mut seen = false;
+    for line in unfold(ics) {
+        let upper = line.to_uppercase();
+        if upper == "BEGIN:VEVENT" {
+            in_event = !seen;
+            seen = true;
+            continue;
+        }
+        if upper == "END:VEVENT" {
+            in_event = false;
+            continue;
+        }
+        if !in_event {
+            continue;
+        }
+        let Some((np, value)) = line.split_once(':') else {
+            continue;
+        };
+        let key = np.split(';').next().unwrap_or("").to_uppercase();
+        match key.as_str() {
+            "UID" | "SEQUENCE" | "DTSTART" | "DTEND" | "RECURRENCE-ID" | "SUMMARY" | "LOCATION" => {
+                if key == "SUMMARY" {
+                    summary = unescape(value);
+                }
+                kept.push(line.clone());
+            }
+            "ORGANIZER" => {
+                organiser = mailto_of(value);
+                kept.push(line.clone());
+            }
+            "ATTENDEE" if mailto_of(value).eq_ignore_ascii_case(me) => {
+                let cn = np
+                    .split(';')
+                    .find_map(|p| p.strip_prefix("CN="))
+                    .map(str::to_owned)
+                    .or_else(|| (!name.is_empty()).then(|| format!("\"{name}\"")));
+                mine = Some(format!(
+                    "ATTENDEE;{}PARTSTAT={partstat}:mailto:{me}",
+                    cn.map(|c| format!("CN={c};")).unwrap_or_default()
+                ));
+            }
+            _ => {}
+        }
+    }
+    if !seen || organiser.is_empty() {
+        return None;
+    }
+    let attendee = mine.unwrap_or_else(|| format!("ATTENDEE;PARTSTAT={partstat}:mailto:{me}"));
+    let mut out = String::from(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//rical//mail//EN\r\nMETHOD:REPLY\r\nBEGIN:VEVENT\r\n",
+    );
+    for l in &kept {
+        out.push_str(l);
+        out.push_str("\r\n");
+    }
+    out.push_str(&format!("DTSTAMP:{}\r\n", now.format("%Y%m%dT%H%M%SZ")));
+    out.push_str(&attendee);
+    out.push_str("\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n");
+    let (verb, noun) = match partstat {
+        "ACCEPTED" => ("Accepted", "has accepted"),
+        "DECLINED" => ("Declined", "has declined"),
+        _ => ("Tentatively accepted", "might come to"),
+    };
+    let who = if name.is_empty() { me } else { name };
+    Some(Reply {
+        ics: out,
+        to: organiser,
+        subject: format!("{verb}: {summary}"),
+        words: format!("{who} {noun}: {summary}"),
+    })
+}
+
+#[cfg(test)]
+mod reply_tests {
+    use super::*;
+
+    #[test]
+    fn answers_keep_what_the_organiser_matches_on() {
+        let ics = "BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nUID:abc@x\r\nSEQUENCE:2\r\nDTSTART;TZID=Europe/London:20261105T140000\r\nSUMMARY:Planning\\, Q4\r\nORGANIZER;CN=Ann:mailto:ann@x.example\r\nATTENDEE;CN=Me;RSVP=TRUE:mailto:me@y.example\r\nATTENDEE:mailto:bo@z.example\r\nDESCRIPTION:secret agenda\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+        let now = DateTime::parse_from_rfc3339("2026-10-30T10:00:00Z")
+            .unwrap()
+            .to_utc();
+        let r = reply_to(ics, "me@y.example", "Me", "ACCEPTED", now).unwrap();
+        assert_eq!(r.to, "ann@x.example");
+        assert_eq!(r.subject, "Accepted: Planning, Q4");
+        for want in [
+            "METHOD:REPLY",
+            "UID:abc@x",
+            "SEQUENCE:2",
+            "DTSTAMP:20261030T100000Z",
+            "ATTENDEE;CN=Me;PARTSTAT=ACCEPTED:mailto:me@y.example",
+            "ORGANIZER;CN=Ann:mailto:ann@x.example",
+        ] {
+            assert!(r.ics.contains(want), "{want}\n{}", r.ics);
+        }
+        // not the other guests, not the agenda
+        assert!(!r.ics.contains("bo@z") && !r.ics.contains("secret"));
+        assert!(parse(&r.ics).is_some());
+        assert!(
+            reply_to(
+                "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n",
+                "me@y.example",
+                "",
+                "DECLINED",
+                now
+            )
+            .is_none()
+        );
+    }
+}

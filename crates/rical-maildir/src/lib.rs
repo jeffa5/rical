@@ -3,6 +3,8 @@
 //! and composing replies and new messages.
 
 pub mod addr;
+pub mod backend;
+pub mod cache;
 pub mod compose;
 pub mod flags;
 pub mod html;

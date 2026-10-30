@@ -75,6 +75,8 @@ pub struct Opened {
     pub in_reply_to: Vec<String>,
     pub references: Vec<String>,
     pub list_id: Option<String>,
+    /// Where List-Unsubscribe says to go: `mailto:` or `https:` addresses.
+    pub unsubscribe: Vec<String>,
     /// Every header, decoded, as it came.
     pub headers: Vec<(String, String)>,
     pub body: Body,
@@ -272,6 +274,11 @@ pub fn parse(path: &Path, bytes: &[u8]) -> Result<Opened> {
             .references()
             .map(|l| l.iter().map(str::to_owned).collect())
             .unwrap_or_default(),
+        unsubscribe: headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("List-Unsubscribe"))
+            .map(|(_, v)| unsubscribe_targets(v))
+            .unwrap_or_default(),
         list_id: root
             .list_id()
             .and_then(|l| l.first())
@@ -297,9 +304,13 @@ pub fn part_bytes(path: &Path, part: u32) -> Result<Vec<u8>> {
 
 /// The first calendar part of a message, as text.
 pub fn calendar_text(path: &Path) -> Result<String> {
-    let bytes = std::fs::read(path)?;
+    calendar_text_of(&std::fs::read(path)?)
+}
+
+/// The same, from the message's bytes.
+pub fn calendar_text_of(bytes: &[u8]) -> Result<String> {
     let msg = MessageParser::new()
-        .parse(&bytes)
+        .parse(bytes)
         .context("not a mail message")?;
     for p in msg.parts() {
         if is_calendar(&p)
@@ -397,5 +408,40 @@ mod tests {
         assert_eq!(safe_name("../../etc/passwd"), "_.._etc_passwd");
         assert_eq!(safe_name(".bashrc"), "bashrc");
         assert_eq!(safe_name(""), "attachment");
+    }
+}
+
+/// The `<…>` addresses in a List-Unsubscribe header, web and mail only.
+pub fn unsubscribe_targets(value: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = value;
+    while let Some(a) = rest.find('<') {
+        let Some(b) = rest[a..].find('>') else { break };
+        let url = rest[a + 1..a + b].trim();
+        let l = url.to_lowercase();
+        if l.starts_with("mailto:") || l.starts_with("https://") || l.starts_with("http://") {
+            out.push(url.to_owned());
+        }
+        rest = &rest[a + b + 1..];
+    }
+    out
+}
+
+#[cfg(test)]
+mod unsubscribe_tests {
+    use super::*;
+
+    #[test]
+    fn targets() {
+        assert_eq!(
+            unsubscribe_targets(
+                "<mailto:leave@x.example?subject=unsub>, <https://x.example/u?id=1>, <javascript:x>"
+            ),
+            [
+                "mailto:leave@x.example?subject=unsub",
+                "https://x.example/u?id=1"
+            ]
+        );
+        assert!(unsubscribe_targets("garbage").is_empty());
     }
 }

@@ -1833,26 +1833,27 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
- "clap",
- "env_logger",
- "libc",
- "log",
- "tempfile",
-]
-
-[[package]]
-name = "rical-mailbox"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
  "gtk4",
  "libadwaita",
  "log",
  "rical-cards",
- "rical-mail",
+ "rical-core",
+ "rical-mail-queue",
  "rical-maildir",
  "rical-ui",
+ "tempfile",
+]
+
+[[package]]
+name = "rical-mail-queue"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "env_logger",
+ "libc",
+ "log",
  "tempfile",
 ]
 
@@ -1867,6 +1868,8 @@ dependencies = [
  "mail-parser",
  "pulldown-cmark",
  "scraper",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 

@@ -1,6 +1,6 @@
 //! The window you write in: headers, a plain-text body that is wrapped and
 //! quoted the way plain-text mail expects, attachments, and sending by
-//! putting the message in rical-mail's queue.
+//! putting the message in rical-mail-queue's queue.
 
 use std::{
     cell::{Cell, RefCell},
@@ -161,6 +161,7 @@ pub struct Compose {
     clean: RefCell<String>,
     leaving: Cell<bool>,
     markdown: Cell<bool>,
+    calendar: RefCell<Option<(String, String)>>,
     busy: Cell<bool>,
     pub history: RefCell<Vec<String>>,
     pending_keys: RefCell<Vec<rical_ui::binds::Key>>,
@@ -370,6 +371,7 @@ impl Compose {
             clean: RefCell::default(),
             leaving: Cell::new(false),
             markdown: Cell::new(markdown),
+            calendar: RefCell::new(d.calendar.clone()),
             busy: Cell::new(false),
             history: Default::default(),
             pending_keys: Default::default(),
@@ -407,9 +409,9 @@ impl Compose {
         }) {
             self.from_choice.set_selected(i as u32);
         }
-        self.to.entry.set_text(&d.to);
-        self.cc.entry.set_text(&d.cc);
-        self.bcc.entry.set_text(&d.bcc);
+        self.to.set(&d.to);
+        self.cc.set(&d.cc);
+        self.bcc.set(&d.bcc);
         self.subject.set_text(&d.subject);
         let cc_on = !d.cc.trim().is_empty();
         let bcc_on = !d.bcc.trim().is_empty();
@@ -518,6 +520,8 @@ impl Compose {
 
         self.setup_body_keys(wrap);
         self.setup_actions();
+        self.autosave();
+        self.accept_drops();
 
         let weak = Rc::downgrade(self);
         self.window.connect_close_request(move |w| {
@@ -688,6 +692,7 @@ impl Compose {
             attachments: self.attachments.borrow().clone(),
             answering: self.answering.borrow().clone(),
             markdown: self.markdown.get(),
+            calendar: self.calendar.borrow().clone(),
         }
     }
 
@@ -1196,15 +1201,15 @@ impl Compose {
             };
             let v = v.trim();
             match k.trim().to_lowercase().as_str() {
-                "to" => self.to.entry.set_text(v),
+                "to" => self.to.set(v),
                 "cc" => {
-                    self.cc.entry.set_text(v);
+                    self.cc.set(v);
                     for w in &self.cc_row {
                         w.set_visible(!v.is_empty());
                     }
                 }
                 "bcc" => {
-                    self.bcc.entry.set_text(v);
+                    self.bcc.set(v);
                     for w in &self.bcc_row {
                         w.set_visible(!v.is_empty());
                     }
@@ -1275,8 +1280,15 @@ impl Compose {
         }
         let bytes = d.to_bytes(Local::now()).map_err(|e| format!("{e:#}"))?;
         let queue_dir = self.state.borrow().opts.queue.clone();
-        let queue = rical_mail::queue::Queue::open(&queue_dir).map_err(|e| format!("{e:#}"))?;
-        queue.enqueue(&bytes).map_err(|e| format!("{e:#}"))?;
+        let queue =
+            rical_mail_queue::queue::Queue::open(&queue_dir).map_err(|e| format!("{e:#}"))?;
+        let delay = self.state.borrow().opts.send_delay;
+        let not_before =
+            (delay > 0).then(|| chrono::Utc::now() + chrono::Duration::seconds(delay.into()));
+        let id = queue
+            .enqueue_at(&bytes, not_before)
+            .map_err(|e| format!("{e:#}"))?;
+        self.state.borrow_mut().last_sent = (delay > 0).then(|| (id, d.clone()));
 
         // mark what it answers; the draft it came from is done with
         if let Some(a) = self.answering.borrow().as_deref().and_then(locate) {
@@ -1292,12 +1304,7 @@ impl Compose {
         self.window.close();
         self.main.quiet();
         self.main.reload();
-        let wake = self.state.borrow().opts.send.is_some();
-        if wake {
-            let _ = self.main.wake();
-        } else {
-            self.main.toast("Queued to be sent");
-        }
+        self.main.after_queued(delay);
         Ok(())
     }
 
@@ -1636,6 +1643,47 @@ impl Compose {
             }
         }
         buf.end_user_action();
+    }
+}
+
+impl Compose {
+    /// Keep a draft safe as you write: every minute, if there is anything
+    /// unsaved.
+    fn autosave(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_seconds_local(60, move || {
+            let Some(c) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            if c.leaving.get() {
+                return glib::ControlFlow::Break;
+            }
+            if c.is_dirty() && !c.busy.get() && !c.body_text().trim().is_empty() && c.save().is_ok()
+            {
+                c.toast("Draft kept");
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+
+    /// Dropping files on the message attaches them.
+    fn accept_drops(self: &Rc<Self>) {
+        let drop = gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
+        let weak = Rc::downgrade(self);
+        drop.connect_drop(move |_, value, _, _| {
+            let (Some(c), Ok(list)) = (weak.upgrade(), value.get::<gdk::FileList>()) else {
+                return false;
+            };
+            for f in list.files() {
+                if let Some(p) = f.path()
+                    && let Err(e) = c.add_attachment(p)
+                {
+                    c.toast(&e);
+                }
+            }
+            true
+        });
+        self.window.add_controller(drop);
     }
 }
 #[cfg(test)]

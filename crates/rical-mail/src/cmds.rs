@@ -64,13 +64,32 @@ pub static SPECS: &[Spec] = &[
     spec("outbox", "Show what is waiting to be sent"),
     spec("folders", "Show or hide the list of folders"),
     Spec {
-        aliases: &["find", "filter"],
+        aliases: &["find"],
         args: &[text("text", "text")],
         ..spec(
-            "search",
-            "Search: words, from:, to:, subject:, body:, unread, flagged, attachment",
+            "filter",
+            "Filter this folder as you type: words, from:, to:, subject:, body:, date:, unread, flagged",
         )
     },
+    Spec {
+        aliases: &["s"],
+        args: &[text("query", "query")],
+        ..spec(
+            "search",
+            "Search all your mail with your search tool (mu…), or every folder; without words, the filters helper",
+        )
+    },
+    Spec {
+        aliases: &["filters"],
+        ..spec(
+            "search-helper",
+            "Build a search from a form: from, to, subject, dates, folders, flags",
+        )
+    },
+    spec(
+        "index",
+        "Update the search index (runs your `index` command, or the tool's own)",
+    ),
     Spec {
         args: &[Arg {
             name: "on",
@@ -117,7 +136,14 @@ pub static SPECS: &[Spec] = &[
         }],
         ..spec("mark", "Mark the message read or unread")
     },
-    spec("flag", "Flag or unflag the message"),
+    spec("flag", "Flag or unflag the message (or the picked ones)"),
+    Spec {
+        args: &[arg("which", Kind::Choice(&["toggle", "all", "none"]))],
+        ..spec(
+            "pick",
+            "Pick messages to act on together: toggle this one and move on, all, or none",
+        )
+    },
     spec("undo", "Undo the last move or mark"),
     // what is in it
     spec("links", "List the links in the message, and open one"),
@@ -144,6 +170,17 @@ pub static SPECS: &[Spec] = &[
         )
     },
     spec("invite", "Open the invitation in the calendar"),
+    spec(
+        "unsubscribe",
+        "Leave the mailing list this message came from (asks first)",
+    ),
+    Spec {
+        args: &[arg("answer", Kind::Choice(&["accept", "maybe", "decline"]))],
+        ..spec(
+            "rsvp",
+            "Answer an invitation by mail to its organiser (when the calendar does not do it)",
+        )
+    },
     Spec {
         aliases: &["person"],
         ..spec(
@@ -156,7 +193,16 @@ pub static SPECS: &[Spec] = &[
     // the outside
     spec("sync", "Fetch new mail (runs your `sync` command)"),
     spec("reload", "Read the folders again"),
+    Spec {
+        args: &[text("name", "folder")],
+        ..spec("mkdir", "Make a new folder (for example work/Projects)")
+    },
+    spec("export", "Save the message to a file (.eml)"),
     spec("wake", "Send what is queued now (runs your `send` command)"),
+    spec(
+        "unsend",
+        "Take back the message just sent, if it is still held back, and reopen it",
+    ),
     spec("retry", "Try the messages that failed to send again"),
     Spec {
         aliases: &["preferences", "prefs"],

@@ -9,7 +9,7 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use rical_mail::{
+use rical_mail_queue::{
     config::Config,
     message,
     queue::{self, Queue, State},
@@ -81,7 +81,7 @@ fn files(dir: &Path) -> Vec<String> {
 
 #[test]
 fn sends_files_a_copy_and_leaves_the_queue_empty() {
-    let f = Fixture::new("{ echo \"$RICAL_MAIL_RECIPIENTS\"; cat; } > OUT");
+    let f = Fixture::new("{ echo \"$RICAL_MAIL_QUEUE_RECIPIENTS\"; cat; } > OUT");
     let id = f.queue.enqueue(MAIL).unwrap();
 
     let r = f.run(Utc::now());
@@ -245,4 +245,23 @@ fn two_workers_never_send_the_same_message() {
     assert_eq!(f.out().lines().count(), 30);
     assert_eq!(files(&f.dir.path().join("Sent/cur")).len(), 30);
     assert!(f.queue.list().unwrap().is_empty());
+}
+
+#[test]
+fn a_message_held_back_is_not_sent_until_its_time_and_can_be_taken_back() {
+    let f = Fixture::new("cat > OUT");
+    let now = Utc::now();
+    let held = f
+        .queue
+        .enqueue_at(MAIL, Some(now + chrono::Duration::seconds(30)))
+        .unwrap();
+    assert_eq!(f.run(now), Report::default());
+    assert!(f.queue.cancel(&held).unwrap());
+    assert!(f.queue.list().unwrap().is_empty());
+    assert!(!f.queue.cancel(&held).unwrap());
+
+    f.queue
+        .enqueue_at(MAIL, Some(now + chrono::Duration::seconds(30)))
+        .unwrap();
+    assert_eq!(f.run(now + chrono::Duration::seconds(31)).sent, 1);
 }

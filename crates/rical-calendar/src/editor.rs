@@ -275,6 +275,52 @@ pub fn open(
     what.add(&title);
     what.add(&kind);
     what.add(&calendar);
+    // a month and a clock to pick from, for each date and time
+    {
+        use rical_ui::datetime::{Config, attach};
+        let timed = {
+            let (all_day, is_journal) = (all_day.clone(), draft.kind == Kind::Journal);
+            Rc::new(move || !all_day.is_active() && !is_journal)
+        };
+        let base = draft.start;
+        let read_start: rical_ui::datetime::Normalise = {
+            let zones = zones.clone();
+            Rc::new(move |t: &str| {
+                let w = zones.parse_start(t, &base)?;
+                Some(format::input(&w, zones.start_tz()))
+            })
+        };
+        attach(
+            &starts,
+            Config {
+                timed: timed.clone(),
+                normalise: Some(read_start.clone()),
+                start: None,
+                past: true,
+            },
+        );
+        let start_text = {
+            let (starts, read_start) = (starts.clone(), read_start.clone());
+            Rc::new(move || read_start(&starts.text()))
+        };
+        let read_end: rical_ui::datetime::Normalise = {
+            let (zones, starts, base) = (zones.clone(), starts.clone(), base);
+            Rc::new(move |t: &str| {
+                let start = zones.parse_start(&starts.text(), &base).unwrap_or(base);
+                let w = zones.parse_end(t, &start)?;
+                Some(format::input(&w, zones.end_tz()))
+            })
+        };
+        attach(
+            &ends,
+            Config {
+                timed,
+                normalise: Some(read_end),
+                start: Some(start_text),
+                past: true,
+            },
+        );
+    }
     let when = adw::PreferencesGroup::new();
     when.add(&all_day);
     when.add(&starts);

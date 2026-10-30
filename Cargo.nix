@@ -113,10 +113,10 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
-    "rical-mailbox" = rec {
-      packageId = "rical-mailbox";
+    "rical-mail-queue" = rec {
+      packageId = "rical-mail-queue";
       build = internal.buildRustCrateWithFeatures {
-        packageId = "rical-mailbox";
+        packageId = "rical-mail-queue";
       };
 
       # Debug support which might change between releases.
@@ -5865,56 +5865,6 @@ rec {
           }
         ];
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/rical-mail; };
-        libName = "rical_mail";
-        dependencies = [
-          {
-            name = "anyhow";
-            packageId = "anyhow";
-          }
-          {
-            name = "chrono";
-            packageId = "chrono";
-          }
-          {
-            name = "clap";
-            packageId = "clap";
-            features = [ "derive" "env" ];
-          }
-          {
-            name = "env_logger";
-            packageId = "env_logger";
-            features = [ "kv" ];
-          }
-          {
-            name = "libc";
-            packageId = "libc";
-          }
-          {
-            name = "log";
-            packageId = "log";
-            features = [ "kv" ];
-          }
-        ];
-        devDependencies = [
-          {
-            name = "tempfile";
-            packageId = "tempfile";
-          }
-        ];
-
-      };
-      "rical-mailbox" = rec {
-        crateName = "rical-mailbox";
-        version = "0.1.0";
-        edition = "2024";
-        crateBin = [
-          {
-            name = "rical-mailbox";
-            path = "src/main.rs";
-            requiredFeatures = [ ];
-          }
-        ];
-        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/rical-mailbox; };
         dependencies = [
           {
             name = "anyhow";
@@ -5946,8 +5896,12 @@ rec {
             packageId = "rical-cards";
           }
           {
-            name = "rical-mail";
-            packageId = "rical-mail";
+            name = "rical-core";
+            packageId = "rical-core";
+          }
+          {
+            name = "rical-mail-queue";
+            packageId = "rical-mail-queue";
           }
           {
             name = "rical-maildir";
@@ -5956,6 +5910,56 @@ rec {
           {
             name = "rical-ui";
             packageId = "rical-ui";
+          }
+        ];
+        devDependencies = [
+          {
+            name = "tempfile";
+            packageId = "tempfile";
+          }
+        ];
+
+      };
+      "rical-mail-queue" = rec {
+        crateName = "rical-mail-queue";
+        version = "0.1.0";
+        edition = "2024";
+        crateBin = [
+          {
+            name = "rical-mail-queue";
+            path = "src/main.rs";
+            requiredFeatures = [ ];
+          }
+        ];
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/rical-mail-queue; };
+        libName = "rical_mail_queue";
+        dependencies = [
+          {
+            name = "anyhow";
+            packageId = "anyhow";
+          }
+          {
+            name = "chrono";
+            packageId = "chrono";
+          }
+          {
+            name = "clap";
+            packageId = "clap";
+            features = [ "derive" "env" ];
+          }
+          {
+            name = "env_logger";
+            packageId = "env_logger";
+            features = [ "kv" ];
+          }
+          {
+            name = "libc";
+            packageId = "libc";
+          }
+          {
+            name = "log";
+            packageId = "log";
+            features = [ "kv" ];
           }
         ];
         devDependencies = [
@@ -6004,6 +6008,15 @@ rec {
           {
             name = "scraper";
             packageId = "scraper";
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
           }
         ];
         devDependencies = [

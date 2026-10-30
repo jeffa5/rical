@@ -230,3 +230,12 @@ impl Drop for AddressEntry {
         self.popover.unparent();
     }
 }
+
+impl AddressEntry {
+    /// Put text in the entry without offering completions for it.
+    pub fn set(&self, text: &str) {
+        self.quiet.set(true);
+        self.entry.set_text(text);
+        self.quiet.set(false);
+    }
+}

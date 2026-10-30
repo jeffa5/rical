@@ -8,6 +8,7 @@ use std::{cell::RefCell, ops::Range, rc::Rc};
 use adw::prelude::*;
 use chrono::{Local, TimeZone as _};
 use gtk::{gdk, glib, pango};
+use rical_core::diff::{Diff, Guest, LineOp, Standing, answer};
 use rical_maildir::{
     addr::Mailbox,
     read::{BodyKind, Opened},
@@ -31,6 +32,8 @@ pub struct Reader {
     invites: gtk::Box,
     pub body: gtk::TextView,
     attachments: gtk::Box,
+    fold_button: gtk::Button,
+    folded: std::cell::Cell<bool>,
     spans: RefCell<Vec<Span>>,
     scroller: gtk::ScrolledWindow,
     /// Told the number of a link that was clicked.
@@ -144,6 +147,12 @@ impl Reader {
         column.append(&invites);
         column.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
         column.append(&body);
+        let fold_button = gtk::Button::builder()
+            .halign(gtk::Align::Start)
+            .css_classes(["flat", "pill"])
+            .visible(false)
+            .build();
+        column.append(&fold_button);
         column.append(&attachments);
         let scroller = gtk::ScrolledWindow::builder()
             .child(&clamp)
@@ -164,11 +173,28 @@ impl Reader {
             invites,
             body,
             attachments,
+            fold_button,
+            folded: std::cell::Cell::new(false),
             spans: RefCell::default(),
             scroller,
             on_link: RefCell::default(),
         });
         reader.setup_links();
+        let weak = Rc::downgrade(&reader);
+        reader.fold_button.connect_clicked(move |b| {
+            let Some(r) = weak.upgrade() else { return };
+            let table = r.body.buffer().tag_table();
+            if let Some(t) = table.lookup("folded") {
+                let hide = !t.is_invisible();
+                t.set_invisible(hide);
+                r.folded.set(hide);
+                b.set_label(if hide {
+                    "Show the quoted lines"
+                } else {
+                    "Hide the quoted lines"
+                });
+            }
+        });
         reader
     }
 
@@ -223,7 +249,7 @@ impl Reader {
     }
 
     /// Show a message.
-    pub fn show(&self, o: &Opened, in_contacts: bool, note: Option<&str>) {
+    pub fn show(&self, o: &Opened, in_contacts: bool, note: Option<&str>, diffs: &[Diff]) {
         self.subject.set_label(if o.subject.is_empty() {
             "(no subject)"
         } else {
@@ -272,15 +298,32 @@ impl Reader {
             add("Status", n, None);
         }
         if let Some(l) = &o.list_id {
-            add("List", l, None);
+            let unsub = (!o.unsubscribe.is_empty()).then(|| {
+                gtk::Button::builder()
+                    .label("Unsubscribe")
+                    .css_classes(["flat", "pill"])
+                    .tooltip_text("Leave this list (asks first)")
+                    .action_name("win.run")
+                    .action_target(&"unsubscribe".to_variant())
+                    .build()
+                    .upcast::<gtk::Widget>()
+            });
+            add("List", l, unsub);
         }
 
         self.show_privacy(o);
-        self.show_invites(o);
+        self.show_invites(o, diffs);
         self.show_body(o);
         self.show_attachments(o);
         self.widget.set_visible_child_name("message");
         self.body.queue_resize();
+        // measured again once the window has laid it out at its real width
+        for ms in [30u64, 150] {
+            let body = self.body.clone();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(ms), move || {
+                body.queue_resize()
+            });
+        }
         self.scroller.vadjustment().set_value(0.0);
     }
 
@@ -357,9 +400,15 @@ impl Reader {
         }
     }
 
-    fn show_invites(&self, o: &Opened) {
+    fn show_invites(&self, o: &Opened, diffs: &[Diff]) {
         while let Some(c) = self.invites.first_child() {
             self.invites.remove(&c);
+        }
+        if !diffs.is_empty() {
+            for (i, d) in diffs.iter().enumerate() {
+                self.invites.append(&diff_card(d, o.invites.get(i)));
+            }
+            return;
         }
         for inv in &o.invites {
             let group = adw::PreferencesGroup::builder().title(inv.kind()).build();
@@ -390,6 +439,9 @@ impl Reader {
                 .build();
             row.add_suffix(&open);
             group.add(&row);
+            if inv.method == "REQUEST" {
+                group.add(&rsvp_row());
+            }
             self.invites.append(&group);
         }
     }
@@ -481,6 +533,46 @@ impl Reader {
             }
         }
 
+        // long quoted blocks fold: two lines stay, the rest hide until asked
+        let fold = match table.lookup("folded") {
+            Some(t) => t,
+            None => {
+                let t = gtk::TextTag::builder().name("folded").build();
+                table.add(&t);
+                t
+            }
+        };
+        fold.set_invisible(true);
+        let lines: Vec<&str> = text.split('\n').collect();
+        let mut hidden = 0;
+        let mut i = 0;
+        while i < lines.len() {
+            if !lines[i].starts_with('>') {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < lines.len() && lines[i].starts_with('>') {
+                i += 1;
+            }
+            if i - start > 6 {
+                let (Some(a), Some(mut b)) = (
+                    buf.iter_at_line((start + 2) as i32),
+                    buf.iter_at_line((i - 1) as i32),
+                ) else {
+                    continue;
+                };
+                b.forward_to_line_end();
+                // the line break before the block stays with the block's end
+                buf.apply_tag(&fold, &a, &b);
+                hidden += i - start - 2;
+            }
+        }
+        self.folded.set(hidden > 0);
+        self.fold_button.set_visible(hidden > 0);
+        self.fold_button
+            .set_label(&format!("Show {hidden} more quoted lines"));
+
         // links
         let mut spans = Vec::new();
         for (n, l) in o.body.links.iter().enumerate() {
@@ -545,4 +637,183 @@ impl Reader {
         }
         self.attachments.append(&group);
     }
+}
+
+/// How the message stands, as the heading of its card.
+fn headline(d: &Diff) -> String {
+    let n = d.changes.len() + d.guests.len();
+    let mut s = match d.standing {
+        Standing::New => "Invitation · not in your calendar yet".to_owned(),
+        Standing::Newer if n == 0 => "Updated invitation · nothing you can see changed".to_owned(),
+        Standing::Newer => format!(
+            "Updated invitation · {n} change{}",
+            if n == 1 { "" } else { "s" }
+        ),
+        Standing::Duplicate => "Invitation · already in your calendar, no changes".to_owned(),
+        Standing::Older => "Older version · your calendar has a newer one".to_owned(),
+        Standing::Cancel => "Cancelled".to_owned(),
+        Standing::Reply => "Reply to an invitation".to_owned(),
+    };
+    if let Some(o) = &d.occurrence {
+        s += &format!(" · for {o}");
+    }
+    s
+}
+
+fn esc(s: &str) -> String {
+    glib::markup_escape_text(s).to_string()
+}
+
+/// One event's invitation or update, with what changes in your calendar.
+fn diff_card(d: &Diff, light: Option<&rical_maildir::invite::Invite>) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::builder()
+        .title(esc(&headline(d)))
+        .build();
+    if let Some(c) = &d.calendar {
+        group.set_description(Some(&esc(&format!("In your calendar “{c}”"))));
+    }
+    // the event itself: its title and, unless the rows below say it, when
+    let mut subtitle = String::new();
+    if let Some(l) = light {
+        let when_changed = d
+            .changes
+            .iter()
+            .any(|c| c.field == rical_core::diff::Field::When);
+        if !when_changed {
+            subtitle += &esc(&l.when_shown());
+        }
+        let place_changed = d
+            .changes
+            .iter()
+            .any(|c| c.field == rical_core::diff::Field::Place);
+        if !place_changed && !l.location.is_empty() {
+            subtitle += &format!("\n{}", esc(&l.location));
+        }
+        if !l.organizer.is_empty() && d.standing == Standing::New {
+            subtitle += &format!("\nFrom {}", esc(&l.organizer));
+        }
+    }
+    let head = adw::ActionRow::builder()
+        .title(esc(&if d.summary.is_empty() {
+            "(no title)".to_owned()
+        } else {
+            d.summary.clone()
+        }))
+        .subtitle(subtitle.trim_start_matches('\n'))
+        .build();
+    head.set_subtitle_lines(0);
+    if !matches!(d.standing, Standing::Older | Standing::Duplicate) {
+        head.add_suffix(
+            &gtk::Button::builder()
+                .label("Open in Calendar")
+                .valign(gtk::Align::Center)
+                .action_name("win.run")
+                .action_target(&"invite".to_variant())
+                .css_classes(["suggested-action"])
+                .build(),
+        );
+    }
+    group.add(&head);
+    if d.method == "REQUEST" && d.standing == Standing::New {
+        group.add(&rsvp_row());
+    }
+
+    for c in &d.changes {
+        let mut sub = if c.field == rical_core::diff::Field::Description {
+            let mut lines = String::new();
+            for (op, l) in &c.lines {
+                let line = match op {
+                    LineOp::Same => format!("<span alpha=\"60%\">  {}</span>", esc(l)),
+                    LineOp::Added => format!("<span foreground=\"#26a269\">+ {}</span>", esc(l)),
+                    LineOp::Removed => {
+                        format!("<span foreground=\"#c01c28\">− <s>{}</s></span>", esc(l))
+                    }
+                };
+                if !lines.is_empty() {
+                    lines.push('\n');
+                }
+                lines += &line;
+            }
+            lines
+        } else {
+            let old = if c.old.is_empty() {
+                "nothing".to_owned()
+            } else {
+                c.old.clone()
+            };
+            let new = if c.new.is_empty() {
+                "nothing".to_owned()
+            } else {
+                c.new.clone()
+            };
+            format!(
+                "<span alpha=\"65%\"><s>{}</s></span>\n<b>{}</b>",
+                esc(&old),
+                esc(&new)
+            )
+        };
+        if let Some(n) = &c.note {
+            sub += &format!("\n<span alpha=\"65%\">{}</span>", esc(n));
+        }
+        let row = adw::ActionRow::builder()
+            .title(c.field.label())
+            .subtitle(sub)
+            .build();
+        row.set_subtitle_lines(0);
+        row.add_prefix(&gtk::Image::from_icon_name(match c.field {
+            rical_core::diff::Field::When => "alarm-symbolic",
+            rical_core::diff::Field::Place => "mark-location-symbolic",
+            rical_core::diff::Field::Description => "format-justify-left-symbolic",
+            rical_core::diff::Field::Repeat => "media-playlist-repeat-symbolic",
+            _ => "document-edit-symbolic",
+        }));
+        group.add(&row);
+    }
+    for g in &d.guests {
+        let (words, icon) = match &g.what {
+            Guest::Added => ("was invited".to_owned(), "list-add-symbolic"),
+            Guest::Removed => ("is no longer invited".to_owned(), "list-remove-symbolic"),
+            Guest::Answered(_, to) => (answer(to).to_owned(), "avatar-default-symbolic"),
+        };
+        let row = adw::ActionRow::builder()
+            .title(esc(&format!("{} {words}", g.who)))
+            .build();
+        row.add_prefix(&gtk::Image::from_icon_name(icon));
+        group.add(&row);
+    }
+    if d.changes.is_empty()
+        && d.guests.is_empty()
+        && matches!(d.standing, Standing::Newer | Standing::Duplicate)
+    {
+        let row = adw::ActionRow::builder()
+            .title("Nothing about the event differs from your calendar")
+            .build();
+        row.add_css_class("dim-label");
+        group.add(&row);
+    }
+    group
+}
+
+/// Answer by mail: for an invitation the calendar does not have, where its
+/// server will not do it for you.
+fn rsvp_row() -> adw::ActionRow {
+    let row = adw::ActionRow::builder()
+        .title("Answer by mail")
+        .subtitle("Sends your answer to the organiser")
+        .build();
+    for (label, what) in [
+        ("Accept", "accept"),
+        ("Maybe", "maybe"),
+        ("Decline", "decline"),
+    ] {
+        row.add_suffix(
+            &gtk::Button::builder()
+                .label(label)
+                .valign(gtk::Align::Center)
+                .action_name("win.run")
+                .action_target(&format!("rsvp {what}").to_variant())
+                .build(),
+        );
+    }
+    row
 }

@@ -30,6 +30,8 @@ pub struct Draft {
     pub answering: Option<PathBuf>,
     /// The body is Markdown: sent as written with an HTML alternative.
     pub markdown: bool,
+    /// A calendar message to send along (iMIP): its METHOD and the iCalendar.
+    pub calendar: Option<(String, String)>,
 }
 
 fn local(ts: i64) -> DateTime<Local> {
@@ -154,6 +156,7 @@ pub fn reply(o: &Opened, me: &[Mailbox], all: bool, width: usize) -> Draft {
         attachments: Vec::new(),
         answering: Some(o.path.clone()),
         markdown: false,
+        calendar: None,
     }
 }
 
@@ -204,6 +207,7 @@ impl Draft {
             references: o.references.clone(),
             attachments: Vec::new(),
             answering: None,
+            calendar: None,
             markdown: o
                 .headers
                 .iter()
@@ -592,7 +596,13 @@ impl Draft {
         let plain_part = format!(
             "Content-Type: text/plain; charset=utf-8\nContent-Transfer-Encoding: {cte}\n\n{encoded}\n"
         );
-        let text_part = if self.markdown {
+        let text_part = if let Some((method, ics)) = &self.calendar {
+            let alt = format!("rical-alt-{}", unique_name().replace(['.', ':'], "-"));
+            format!(
+                "Content-Type: multipart/alternative; boundary=\"{alt}\"\n\n--{alt}\n{plain_part}--{alt}\nContent-Type: text/calendar; charset=utf-8; method={method}\nContent-Transfer-Encoding: quoted-printable\n\n{}\n--{alt}--\n",
+                qp(&ics.replace("\r\n", "\n"))
+            )
+        } else if self.markdown {
             let alt = format!("rical-alt-{}", unique_name().replace(['.', ':'], "-"));
             let html = crate::markdown::to_html(&self.body.replace("\r\n", "\n"));
             format!(
@@ -762,6 +772,29 @@ mod tests {
         );
         let o = read::parse(std::path::Path::new("x"), &bytes).unwrap();
         assert!(Draft::from_saved(&o).markdown);
+    }
+
+    #[test]
+    fn a_calendar_reply_goes_out_as_text_and_text_calendar() {
+        let ics = "BEGIN:VCALENDAR\r\nMETHOD:REPLY\r\nBEGIN:VEVENT\r\nUID:abc@x\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+        let d = Draft {
+            from: "me@y.example".into(),
+            to: "ann@x.example".into(),
+            subject: "Accepted: Planning".into(),
+            body: "Me has accepted: Planning".into(),
+            calendar: Some(("REPLY".into(), ics.into())),
+            ..Draft::default()
+        };
+        let bytes = d.to_bytes(Local::now()).unwrap();
+        let text = String::from_utf8(bytes.clone()).unwrap();
+        assert!(text.contains("text/calendar; charset=utf-8; method=REPLY"));
+        let o = read::parse(std::path::Path::new("x"), &bytes).unwrap();
+        assert!(o.body.text.contains("has accepted"));
+        assert!(
+            read::calendar_text_of(&bytes)
+                .unwrap()
+                .contains("UID:abc@x")
+        );
     }
 
     #[test]

@@ -5,6 +5,7 @@ use std::{path::Path, rc::Rc};
 use adw::prelude::*;
 use gtk::{gio, glib};
 use rical_maildir::{
+    backend::{Backend, Gives},
     compose::{self, Draft},
     flags::Flags,
     read,
@@ -34,6 +35,41 @@ impl Values for StateValues<'_> {
             "identity" => self.0.opts.me.iter().map(|m| m.address.clone()).collect(),
             _ => Vec::new(),
         }
+    }
+    fn suggestions(&self, key: &str) -> Vec<String> {
+        if key != "query" {
+            return Vec::new();
+        }
+        let mu = matches!(self.0.opts.search, Backend::Mu);
+        let mut v: Vec<String> = [
+            "from:",
+            "to:",
+            "subject:",
+            "date:1w..",
+            "unread",
+            "flagged",
+            "attachment",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        if mu {
+            v = [
+                "from:",
+                "to:",
+                "subject:",
+                "date:1w..",
+                "maildir:/",
+                "flag:unread",
+                "flag:attach",
+                "mime:",
+                "size:1M..",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        }
+        v
     }
 }
 
@@ -112,12 +148,18 @@ impl Window {
                 let on = self.outer.shows_sidebar();
                 self.outer.set_show_sidebar(!on);
             }
-            "search" => {
+            "filter" => {
                 let text = p.arg(0).unwrap_or("");
                 self.search.set_text(text);
                 self.search.grab_focus();
                 self.search.set_position(-1);
             }
+            "search" => match p.arg(0).map(str::trim).filter(|q| !q.is_empty()) {
+                Some(q) => self.run_search(q)?,
+                None => crate::filters::open(self),
+            },
+            "search-helper" => crate::filters::open(self),
+            "index" => self.index()?,
             "threads" => {
                 let now = self.state.borrow().threaded;
                 let on = match p.arg(0) {
@@ -205,12 +247,14 @@ impl Window {
             }
             "mark" => self.mark(p.arg(0))?,
             "flag" => {
-                let path = self.selected_path()?;
-                let before = store::flags_of(&path);
-                let mut now = before;
-                now.flagged = !before.flagged;
-                self.set_flags(&path, before, now)?;
+                let paths = self.state.borrow().targets();
+                if paths.is_empty() {
+                    return Err("no message is selected".into());
+                }
+                let on = !store::flags_of(&paths[0]).flagged;
+                self.change_flags(&paths, |f| f.flagged = on)?;
             }
+            "pick" => self.pick(p.arg(0).unwrap_or("toggle"))?,
             "undo" => self.undo()?,
             "links" => self.show_links()?,
             "open-link" => {
@@ -222,17 +266,37 @@ impl Window {
             }
             "attachment" => self.attachment(p.arg(0).unwrap_or("open"), p.arg(1))?,
             "invite" => self.open_invite()?,
+            "unsubscribe" => self.unsubscribe()?,
+            "rsvp" => self.rsvp(p.arg(0).unwrap_or("accept"))?,
             "contact" => self.open_contact()?,
             "headers" => self.show_headers()?,
             "source" => self.show_source()?,
             "sync" => self.sync()?,
-            "reload" => {
+            "mkdir" => {
+                let name = p.arg(0).ok_or("what should it be called?")?;
+                let root = self.state.borrow().root.clone();
+                store::create_folder(&root, name).map_err(|e| format!("{e:#}"))?;
                 self.reload();
-                self.toast("Reloaded");
+                self.toast(&format!("Made {name}"));
+            }
+            "export" => self.export()?,
+            "reload" => {
+                let again = match &self.state.borrow().place {
+                    Place::Search(q) => Some(q.clone()),
+                    _ => None,
+                };
+                match again {
+                    Some(q) => self.run_search(&q)?,
+                    None => {
+                        self.reload();
+                        self.toast("Reloaded");
+                    }
+                }
             }
             "wake" => self.wake()?,
+            "unsend" => self.unsend()?,
             "retry" => {
-                let n = rical_mail::queue::Queue::open(&self.state.borrow().opts.queue)
+                let n = rical_mail_queue::queue::Queue::open(&self.state.borrow().opts.queue)
                     .and_then(|q| q.retry(None))
                     .map_err(|e| format!("{e:#}"))?;
                 self.toast(&format!("{n} back in the queue"));
@@ -308,6 +372,11 @@ impl Window {
     }
 
     fn back(self: &Rc<Self>) {
+        if !self.state.borrow().picked.is_empty() {
+            self.state.borrow_mut().picked.clear();
+            self.fill_list();
+            return;
+        }
         if !self.state.borrow().query.is_empty() || !self.search.text().is_empty() {
             self.search.set_text("");
             self.search_now();
@@ -315,79 +384,176 @@ impl Window {
         } else if self.split.shows_content() {
             self.split.set_show_content(false);
             self.focus_view();
+        } else if matches!(self.state.borrow().place, Place::Search(_)) {
+            // out of the results: back to where the search began
+            let before = self.state.borrow_mut().before_search.take();
+            let place = before.unwrap_or_else(|| {
+                let s = self.state.borrow();
+                s.folder_with_role(Role::Inbox)
+                    .or(s.folders.first())
+                    .map_or(Place::Outbox, |f| Place::Folder(f.path.clone()))
+            });
+            self.go(place);
         } else {
             self.focus_view();
         }
     }
 
-    /// Mark the selected message read or unread (or the other way).
+    /// Mark the picked messages (else the selected one) read or unread.
     fn mark(self: &Rc<Self>, how: Option<&str>) -> Result<(), String> {
         if self.state.borrow().place == Place::Outbox {
             return Ok(());
         }
-        let path = self.selected_path()?;
-        let before = store::flags_of(&path);
-        // a message still in new/ has no flags yet but is unread
-        let unread = self
+        let paths = self.state.borrow().targets();
+        if paths.is_empty() {
+            return Err("no message is selected".into());
+        }
+        // one answer for all: by the first
+        let first_unread = self
             .state
             .borrow()
-            .selected_summary()
+            .messages
+            .iter()
+            .find(|m| m.path == paths[0])
             .is_some_and(|m| m.unread());
-        let mut now = before;
-        now.seen = match how.unwrap_or("toggle") {
+        let want_seen = match how.unwrap_or("toggle") {
             "read" => true,
             "unread" => false,
-            _ => unread,
+            _ => first_unread,
         };
-        if now == before && !unread {
-            return Ok(());
-        }
-        if unread == !now.seen && now == before {
-            return Ok(());
-        }
-        self.set_flags(&path, before, now)
+        self.change_flags(&paths, |f| f.seen = want_seen)
     }
 
-    fn set_flags(self: &Rc<Self>, path: &Path, before: Flags, now: Flags) -> Result<(), String> {
+    /// Change the flags of messages, as one undoable step.
+    fn change_flags(
+        self: &Rc<Self>,
+        paths: &[std::path::PathBuf],
+        change: impl Fn(&mut Flags),
+    ) -> Result<(), String> {
         self.quiet();
-        let new = store::set_flags(path, now).map_err(|e| format!("{e:#}"))?;
-        let pos = {
+        let mut done = Vec::new();
+        for path in paths {
+            let unread = self
+                .state
+                .borrow()
+                .messages
+                .iter()
+                .find(|m| &m.path == path)
+                .is_some_and(|m| m.unread());
+            let before = store::flags_of(path);
+            let mut now = before;
+            // a message still in new/ has no flags yet but is unread
+            now.seen = before.seen && !unread;
+            let was = now;
+            change(&mut now);
+            if now == was && now.seen == !unread {
+                continue;
+            }
+            let new = store::set_flags(path, now).map_err(|e| format!("{e:#}"))?;
+            let mut before = before;
+            before.seen = !unread && before.seen;
+            self.state.borrow_mut().renamed(path, new.clone(), now);
+            done.push(Undo::Flags { now: new, before });
+        }
+        if done.is_empty() {
+            return Ok(());
+        }
+        let single_at = (done.len() == 1)
+            .then(|| self.state.borrow().position())
+            .flatten();
+        {
             let mut s = self.state.borrow_mut();
-            let pos = s.position();
-            s.renamed(path, new.clone(), now);
-            s.push_undo(Undo::Flags { now: new, before });
+            s.push_undo(if done.len() == 1 {
+                done.remove(0)
+            } else {
+                Undo::Batch(done)
+            });
             s.reload_folders();
-            pos
-        };
-        if let Some(p) = pos {
-            self.rebind(p);
+        }
+        match single_at {
+            Some(p) => self.rebind(p),
+            None => self.fill_list(),
         }
         self.fill_folders();
         Ok(())
     }
 
+    /// Move the picked messages (else the selected one) to a folder.
     fn move_selected(self: &Rc<Self>, dest: &Path, said: &str) -> Result<(), String> {
         if self.state.borrow().place == Place::Outbox {
             return Err("these are waiting to be sent: delete removes one".into());
         }
-        let path = self.selected_path()?;
-        let from = path
-            .parent()
-            .and_then(Path::parent)
-            .map(Path::to_owned)
-            .ok_or("not in a folder")?;
+        let paths = self.state.borrow().targets();
+        if paths.is_empty() {
+            return Err("no message is selected".into());
+        }
         self.quiet();
-        let now = store::move_to(&path, dest).map_err(|e| format!("{e:#}"))?;
-        let pos = {
+        let mut done = Vec::new();
+        for path in &paths {
+            let from = path
+                .parent()
+                .and_then(Path::parent)
+                .map(Path::to_owned)
+                .ok_or("not in a folder")?;
+            let now = store::move_to(path, dest).map_err(|e| format!("{e:#}"))?;
+            done.push(Undo::Moved { now, back_to: from });
+        }
+        let n = paths.len();
+        {
             let mut s = self.state.borrow_mut();
-            s.push_undo(Undo::Moved { now, back_to: from });
-            let pos = s.removed(&path);
+            s.push_undo(if n == 1 {
+                done.remove(0)
+            } else {
+                Undo::Batch(done)
+            });
+            for p in &paths {
+                s.removed(p);
+            }
+            s.picked.clear();
             s.reload_folders();
-            pos
-        };
-        let _ = pos;
+        }
         self.refresh();
-        self.toast(&format!("{said}. U to undo"));
+        self.toast(&format!(
+            "{said}{}. U to undo",
+            if n > 1 {
+                format!(" ({n} messages)")
+            } else {
+                String::new()
+            }
+        ));
+        Ok(())
+    }
+
+    /// Pick messages to act on together: toggle this one (and move on),
+    /// pick everything shown, or nothing.
+    fn pick(self: &Rc<Self>, how: &str) -> Result<(), String> {
+        match how {
+            "all" => {
+                let mut s = self.state.borrow_mut();
+                let all: Vec<_> = (0..s.shown.len())
+                    .filter_map(|n| s.message_at(n).map(|m| m.path.clone()))
+                    .collect();
+                s.picked = all.into_iter().collect();
+            }
+            "none" => self.state.borrow_mut().picked.clear(),
+            _ => {
+                let path = self.selected_path()?;
+                {
+                    let mut s = self.state.borrow_mut();
+                    if !s.picked.remove(&path) {
+                        s.picked.insert(path);
+                    }
+                }
+                let at = self.state.borrow().position();
+                if let Some(p) = at {
+                    self.rebind(p);
+                }
+                self.select("next");
+                self.update_picked_title();
+                return Ok(());
+            }
+        }
+        self.fill_list();
         Ok(())
     }
 
@@ -454,28 +620,34 @@ impl Window {
             .pop()
             .ok_or("nothing to undo")?;
         self.quiet();
+        let moved = Self::undo_step(u)?;
+        // a move needs the folders read again; flags only the rows
+        self.reload();
+        if moved {
+            self.toast("Moved back");
+        }
+        Ok(())
+    }
+
+    /// Undo one step (or each of a batch). Whether anything was moved.
+    fn undo_step(u: Undo) -> Result<bool, String> {
         match u {
             Undo::Moved { now, back_to } => {
                 store::move_to(&now, &back_to).map_err(|e| format!("{e:#}"))?;
-                self.reload();
-                self.toast("Moved back");
+                Ok(true)
             }
             Undo::Flags { now, before } => {
-                let new = store::set_flags(&now, before).map_err(|e| format!("{e:#}"))?;
-                let pos = {
-                    let mut s = self.state.borrow_mut();
-                    let pos = s.position();
-                    s.renamed(&now, new, before);
-                    s.reload_folders();
-                    pos
-                };
-                if let Some(p) = pos {
-                    self.rebind(p);
+                store::set_flags(&now, before).map_err(|e| format!("{e:#}"))?;
+                Ok(false)
+            }
+            Undo::Batch(all) => {
+                let mut moved = false;
+                for u in all.into_iter().rev() {
+                    moved |= Self::undo_step(u)?;
                 }
-                self.fill_folders();
+                Ok(moved)
             }
         }
-        Ok(())
     }
 
     fn show_links(self: &Rc<Self>) -> Result<(), String> {
@@ -906,6 +1078,18 @@ impl Window {
         let cmd = self.state.borrow().opts.sync.clone().ok_or(
             "set `sync = …` (for example mbsync -a) in the settings to fetch mail from here",
         )?;
+        // new mail is searchable once the index knows it
+        let index = {
+            let s = self.state.borrow();
+            s.opts
+                .index
+                .clone()
+                .or_else(|| s.opts.search.index_command().map(str::to_owned))
+        };
+        let cmd = match index {
+            Some(i) => format!("{{ {cmd}; }} && {{ {i}; }}"),
+            None => cmd,
+        };
         self.run_shell(&cmd, "Fetching mail…", "Fetched", true);
         Ok(())
     }
@@ -917,7 +1101,7 @@ impl Window {
             .opts
             .send
             .clone()
-            .ok_or("set `send = rical-mail run --once` in the settings to send from here; otherwise your rical-mail service sends")?;
+            .ok_or("set `send = rical-mail-queue run --once` in the settings to send from here; otherwise your rical-mail-queue service sends")?;
         self.run_shell(&cmd, "Sending…", "Sent what was queued", true);
         Ok(())
     }
@@ -975,3 +1159,289 @@ impl palette::Host for Window {
 
 #[allow(unused_imports)]
 use Role as _;
+
+impl Window {
+    /// What follows queueing a message: say so, with Undo while it is held
+    /// back, and send at once (after the hold) if a `send` command is set.
+    pub fn after_queued(self: &Rc<Self>, delay: u32) {
+        let toast = adw::Toast::builder()
+            .priority(adw::ToastPriority::High)
+            .build();
+        if delay > 0 {
+            toast.set_title(&format!("Sending in {delay} seconds"));
+            toast.set_button_label(Some("Undo"));
+            toast.set_action_name(Some("win.run"));
+            toast.set_action_target_value(Some(&"unsend".to_variant()));
+            toast.set_timeout(delay.min(30));
+        } else {
+            toast.set_title("Queued to be sent");
+        }
+        self.toasts.add_toast(toast);
+        if self.state.borrow().opts.send.is_some() {
+            let weak = Rc::downgrade(self);
+            glib::timeout_add_local_once(
+                std::time::Duration::from_secs(u64::from(delay) + 1),
+                move || {
+                    if let Some(w) = weak.upgrade() {
+                        let _ = w.wake();
+                    }
+                },
+            );
+        }
+    }
+
+    /// Take back what was just sent, and open it again to carry on.
+    fn unsend(self: &Rc<Self>) -> Result<(), String> {
+        let (id, draft) = self
+            .state
+            .borrow_mut()
+            .last_sent
+            .take()
+            .ok_or("nothing was just sent")?;
+        let queue = rical_mail_queue::queue::Queue::open(&self.state.borrow().opts.queue)
+            .map_err(|e| format!("{e:#}"))?;
+        if queue.cancel(&id).map_err(|e| format!("{e:#}"))? {
+            self.quiet();
+            self.reload();
+            crate::compose::open(self, draft, None);
+            Ok(())
+        } else {
+            Err("too late: it is already on its way".into())
+        }
+    }
+}
+
+impl Window {
+    /// Answer an invitation by mail: a message to the organiser with a
+    /// `text/calendar; method=REPLY`, opened to add a note and send.
+    fn rsvp(self: &Rc<Self>, how: &str) -> Result<(), String> {
+        let o = self.opened()?;
+        let ics = read::calendar_text(&o.path).map_err(|e| format!("{e:#}"))?;
+        let partstat = match how {
+            "accept" => "ACCEPTED",
+            "maybe" => "TENTATIVE",
+            "decline" => "DECLINED",
+            other => return Err(format!("accept, maybe or decline, not “{other}”")),
+        };
+        // the address that was invited, else the first of mine
+        let me = {
+            let s = self.state.borrow();
+            let lower = ics.to_lowercase();
+            s.opts
+                .me
+                .iter()
+                .find(|m| lower.contains(&format!("mailto:{}", m.address.to_lowercase())))
+                .or(s.opts.me.first())
+                .cloned()
+                .ok_or("set `me = Name <address>` in the settings first")?
+        };
+        let r = rical_maildir::invite::reply_to(
+            &ics,
+            &me.address,
+            &me.name,
+            partstat,
+            chrono::Utc::now(),
+        )
+        .ok_or("this invitation names no organiser to answer")?;
+        let mut references = o.references.clone();
+        references.extend(o.message_id.clone());
+        let draft = Draft {
+            from: me.display(),
+            to: r.to,
+            subject: r.subject,
+            body: format!("{}\n", r.words),
+            in_reply_to: o.message_id.clone(),
+            references,
+            answering: Some(o.path.clone()),
+            calendar: Some(("REPLY".to_owned(), r.ics)),
+            ..Draft::default()
+        };
+        crate::compose::open(self, draft, None);
+        Ok(())
+    }
+}
+
+impl Window {
+    /// Leave a list by the way its message offers: write the mail it asks
+    /// for, or open its page, after saying where that goes.
+    fn unsubscribe(self: &Rc<Self>) -> Result<(), String> {
+        let o = self.opened()?;
+        let target = o
+            .unsubscribe
+            .iter()
+            .find(|u| u.to_lowercase().starts_with("mailto:"))
+            .or(o.unsubscribe.first())
+            .cloned()
+            .ok_or("this message does not say how to unsubscribe")?;
+        if let Some(rest) = target
+            .strip_prefix("mailto:")
+            .or_else(|| target.strip_prefix("MAILTO:"))
+        {
+            let mut d = crate::compose::parse_mailto(&format!("mailto:{rest}"));
+            if d.subject.is_empty() {
+                d.subject = "unsubscribe".to_owned();
+            }
+            if d.body.is_empty() {
+                d.body = "unsubscribe\n".to_owned();
+            }
+            d.from = self.new_draft().from;
+            crate::compose::open(self, d, None);
+            return Ok(());
+        }
+        let host = target
+            .split_once("://")
+            .map(|(_, r)| r.split(['/', '?', '#']).next().unwrap_or(""))
+            .unwrap_or("")
+            .to_owned();
+        let dialog = adw::AlertDialog::builder()
+            .heading("Unsubscribe?")
+            .body(format!(
+                "This opens a page on {host} that unsubscribes you.\n\n{target}\n\n\
+                 Visiting it tells them your address is read."
+            ))
+            .build();
+        dialog.add_responses(&[("cancel", "_Cancel"), ("open", "_Open the Page")]);
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+        let weak = Rc::downgrade(self);
+        dialog.connect_response(None, move |_, r| {
+            if r == "open"
+                && let Some(w) = weak.upgrade()
+            {
+                open_uri(Some(w.window.upcast_ref()), &target);
+            }
+        });
+        dialog.present(Some(&self.window));
+        Ok(())
+    }
+}
+
+impl Window {
+    /// Save the message as it is on disk.
+    fn export(self: &Rc<Self>) -> Result<(), String> {
+        let path = self.selected_path()?;
+        let name = self
+            .state
+            .borrow()
+            .selected_summary()
+            .map(|m| read::safe_name(&m.subject))
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "message".to_owned());
+        let dialog = gtk::FileDialog::builder()
+            .title("Save the message")
+            .initial_name(format!("{name}.eml"))
+            .build();
+        let weak = Rc::downgrade(self);
+        dialog.save(Some(&self.window), None::<&gio::Cancellable>, move |r| {
+            let (Some(w), Ok(file)) = (weak.upgrade(), r) else {
+                return;
+            };
+            let Some(to) = file.path() else { return };
+            match std::fs::copy(&path, &to) {
+                Ok(_) => w.toast(&format!("Saved {}", to.display())),
+                Err(e) => w.toast(&format!("{}: {e}", to.display())),
+            }
+        });
+        Ok(())
+    }
+}
+
+impl Window {
+    /// Search everything: with the search tool if there is one, else the
+    /// messages of every folder. The matches are shown as a list of their own.
+    pub fn run_search(self: &Rc<Self>, query: &str) -> Result<(), String> {
+        let backend = self.state.borrow().opts.search.clone();
+        {
+            let mut s = self.state.borrow_mut();
+            if !matches!(s.place, Place::Search(_)) {
+                s.before_search = Some(s.place.clone());
+            }
+        }
+        let dir = crate::state::State::search_dir();
+        let Some(cmd) = backend.command(query, &dir) else {
+            self.show_results(query);
+            return Ok(());
+        };
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let proc = gio::Subprocess::newv(
+            &[
+                std::ffi::OsStr::new("sh"),
+                std::ffi::OsStr::new("-c"),
+                std::ffi::OsStr::new(&cmd),
+            ],
+            gio::SubprocessFlags::STDOUT_PIPE | gio::SubprocessFlags::STDERR_PIPE,
+        )
+        .map_err(|e| format!("{}: {e}", backend.name()))?;
+        self.toast(&format!("Searching with {}…", backend.name()));
+        let (weak, query, finished) = (Rc::downgrade(self), query.to_owned(), proc.clone());
+        proc.communicate_utf8_async(None::<String>, None::<&gio::Cancellable>, move |r| {
+            let Some(w) = weak.upgrade() else { return };
+            let (out, err) = match r {
+                Ok((o, e)) => (
+                    o.unwrap_or_default().to_string(),
+                    e.unwrap_or_default().to_string(),
+                ),
+                Err(e) => {
+                    w.toast(&format!("{}: {e}", backend.name()));
+                    return;
+                }
+            };
+            let code = finished.exit_status();
+            // mu says 4 for "found nothing"; anything else that failed is a problem
+            let nothing = backend == Backend::Mu && code == 4;
+            if code != 0 && !nothing {
+                let last = err
+                    .lines()
+                    .rev()
+                    .chain(out.lines().rev())
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("it failed");
+                log::warn!("{}: {err}", backend.name());
+                w.toast(&format!("{}: {last}", backend.name()));
+                return;
+            }
+            if backend.gives() == Gives::Paths || nothing {
+                let paths: Vec<std::path::PathBuf> = out
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .map(std::path::PathBuf::from)
+                    .collect();
+                if let Err(e) = store::write_links(&crate::state::State::search_dir(), &paths) {
+                    w.toast(&format!("{e:#}"));
+                    return;
+                }
+            }
+            w.show_results(&query);
+        });
+        Ok(())
+    }
+
+    fn show_results(self: &Rc<Self>, query: &str) {
+        self.go(Place::Search(query.to_owned()));
+        let n = self.state.borrow().messages.len();
+        self.toast(&if n == 0 {
+            "Nothing found".to_owned()
+        } else {
+            format!("{n} found. Esc goes back")
+        });
+    }
+
+    /// Update the search index: your `index` command, or the tool's own.
+    fn index(self: &Rc<Self>) -> Result<(), String> {
+        let (custom, backend) = {
+            let s = self.state.borrow();
+            (s.opts.index.clone(), s.opts.search.clone())
+        };
+        let cmd = custom
+            .or_else(|| backend.index_command().map(str::to_owned))
+            .ok_or("set `index = …` (for example mu index) in the settings")?;
+        self.run_shell(
+            &cmd,
+            "Updating the search index…",
+            "Search index updated",
+            false,
+        );
+        Ok(())
+    }
+}

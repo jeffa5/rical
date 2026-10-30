@@ -3,14 +3,14 @@
 //! The command runs under `sh -c`, with the message on stdin and the
 //! envelope in the environment:
 //!
-//! - `RICAL_MAIL_ID`: the queue id
-//! - `RICAL_MAIL_FROM`: the sender's address
-//! - `RICAL_MAIL_RECIPIENTS`: every recipient (To, Cc and Bcc), separated
+//! - `RICAL_MAIL_QUEUE_ID`: the queue id
+//! - `RICAL_MAIL_QUEUE_FROM`: the sender's address
+//! - `RICAL_MAIL_QUEUE_RECIPIENTS`: every recipient (To, Cc and Bcc), separated
 //!   by spaces
 //!
 //! The `Bcc` header is not in what it reads, so a command may use
 //! `-t`-style options without leaking it; it must take the recipients from
-//! `RICAL_MAIL_RECIPIENTS` to reach those on Bcc.
+//! `RICAL_MAIL_QUEUE_RECIPIENTS` to reach those on Bcc.
 //!
 //! Exit 0 means sent. Other codes follow sysexits: a few mean it will
 //! never work (bad usage, bad data, no permission, bad configuration), the
@@ -77,9 +77,9 @@ pub fn run(job: &Job) -> Outcome {
     let mut child = match Command::new("sh")
         .arg("-c")
         .arg(job.command)
-        .env("RICAL_MAIL_ID", job.id)
-        .env("RICAL_MAIL_FROM", job.from)
-        .env("RICAL_MAIL_RECIPIENTS", job.recipients.join(" "))
+        .env("RICAL_MAIL_QUEUE_ID", job.id)
+        .env("RICAL_MAIL_QUEUE_FROM", job.from)
+        .env("RICAL_MAIL_QUEUE_RECIPIENTS", job.recipients.join(" "))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -175,7 +175,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("out");
         let cmd = format!(
-            "{{ echo \"$RICAL_MAIL_ID $RICAL_MAIL_FROM $RICAL_MAIL_RECIPIENTS\"; cat; }} > {}",
+            "{{ echo \"$RICAL_MAIL_QUEUE_ID $RICAL_MAIL_QUEUE_FROM $RICAL_MAIL_QUEUE_RECIPIENTS\"; cat; }} > {}",
             out.display()
         );
         assert_eq!(run_cmd(&cmd, 5000), Outcome::Sent);

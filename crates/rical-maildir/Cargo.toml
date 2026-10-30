@@ -11,6 +11,8 @@ log.workspace = true
 mail-parser = { version = "1.0.0", features = ["full_encoding"] }
 scraper = "0.24.0"
 base64 = "0.22.1"
+serde.workspace = true
+serde_json.workspace = true
 pulldown-cmark = { version = "0.13.0", default-features = false, features = ["html"] }
 
 [dev-dependencies]

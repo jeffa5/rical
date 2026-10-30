@@ -67,7 +67,7 @@ the Journal view a journal entry. `Ctrl+Enter` saves, `Escape` cancels.
 | Title, Calendar | |
 | Type | Event or task (new items only) |
 | All day | Dates without times |
-| Starts, Ends | `YYYY-MM-DD HH:MM`, `YYYY-MM-DD`, or `HH:MM` on the same day; Ends also takes a length such as `+1h30m` or `45m`. For a task both are optional (empty for none) and Ends is the due date. For a journal entry there is only the date, empty for an undated note. |
+| Starts, Ends | Each has two small pickers: the calendar button (`Alt+Down`) for the date, a month to click with Today and Tomorrow; the clock button (`Alt+Shift+Down`) for the time, hours and minutes with 9:00, 14:00 and, for the end, how long it lasts. They write the text. Typing works as before: `YYYY-MM-DD HH:MM`, `YYYY-MM-DD`, or `HH:MM` on the same day; Ends also takes a length such as `+1h30m` or `45m`. For a task both are optional (empty for none) and Ends is the due date. For a journal entry there is only the date, empty for an undated note. |
 | Time zone, Ends in | The zone the times are typed in (yours by default); a flight can end in another zone. The other zone's time is shown beside the field. |
 | Repeat | Never, daily, weekly, monthly or yearly, or a custom rule: every N days, weeks, months or years, on chosen weekdays, ending never, after N times or on a date. Rules beyond these are kept as they are; `:repeat` sets any rule. |
 | Location, Video call link | The link is the event's conference link (Join opens it). |

@@ -6,6 +6,7 @@ use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
 use rical_cards::Books;
 use rical_maildir::{
     addr::Mailbox,
+    backend::Backend,
     flags::Flags,
     read::Opened,
     search::Query,
@@ -20,8 +21,10 @@ use crate::config::Options;
 pub enum Place {
     /// A folder, by its path.
     Folder(PathBuf),
-    /// What rical-mail has queued to send.
+    /// What rical-mail-queue has queued to send.
     Outbox,
+    /// The messages a search found, by its query.
+    Search(String),
 }
 
 /// Someone to complete an address with.
@@ -42,8 +45,16 @@ impl Person {
 /// A change that can be undone.
 #[derive(Debug, Clone)]
 pub enum Undo {
-    Moved { now: PathBuf, back_to: PathBuf },
-    Flags { now: PathBuf, before: Flags },
+    Moved {
+        now: PathBuf,
+        back_to: PathBuf,
+    },
+    Flags {
+        now: PathBuf,
+        before: Flags,
+    },
+    /// Several at once, undone together.
+    Batch(Vec<Undo>),
 }
 
 pub struct State {
@@ -66,7 +77,15 @@ pub struct State {
     pub outbox_notes: HashMap<PathBuf, String>,
     pub people: Vec<Person>,
     pub books: Option<Books>,
+    /// The calendars, to compare an invitation with what is there.
+    pub vdir: Option<rical_core::Vdir>,
     pub undo: Vec<Undo>,
+    /// Messages picked to act on together.
+    pub picked: std::collections::BTreeSet<PathBuf>,
+    /// The message last sent, while it can still be taken back.
+    pub last_sent: Option<(String, rical_maildir::compose::Draft)>,
+    /// Where the list was before a search, to go back to.
+    pub before_search: Option<Place>,
 }
 
 pub type SharedState = Rc<RefCell<State>>;
@@ -89,7 +108,11 @@ impl State {
             outbox_notes: HashMap::new(),
             people: Vec::new(),
             books,
+            vdir: None,
             undo: Vec::new(),
+            picked: Default::default(),
+            last_sent: None,
+            before_search: None,
         };
         s.reload_folders();
         s.build_people();
@@ -114,13 +137,14 @@ impl State {
     pub fn folder(&self) -> Option<&Folder> {
         match &self.place {
             Place::Folder(p) => self.folders.iter().find(|f| &f.path == p),
-            Place::Outbox => None,
+            Place::Outbox | Place::Search(_) => None,
         }
     }
 
     pub fn place_name(&self) -> String {
         match &self.place {
             Place::Outbox => "Outbox".to_owned(),
+            Place::Search(q) => format!("Search: {q}"),
             Place::Folder(_) => self.folder().map_or("Mail".to_owned(), |f| f.name.clone()),
         }
     }
@@ -192,11 +216,12 @@ impl State {
                     .folders
                     .iter()
                     .find(|f| f.path == p)
-                    .map(store::list)
+                    .map(|f| store::list_cached(f, cache_for(f)))
                     .unwrap_or_default();
                 self.outbox_notes.clear();
             }
             Place::Outbox => self.load_outbox(),
+            Place::Search(q) => self.load_search(&q),
         }
         self.arrange();
     }
@@ -204,7 +229,7 @@ impl State {
     fn load_outbox(&mut self) {
         self.messages.clear();
         self.outbox_notes.clear();
-        let Ok(queue) = rical_mail::queue::Queue::open(&self.opts.queue) else {
+        let Ok(queue) = rical_mail_queue::queue::Queue::open(&self.opts.queue) else {
             return;
         };
         for e in queue.list().unwrap_or_default() {
@@ -212,16 +237,24 @@ impl State {
             if let Some(m) = &mut m {
                 m.flags.seen = true;
                 let note = match e.state {
-                    rical_mail::queue::State::Queued => "waiting to be sent".to_owned(),
-                    rical_mail::queue::State::Sending => "sending now".to_owned(),
-                    rical_mail::queue::State::Retrying => format!(
+                    rical_mail_queue::queue::State::Queued => match e.next_attempt {
+                        Some(t) if t > chrono::Utc::now() => {
+                            format!(
+                                "held back until {} (Undo, or delete it here)",
+                                t.with_timezone(&chrono::Local).format("%H:%M:%S")
+                            )
+                        }
+                        _ => "waiting to be sent".to_owned(),
+                    },
+                    rical_mail_queue::queue::State::Sending => "sending now".to_owned(),
+                    rical_mail_queue::queue::State::Retrying => format!(
                         "will try again{}",
                         e.last_error
                             .as_deref()
                             .map(|l| format!(" · {l}"))
                             .unwrap_or_default()
                     ),
-                    rical_mail::queue::State::Failed => format!(
+                    rical_mail_queue::queue::State::Failed => format!(
                         "failed{}",
                         e.last_error
                             .as_deref()
@@ -238,14 +271,14 @@ impl State {
 
     /// How many messages wait in the send queue.
     pub fn outbox_count(&self) -> usize {
-        rical_mail::queue::Queue::open(&self.opts.queue)
+        rical_mail_queue::queue::Queue::open(&self.opts.queue)
             .and_then(|q| q.list())
             .map_or(0, |l| l.len())
     }
 
     /// Lay the messages out and apply the search.
     pub fn arrange(&mut self) {
-        self.rows = if self.threaded && self.place != Place::Outbox {
+        self.rows = if self.threaded && !matches!(self.place, Place::Outbox | Place::Search(_)) {
             thread::threads(&self.messages)
         } else {
             (0..self.messages.len())
@@ -422,6 +455,9 @@ impl State {
                 m.is_new = false;
             }
         }
+        if self.picked.remove(old) {
+            self.picked.insert(new.clone());
+        }
         if self.selected.as_deref() == Some(old) {
             self.selected = Some(new);
         }
@@ -430,6 +466,7 @@ impl State {
     /// A message left the folder. Returns where it was in the list, and
     /// selects what is now there.
     pub fn removed(&mut self, path: &std::path::Path) -> Option<usize> {
+        self.picked.remove(path);
         let pos =
             (0..self.shown.len()).find(|&n| self.message_at(n).is_some_and(|m| m.path == path));
         self.messages.retain(|m| m.path != path);
@@ -444,5 +481,91 @@ impl State {
             self.opened = None;
         }
         pos
+    }
+}
+
+impl State {
+    /// What the invitation in a message changes in the calendars (if a
+    /// calendar folder is set and the message has one).
+    pub fn invite_diffs(&mut self, path: &std::path::Path) -> Vec<rical_core::diff::Diff> {
+        let Some(vdir) = &mut self.vdir else {
+            return Vec::new();
+        };
+        let Ok(ics) = rical_maildir::read::calendar_text(path) else {
+            return Vec::new();
+        };
+        if let Err(e) = vdir.refresh() {
+            log::warn!("calendar: {e:#}");
+        }
+        vdir.diff_invite(&ics).unwrap_or_else(|e| {
+            log::warn!("invitation: {e:#}");
+            Vec::new()
+        })
+    }
+}
+
+/// The header cache of a folder, kept with the app's state.
+fn cache_for(f: &Folder) -> rical_maildir::cache::Cache {
+    match rical_ui::app::state_dir() {
+        Some(d) => rical_maildir::cache::Cache::open(&d.join("cache"), &f.path),
+        None => rical_maildir::cache::Cache::none(),
+    }
+}
+
+impl State {
+    /// What a command acts on: the picked messages, else the selected one.
+    pub fn targets(&self) -> Vec<PathBuf> {
+        let picked: Vec<PathBuf> = self
+            .messages
+            .iter()
+            .filter(|m| self.picked.contains(&m.path))
+            .map(|m| m.path.clone())
+            .collect();
+        if picked.is_empty() {
+            self.selected.iter().cloned().collect()
+        } else {
+            picked
+        }
+    }
+}
+
+impl State {
+    /// Where a search tool leaves its results (symlinks, as mu makes them).
+    pub fn search_dir() -> PathBuf {
+        rical_ui::app::state_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("search")
+            .join("results")
+    }
+
+    /// The results of `query`: what the tool left in the results folder, or
+    /// for the built-in search every folder's messages that match.
+    fn load_search(&mut self, query: &str) {
+        self.outbox_notes.clear();
+        self.messages = if self.opts.search == Backend::Builtin {
+            let q = rical_maildir::search::Query::parse(query);
+            let mut all: Vec<_> = Vec::new();
+            for f in &self.folders {
+                // junk and trash stay out of a search across everything, unless asked
+                if matches!(f.role, Role::Junk | Role::Trash) && q.folder.is_empty() {
+                    continue;
+                }
+                all.extend(
+                    store::list_cached(f, cache_for(f))
+                        .into_iter()
+                        .filter(|m| q.matches(m)),
+                );
+            }
+            all.retain(|m| q.matches_body(m));
+            all.sort_by_key(|m| std::cmp::Reverse(m.date));
+            all
+        } else {
+            store::list_links(&Self::search_dir())
+        };
+        for m in &self.messages {
+            self.outbox_notes
+                .insert(m.path.clone(), format!("in {}", m.folder));
+        }
+        self.messages.truncate(5000);
     }
 }

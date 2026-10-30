@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Write a demo Maildir tree, with the kinds of mail a mail client has to
-# cope with, for screenshots and trying rical-mailbox without real mail:
-#   scripts/demo-mail.sh /tmp/demo-mail
+# cope with, for screenshots and trying rical-mail without real mail:
+#   scripts/demo-mail.sh /tmp/demo-mail [/tmp/demo-calendar]
 # Pairs with scripts/demo-contacts.sh (the same people).
 set -euo pipefail
-out=${1:?usage: demo-mail.sh DIR}
+out=${1:?usage: demo-mail.sh DIR [CALENDAR-DIR]}
 rm -rf "$out"
 for f in INBOX Sent Drafts Archive Trash Junk; do mkdir -p "$out/$f"/{cur,new,tmp}; done
 
@@ -214,6 +214,32 @@ Flights are booked for the 12th. Hotel is near the Hauptbahnhof; I'll send
 the address once I have it.
 EOF
 
+
+msg INBOX cur "S" 3 <<'EOF'
+From: Tom Becker <tom@example.de>
+To: Andrew Jeffery <andrew@jeffas.net>
+Subject: Re: Berlin trip
+Message-ID: <tom-2@example.de>
+In-Reply-To: <tom-1@example.de>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+List-Unsubscribe: <mailto:leave@example.de?subject=unsubscribe>
+List-Id: <berlin.example.de>
+
+The hotel is Hotel Am Zoo, near the Hauptbahnhof. Address below.
+
+On Mon, 26 Oct 2026, Andrew wrote:
+> Thanks for booking the flights. A few questions:
+>
+> 1. Which terminal do we arrive at?
+> 2. Is the hotel walkable from the station?
+> 3. Do we need to book the museum in advance?
+> 4. What is the plan for dinner on the first night?
+> 5. Should I bring the second laptop?
+>
+> Also: I might leave a day early.
+> Tell me what you think.
+EOF
 msg Drafts cur "DS" 3 <<'EOF'
 From: Andrew Jeffery <andrew@jeffas.net>
 To: Sam Lee <sam@example.org>
@@ -248,8 +274,71 @@ Content-Type: text/plain; charset=utf-8
 Click http://prizes.spam.example/claim now.
 EOF
 
+
+# An update to that invitation (a later time and place, a new guest), for
+# showing what changed against the calendar made below.
+msg INBOX new "" 1 <<'EOF'
+From: Sam Lee <sam@example.org>
+To: Andrew Jeffery <andrew@jeffas.net>
+Subject: Updated invitation: Climbing at Almscliff
+Message-ID: <sam-inv-2@example.org>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="BND2"
+
+--BND2
+Content-Type: text/plain; charset=utf-8
+
+Moved it back an hour, and Priya is coming now.
+--BND2
+Content-Type: text/calendar; charset=utf-8; method=REQUEST
+Content-Disposition: attachment; filename="invite.ics"
+
+BEGIN:VCALENDAR
+VERSION:2.0
+METHOD:REQUEST
+BEGIN:VEVENT
+UID:climb-1@example.org
+SEQUENCE:1
+DTSTAMP:20261029T180000Z
+DTSTART;TZID=Europe/London:20261101T103000
+DTEND;TZID=Europe/London:20261101T160000
+SUMMARY:Climbing at Almscliff
+LOCATION:Caley Crag
+DESCRIPTION:Meet at the car park\nBring helmets\nBring the second rope
+ORGANIZER;CN=Sam Lee:mailto:sam@example.org
+ATTENDEE;CN=Andrew Jeffery;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:andrew@jeffas.net
+ATTENDEE;CN=Priya Shah;PARTSTAT=ACCEPTED:mailto:priya@example.com
+END:VEVENT
+END:VCALENDAR
+--BND2--
+EOF
+
+# the calendar that already has the first version (optional second argument)
+if [[ -n ${2:-} ]]; then
+  rm -rf "$2"
+  mkdir -p "$2/personal"
+  printf 'Personal\n' > "$2/personal/displayname"
+  cat > "$2/personal/climb-1.ics" <<'EOF'
+BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:climb-1@example.org
+SEQUENCE:0
+DTSTAMP:20261029T100000Z
+DTSTART;TZID=Europe/London:20261101T093000
+DTEND;TZID=Europe/London:20261101T150000
+SUMMARY:Climbing at Almscliff
+LOCATION:Almscliff Crag
+DESCRIPTION:Meet at the car park\nBring helmets
+ORGANIZER;CN=Sam Lee:mailto:sam@example.org
+ATTENDEE;CN=Andrew Jeffery;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:andrew@jeffas.net
+END:VEVENT
+END:VCALENDAR
+EOF
+  echo "calendar with that event: $2"
+fi
 cat > "$out/README" <<EOF
-Demo mail from scripts/demo-mail.sh. Point rical-mailbox at it:
-  RICAL_MAILBOX_MAIL=$out RICAL_MAILBOX_ME='Andrew Jeffery <andrew@jeffas.net>' rical-mailbox
+Demo mail from scripts/demo-mail.sh. Point rical-mail at it:
+  RICAL_MAIL_MAIL=$out RICAL_MAIL_ME='Andrew Jeffery <andrew@jeffas.net>' rical-mail
 EOF
 echo "$out: $(find "$out" -type f -path '*/cur/*' -o -type f -path '*/new/*' | wc -l) messages"

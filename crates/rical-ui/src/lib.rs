@@ -8,6 +8,7 @@ pub mod binds;
 pub mod card;
 pub mod command;
 pub mod config;
+pub mod datetime;
 pub mod draw;
 pub mod help;
 pub mod history;

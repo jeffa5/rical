@@ -494,6 +494,8 @@ pub fn open(win: &Rc<Window>, id: Option<CardId>) {
         .title("Groups (comma-separated)")
         .text(draft.categories.join(", "))
         .build();
+    rical_ui::datetime::attach(&birthday, rical_ui::datetime::Config::date());
+    rical_ui::datetime::attach(&anniversary, rical_ui::datetime::Config::date());
     more.add(&birthday);
     more.add(&anniversary);
     more.add(&groups);

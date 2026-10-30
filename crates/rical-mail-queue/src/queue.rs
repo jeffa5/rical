@@ -192,6 +192,12 @@ impl Queue {
     /// to; a `Message-ID` and `Date` are added if it has none, so that a
     /// message sent twice after a crash at least has one identity.
     pub fn enqueue(&self, raw: &[u8]) -> Result<String> {
+        self.enqueue_at(raw, None)
+    }
+
+    /// Add a message that is not to go before `not_before`: a window in
+    /// which it can still be taken back with [`Queue::cancel`].
+    pub fn enqueue_at(&self, raw: &[u8], not_before: Option<DateTime<Utc>>) -> Result<String> {
         let (from, to) = envelope(raw);
         if from.is_none() {
             bail!("the message has no From address");
@@ -208,11 +214,34 @@ impl Queue {
             let domain = from
                 .as_deref()
                 .and_then(|f| f.rsplit_once('@'))
-                .map_or("rical-mail", |(_, d)| d);
+                .map_or("rical-mail-queue", |(_, d)| d);
             raw = message::set_header(&raw, "Message-ID", &format!("<{id}@{domain}>"));
+        }
+        if let Some(t) = not_before {
+            raw = message::set_header(
+                &raw,
+                NEXT_ATTEMPT,
+                &t.to_rfc3339_opts(SecondsFormat::Secs, true),
+            );
         }
         self.publish("new", &id, &raw)?;
         Ok(id)
+    }
+
+    /// Take a message that has not been picked up out of the queue.
+    /// Returns whether it was there to take (false: it is being sent, or
+    /// has gone).
+    pub fn cancel(&self, id: &str) -> Result<bool> {
+        let path = self.dir("new").join(id);
+        // the lock a worker takes: if it has it, it is sending
+        let Some(_file) = open_locked(&path)? else {
+            return Ok(false);
+        };
+        match fs::remove_file(&path) {
+            Ok(()) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Everything in the queue, oldest first within each state.

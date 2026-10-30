@@ -401,7 +401,16 @@ impl Window {
             let note = second.next_sibling().and_downcast::<gtk::Label>().unwrap();
             let outbox = s.place == Place::Outbox;
             let unread = m.unread() && !outbox;
-            dot.set_opacity(if unread { 1.0 } else { 0.0 });
+            let picked = s.picked.contains(&m.path);
+            if let Some(img) = dot.downcast_ref::<gtk::Image>() {
+                img.set_icon_name(Some(if picked {
+                    "object-select-symbolic"
+                } else {
+                    "media-record-symbolic"
+                }));
+                img.set_pixel_size(if picked { 14 } else { 10 });
+            }
+            dot.set_opacity(if unread || picked { 1.0 } else { 0.0 });
             outer.set_margin_start(depth.min(4) as i32 * 14);
             let who = if outbox
                 || (s
@@ -696,20 +705,39 @@ impl Window {
         }
         self.syncing.set(false);
         self.title.set_title(&name);
-        let q = !self.state.borrow().query.is_empty();
-        self.title.set_subtitle(&if unread > 0 {
-            format!(
-                "{count} message{} · {unread} unread{}",
-                if count == 1 { "" } else { "s" },
-                if q { " found" } else { "" }
+        self.update_subtitle(count, unread);
+    }
+
+    /// The counts under the folder's name.
+    fn update_subtitle(&self, count: usize, unread: usize) {
+        let s = self.state.borrow();
+        let q = !s.query.is_empty();
+        let mut text = format!("{count} message{}", if count == 1 { "" } else { "s" });
+        if unread > 0 {
+            text += &format!(" · {unread} unread");
+        }
+        if q {
+            text += " found";
+        }
+        if !s.picked.is_empty() {
+            text += &format!(" · {} picked", s.picked.len());
+        }
+        self.title.set_subtitle(&text);
+    }
+
+    /// The subtitle again, after picking.
+    pub fn update_picked_title(&self) {
+        let (count, unread) = {
+            let s = self.state.borrow();
+            (
+                s.shown.len(),
+                s.shown
+                    .iter()
+                    .filter(|&&i| s.messages[s.rows[i].index].unread())
+                    .count(),
             )
-        } else {
-            format!(
-                "{count} message{}{}",
-                if count == 1 { "" } else { "s" },
-                if q { " found" } else { "" }
-            )
-        });
+        };
+        self.update_subtitle(count, unread);
     }
 
     /// Patch one row without relisting: its message changed.
@@ -753,7 +781,10 @@ impl Window {
             (
                 m.path.clone(),
                 in_contacts,
-                s.outbox_notes.get(&m.path).cloned(),
+                s.outbox_notes
+                    .get(&m.path)
+                    .filter(|_| s.place == Place::Outbox)
+                    .cloned(),
                 s.opts.read_after,
             )
         };
@@ -764,7 +795,12 @@ impl Window {
                         .first()
                         .is_some_and(|f| self.state.borrow().is_contact(&f.address));
                 self.reader_title.set_title(&o.subject);
-                self.reader.show(&o, in_contacts, note.as_deref());
+                let diffs = if o.invites.is_empty() {
+                    Vec::new()
+                } else {
+                    self.state.borrow_mut().invite_diffs(&path)
+                };
+                self.reader.show(&o, in_contacts, note.as_deref(), &diffs);
                 self.state.borrow_mut().opened = Some(Rc::new(o));
             }
             Err(e) => {
@@ -863,7 +899,9 @@ impl Window {
                 w.fill_folders();
                 return;
             }
+            let before = w.inbox_unread();
             w.reload();
+            w.maybe_notify(before);
         });
         *self.debounce.borrow_mut() = Some(id);
     }
@@ -909,4 +947,48 @@ fn folder_row(icon: &str, name: &str, unread: usize) -> gtk::ListBoxRow {
     let row = gtk::ListBoxRow::new();
     row.set_child(Some(&b));
     row
+}
+
+impl Window {
+    fn inbox_unread(&self) -> usize {
+        self.state
+            .borrow()
+            .folder_with_role(Role::Inbox)
+            .map_or(0, |f| f.unread)
+    }
+
+    /// A desktop notification for mail that arrived while the window was
+    /// not in front: who it is from and the subject, nothing of the body.
+    fn maybe_notify(&self, before: usize) {
+        let now = self.inbox_unread();
+        let (notify, in_inbox) = {
+            let s = self.state.borrow();
+            (
+                s.opts.notify,
+                s.folder().is_some_and(|f| f.role == Role::Inbox),
+            )
+        };
+        if !notify || now <= before || self.window.is_active() {
+            return;
+        }
+        let n = gio::Notification::new("New mail");
+        if in_inbox {
+            let s = self.state.borrow();
+            if let Some(m) = s.messages.iter().find(|m| m.is_new) {
+                n.set_title(&format!("New mail from {}", m.from_shown()));
+                n.set_body(Some(if m.subject.is_empty() {
+                    "(no subject)"
+                } else {
+                    &m.subject
+                }));
+            }
+        } else {
+            n.set_body(Some(&format!(
+                "{} new message{}",
+                now - before,
+                if now - before == 1 { "" } else { "s" }
+            )));
+        }
+        self.app.send_notification(Some("new-mail"), &n);
+    }
 }
