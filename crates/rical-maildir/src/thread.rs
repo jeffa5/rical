@@ -257,16 +257,13 @@ fn from_key(m: &Summary) -> String {
 /// The messages one by one, ordered by `key`.
 pub fn sorted(messages: &[Summary], key: SortKey, reverse: bool) -> Vec<Row> {
     let mut idx: Vec<usize> = (0..messages.len()).collect();
-    idx.sort_by(|&a, &b| {
-        let (x, y) = (&messages[a], &messages[b]);
-        let ord = match key {
-            SortKey::Date => y.date.cmp(&x.date),
-            SortKey::From => from_key(x).cmp(&from_key(y)),
-            SortKey::Subject => base_subject(&x.subject).cmp(&base_subject(&y.subject)),
-            SortKey::Size => y.size.cmp(&x.size),
-        };
-        ord.then(a.cmp(&b))
-    });
+    // the text keys made once each, not at every comparison
+    match key {
+        SortKey::Date => idx.sort_by_key(|&i| (std::cmp::Reverse(messages[i].date), i)),
+        SortKey::Size => idx.sort_by_key(|&i| (std::cmp::Reverse(messages[i].size), i)),
+        SortKey::From => idx.sort_by_cached_key(|&i| (from_key(&messages[i]), i)),
+        SortKey::Subject => idx.sort_by_cached_key(|&i| (base_subject(&messages[i].subject), i)),
+    }
     if reverse {
         idx.reverse();
     }

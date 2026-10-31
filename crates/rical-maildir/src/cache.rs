@@ -78,7 +78,7 @@ impl Headers {
 }
 
 /// Changed whenever what is kept changes: the index is filled again.
-const VERSION: i64 = 3;
+const VERSION: i64 = 4;
 
 const TABLES: &str = "
     CREATE TABLE messages (
@@ -105,6 +105,13 @@ const TABLES: &str = "
     ) WITHOUT ROWID;
     -- the folders listed into it, so an empty one is known from one not yet
     CREATE TABLE folders (folder BLOB PRIMARY KEY) WITHOUT ROWID;
+    -- each folder's (unread, total) as last counted from its files, so
+    -- the list of folders shows counts at once, before counting again
+    CREATE TABLE counted (
+        folder BLOB PRIMARY KEY,
+        unread INTEGER NOT NULL,
+        total INTEGER NOT NULL
+    ) WITHOUT ROWID;
 ";
 
 /// One message as the index has it: where it was, and its headers.
@@ -261,8 +268,9 @@ impl Cache {
     }
 }
 
-/// Each folder listed into the index in `dir` (by its path's bytes), with
-/// its (unread, total) messages as they were when it was last listed.
+/// Each folder the index in `dir` knows the counts of (by its path's
+/// bytes): its (unread, total) as last counted from its files, else as it
+/// was when it was last listed.
 pub fn counts(dir: &Path) -> HashMap<Vec<u8>, (usize, usize)> {
     let index = open_index(dir);
     let conn = index.conn();
@@ -276,9 +284,8 @@ pub fn counts(dir: &Path) -> HashMap<Vec<u8>, (usize, usize)> {
     for f in listed.unwrap_or_default() {
         out.insert(f, (0, 0));
     }
-    let counted = conn
-        .prepare("SELECT folder, sum(unread), count(*) FROM messages GROUP BY folder")
-        .and_then(|mut st| {
+    let from = |sql: &str| {
+        conn.prepare(sql).and_then(|mut st| {
             st.query_map([], |r| {
                 Ok((
                     r.get::<_, Vec<u8>>(0)?,
@@ -287,13 +294,43 @@ pub fn counts(dir: &Path) -> HashMap<Vec<u8>, (usize, usize)> {
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()
-        });
-    for (f, unread, total) in counted.unwrap_or_default() {
+        })
+    };
+    let listed = from("SELECT folder, sum(unread), count(*) FROM messages GROUP BY folder");
+    for (f, unread, total) in listed.unwrap_or_default() {
         if let Some(c) = out.get_mut(&f) {
             *c = (unread, total);
         }
     }
+    // counted since: newer than any listing
+    for (f, unread, total) in from("SELECT folder, unread, total FROM counted").unwrap_or_default()
+    {
+        out.insert(f, (unread, total));
+    }
     out
+}
+
+/// Keep the counts of every folder (by its path's bytes), as just counted
+/// from their files, in place of those kept before.
+pub fn keep_counts(dir: &Path, counts: &[(Vec<u8>, usize, usize)]) {
+    let index = open_index(dir);
+    let mut conn = index.conn();
+    let kept = (|| {
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM counted", [])?;
+        {
+            let mut put = tx.prepare_cached(
+                "INSERT OR REPLACE INTO counted (folder, unread, total) VALUES (?1, ?2, ?3)",
+            )?;
+            for (folder, unread, total) in counts {
+                put.execute(params![folder, *unread as i64, *total as i64])?;
+            }
+        }
+        tx.commit()
+    })();
+    if let Err(e) = kept {
+        log::warn!("could not keep the folder counts: {e}");
+    }
 }
 
 fn read_listed(index: &rical_index::Index, folder: &[u8]) -> bool {
@@ -388,6 +425,12 @@ fn write(
         }
         tx.prepare_cached("INSERT OR IGNORE INTO folders (folder) VALUES (?1)")?
             .execute([folder])?;
+        // as listed now: newer than what was last counted
+        tx.prepare_cached(
+            "INSERT OR REPLACE INTO counted (folder, unread, total)
+             SELECT ?1, coalesce(sum(unread), 0), count(*) FROM messages WHERE folder = ?1",
+        )?
+        .execute([folder])?;
     }
     tx.commit()
 }

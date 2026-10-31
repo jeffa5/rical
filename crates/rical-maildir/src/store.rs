@@ -88,18 +88,37 @@ pub fn folders(root: &Path) -> Result<Vec<Folder>> {
     folders_counted(root, &count)
 }
 
-/// [`folders`], counting their messages from the header index kept in
-/// `dir` (as they were when each was last listed) rather than looking at
-/// every message: quick, to show before [`folders`] counts them. A folder
-/// never listed into it is counted.
+/// [`folders`], with their counts as the header index kept in `dir` has
+/// them (as last counted, or listed) rather than looking at any message:
+/// quick, to show before [`folders_kept`] counts them. One it has no
+/// count of shows none until then: counting hundreds of folders here,
+/// on the way to the window, is seconds from a cold disk.
 pub fn folders_indexed(root: &Path, dir: &Path) -> Result<Vec<Folder>> {
     let counts = crate::cache::counts(dir);
     folders_counted(root, &|p: &Path| {
         counts
             .get(p.as_os_str().as_encoded_bytes())
             .copied()
-            .unwrap_or_else(|| count(p))
+            .unwrap_or_default()
     })
+}
+
+/// [`folders`], keeping their counts in the header index in `dir` for
+/// [`folders_indexed`] to show next time.
+pub fn folders_kept(root: &Path, dir: &Path) -> Result<Vec<Folder>> {
+    let found = folders(root)?;
+    let counts: Vec<(Vec<u8>, usize, usize)> = found
+        .iter()
+        .map(|f| {
+            (
+                f.path.as_os_str().as_encoded_bytes().to_vec(),
+                f.unread,
+                f.total,
+            )
+        })
+        .collect();
+    crate::cache::keep_counts(dir, &counts);
+    Ok(found)
 }
 
 /// The folders, with (unread, total) of each from `count`.
@@ -203,7 +222,8 @@ impl Summary {
     }
 }
 
-fn read_head(path: &Path) -> std::io::Result<(Vec<u8>, u64, i64)> {
+/// The start of a message (`bytes` of it), its size and when it changed.
+fn read_head(path: &Path, bytes: u64) -> std::io::Result<(Vec<u8>, u64, i64)> {
     let f = File::open(path)?;
     let meta = f.metadata()?;
     let mtime = meta
@@ -212,18 +232,32 @@ fn read_head(path: &Path) -> std::io::Result<(Vec<u8>, u64, i64)> {
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map_or(0, |d| d.as_secs() as i64);
     let mut buf = Vec::new();
-    f.take(48 * 1024).read_to_end(&mut buf)?;
+    f.take(bytes).read_to_end(&mut buf)?;
     Ok((buf, meta.len(), mtime))
 }
 
+/// How much of a message is read for the list: enough for the headers and
+/// a preview line from most. One whose preview is not in that (a
+/// newsletter whose styles come first) is read further, up to `MOST`.
+const HEAD: u64 = 16 * 1024;
+const MOST: u64 = 48 * 1024;
+
 /// Read one message's headers. `None` for a file that is not a message.
 pub fn summarize(path: &Path, folder: &str, is_new: bool) -> Option<Summary> {
+    let s = summarize_from(path, folder, is_new, HEAD)?;
+    if s.preview.is_empty() && s.size > HEAD {
+        return summarize_from(path, folder, is_new, MOST);
+    }
+    Some(s)
+}
+
+fn summarize_from(path: &Path, folder: &str, is_new: bool, bytes: u64) -> Option<Summary> {
     let name = path.file_name()?.to_string_lossy().into_owned();
     let (_, mut flags) = split_name(&name);
     if is_new {
         flags.seen = false;
     }
-    let (head, size, mtime) = read_head(path).ok()?;
+    let (head, size, mtime) = read_head(path, bytes).ok()?;
     // the head and the start of the body: enough for the list's preview line
     let msg = MessageParser::new().parse(&head)?;
     let root = msg.root();
@@ -287,6 +321,9 @@ pub fn list(folder: &Folder) -> Vec<Summary> {
 /// and saving it again.
 pub fn list_cached(folder: &Folder, mut cache: crate::cache::Cache) -> Vec<Summary> {
     let mut out = Vec::new();
+    // those the cache does not know are read afterwards, on every core: a
+    // folder of thousands read cold is mostly waiting for the disk
+    let mut unknown: Vec<(PathBuf, &str, bool, String)> = Vec::new();
     for (sub, is_new) in [("new", true), ("cur", false)] {
         let Ok(rd) = fs::read_dir(folder.path.join(sub)) else {
             continue;
@@ -308,13 +345,20 @@ pub fn list_cached(folder: &Folder, mut cache: crate::cache::Cache) -> Vec<Summa
                 );
                 continue;
             }
-            match summarize(&e.path(), &folder.name, is_new) {
-                Some(s) => {
-                    cache.put(unique, crate::cache::Headers::of(&s), sub, &name);
-                    out.push(s);
-                }
-                None => log::debug!("{}: not a message", e.path().display()),
+            unknown.push((e.path(), sub, is_new, name));
+        }
+    }
+    let read = rical_index::on_every_core(&unknown, |(path, _, is_new, _)| {
+        summarize(path, &folder.name, *is_new)
+    });
+    for ((path, sub, _, name), s) in unknown.iter().zip(read) {
+        match s {
+            Some(s) => {
+                let (unique, _) = split_name(name);
+                cache.put(unique, crate::cache::Headers::of(&s), sub, name);
+                out.push(s);
             }
+            None => log::debug!("{}: not a message", path.display()),
         }
     }
     cache.save();
@@ -614,7 +658,14 @@ mod cache_tests {
                 .collect()
         };
         let real = counted(folders(d.path()).unwrap());
-        // not listed yet: counted as it is
+        // never counted: nothing, rather than counting on the way to the window
+        assert!(
+            counted(folders_indexed(d.path(), &cache_dir).unwrap())
+                .iter()
+                .all(|(_, unread, total)| (*unread, *total) == (0, 0))
+        );
+        // counted away from it, and kept for next time
+        assert_eq!(counted(folders_kept(d.path(), &cache_dir).unwrap()), real);
         assert_eq!(
             counted(folders_indexed(d.path(), &cache_dir).unwrap()),
             real
@@ -624,12 +675,7 @@ mod cache_tests {
             .into_iter()
             .find(|f| f.path == inbox)
             .unwrap();
-        list_cached(&inbox_folder, crate::cache::Cache::open(&cache_dir, &inbox));
-        assert_eq!(
-            counted(folders_indexed(d.path(), &cache_dir).unwrap()),
-            real
-        );
-        // the index says what it was told, until listed again
+        // the index says what it was told, until listed (or counted) again
         deliver(&inbox, b"Subject: More\n\nx\n", Flags::default(), true).unwrap();
         let stale = counted(folders_indexed(d.path(), &cache_dir).unwrap());
         assert_eq!(stale, real);
@@ -787,8 +833,12 @@ pub fn list_links(dir: &Path) -> Vec<Summary> {
 
 /// Summaries of message files wherever they are, newest first.
 pub fn summaries_of(paths: Vec<PathBuf>) -> Vec<Summary> {
-    let mut out: Vec<Summary> = Vec::new();
-    for real in paths {
+    let mut seen = std::collections::HashSet::new();
+    let paths: Vec<PathBuf> = paths
+        .into_iter()
+        .filter(|p| seen.insert(p.clone()))
+        .collect();
+    let read = rical_index::on_every_core(&paths, |real| {
         let in_new = real
             .parent()
             .and_then(Path::file_name)
@@ -803,12 +853,15 @@ pub fn summaries_of(paths: Vec<PathBuf>) -> Vec<Summary> {
                     .replace('.', "/")
             })
             .unwrap_or_default();
-        if let Some(s) = summarize(&real, &folder, in_new)
-            && !out.iter().any(|o| o.path == s.path)
-        {
-            out.push(s);
-        }
-    }
+        summarize(real, &folder, in_new)
+    });
+    // two names can still be one message once read
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<Summary> = read
+        .into_iter()
+        .flatten()
+        .filter(|s| seen.insert(s.path.clone()))
+        .collect();
     out.sort_by(|a, b| b.date.cmp(&a.date).then_with(|| a.path.cmp(&b.path)));
     out
 }

@@ -362,17 +362,16 @@ impl State {
 
     /// People the mail in view is from or to, who are not in the books.
     pub fn people_from_mail(&self) -> Vec<Person> {
+        // by address, ignoring case: each message is looked up, not compared
+        // with everyone so far (it runs as an address is typed)
+        let mut seen: std::collections::HashSet<String> = self
+            .people
+            .iter()
+            .map(|p| p.address.to_ascii_lowercase())
+            .collect();
         let mut out: Vec<Person> = Vec::new();
         for m in &self.messages {
-            if m.from_address.is_empty()
-                || out
-                    .iter()
-                    .any(|p| p.address.eq_ignore_ascii_case(&m.from_address))
-                || self
-                    .people
-                    .iter()
-                    .any(|p| p.address.eq_ignore_ascii_case(&m.from_address))
-            {
+            if m.from_address.is_empty() || !seen.insert(m.from_address.to_ascii_lowercase()) {
                 continue;
             }
             out.push(Person {
@@ -441,41 +440,69 @@ impl State {
 }
 
 impl State {
-    /// A message was renamed (its flags changed): follow it.
-    pub fn renamed(&mut self, old: &std::path::Path, new: PathBuf, flags: Flags) {
+    /// Messages were renamed (`(old, new, flags)`): follow them, in one go
+    /// through the messages however many there are.
+    pub fn renamed_all(&mut self, renames: Vec<(PathBuf, PathBuf, Flags)>) {
+        let by_old: HashMap<PathBuf, (PathBuf, Flags)> = renames
+            .into_iter()
+            .map(|(old, new, flags)| (old, (new, flags)))
+            .collect();
         for m in &mut self.messages {
-            if m.path == old {
+            if let Some((new, flags)) = by_old.get(&m.path) {
                 m.path = new.clone();
-                m.flags = flags;
+                m.flags = *flags;
                 m.is_new = false;
             }
         }
-        if self.picked.remove(old) {
-            self.picked.insert(new.clone());
-        }
-        if self.selected.as_deref() == Some(old) {
-            self.selected = Some(new);
+        for (old, (new, _)) in &by_old {
+            if self.picked.remove(old) {
+                self.picked.insert(new.clone());
+            }
+            if self.selected.as_ref() == Some(old) {
+                self.selected = Some(new.clone());
+            }
         }
     }
 
     /// A message left the folder. Returns where it was in the list, and
     /// selects what is now there.
     pub fn removed(&mut self, path: &std::path::Path) -> Option<usize> {
-        self.picked.remove(path);
         let pos =
             (0..self.shown.len()).find(|&n| self.message_at(n).is_some_and(|m| m.path == path));
-        self.messages.retain(|m| m.path != path);
-        let was_selected = self.selected.as_deref() == Some(path);
+        self.removed_all(&[path.to_owned()]);
+        pos
+    }
+
+    /// Messages left the folder: laid out again once, not once for each.
+    /// What was selected, if it went, becomes what is now in its place.
+    pub fn removed_all(&mut self, paths: &[PathBuf]) {
+        let gone: std::collections::HashSet<&PathBuf> = paths.iter().collect();
+        for p in paths {
+            self.picked.remove(p);
+        }
+        // where the selection was, less what went before it
+        let at = self
+            .selected
+            .as_ref()
+            .filter(|p| gone.contains(p))
+            .and_then(|_| {
+                let pos = self.position()?;
+                let before = (0..pos)
+                    .filter(|&n| self.message_at(n).is_some_and(|m| gone.contains(&m.path)))
+                    .count();
+                Some(pos - before)
+            });
+        let was_selected = at.is_some();
+        self.messages.retain(|m| !gone.contains(&m.path));
         self.arrange();
         if was_selected {
             let n = self.shown.len();
-            self.selected = pos
+            self.selected = at
                 .filter(|_| n > 0)
                 .map(|p| p.min(n - 1))
                 .and_then(|p| self.message_at(p).map(|m| m.path.clone()));
             self.opened = None;
         }
-        pos
     }
 }
 
@@ -595,33 +622,44 @@ impl State {
         self.accounts_raw().len() >= 2
     }
 
-    fn accounts_raw(&self) -> std::collections::BTreeSet<String> {
+    /// The accounts: the first part of folder names that is not a folder
+    /// itself. Each call looks at every folder once, so a caller going
+    /// through the folders asks once, not for each (with hundreds of
+    /// folders, that was seconds).
+    pub(crate) fn accounts_raw(&self) -> std::collections::BTreeSet<String> {
+        let names: std::collections::HashSet<&str> =
+            self.folders.iter().map(|f| f.name.as_str()).collect();
         self.folders
             .iter()
-            .filter_map(|f| f.name.split_once('/').map(|(a, _)| a.to_owned()))
-            .filter(|a| !self.folders.iter().any(|f| &f.name == a))
+            .filter_map(|f| f.name.split_once('/').map(|(a, _)| a))
+            .filter(|a| !names.contains(a))
+            .map(str::to_owned)
             .collect()
     }
 
     /// The account a folder name belongs to, when there are accounts.
     pub fn account_of(&self, name: &str) -> Option<String> {
-        if !self.grouped() {
-            return None;
-        }
-        let a = name.split_once('/')?.0;
-        self.accounts_raw().contains(a).then(|| a.to_owned())
+        account_in(&self.accounts_raw(), name)
     }
 
     /// The accounts, with their folders in a useful order: inbox, drafts,
     /// sent, archive, junk, trash, then the rest by name.
     pub fn accounts(&self) -> Vec<Account> {
         let names = self.accounts_raw();
-        names
+        // one account is no accounts: its folders are not grouped under it
+        let grouped = names.len() >= 2;
+        let mut by_name: std::collections::BTreeMap<String, Vec<usize>> =
+            names.into_iter().map(|n| (n, Vec::new())).collect();
+        for (i, f) in self.folders.iter().enumerate().filter(|_| grouped) {
+            if let Some((a, _)) = f.name.split_once('/')
+                && let Some(folders) = by_name.get_mut(a)
+            {
+                folders.push(i);
+            }
+        }
+        by_name
             .into_iter()
-            .map(|name| {
-                let mut folders: Vec<usize> = (0..self.folders.len())
-                    .filter(|&i| self.account_of(&self.folders[i].name).as_deref() == Some(&name))
-                    .collect();
+            .map(|(name, mut folders)| {
                 folders
                     .sort_by_key(|&i| (self.folders[i].role, self.folders[i].name.to_lowercase()));
                 Account { name, folders }
@@ -630,6 +668,7 @@ impl State {
     }
 
     /// A folder's name without its account: `Inbox`, `[Gmail]/Drafts`.
+    #[cfg(test)]
     pub fn short_name(&self, f: &Folder) -> String {
         match self.account_of(&f.name) {
             Some(a) => f.name[a.len() + 1..].to_owned(),
@@ -651,7 +690,9 @@ impl State {
             .iter()
             .find(|f| Some(f.path.as_path()) == home)
             .map(|f| f.name.clone());
-        let account = name.and_then(|n| self.account_of(&n));
+        // worked out once: asking per folder is folders × folders
+        let accounts = self.accounts_raw();
+        let account = name.and_then(|n| account_in(&accounts, &n));
         let configured = (role == Role::Archive && account.is_none())
             .then(|| {
                 self.opts
@@ -666,7 +707,7 @@ impl State {
         let found = self
             .folders
             .iter()
-            .find(|f| f.role == role && self.account_of(&f.name) == account);
+            .find(|f| f.role == role && account_in(&accounts, &f.name) == account);
         match (found, &account) {
             (Some(f), _) => f.path.clone(),
             (None, Some(a)) => self.root.join(a).join(default_name(role)),
@@ -945,10 +986,11 @@ impl State {
 
     /// Where a draft is kept: the account's Drafts, else the usual one.
     pub fn drafts_for(&self, account: Option<&str>) -> PathBuf {
+        let accounts = self.accounts_raw();
         account
             .and_then(|a| {
                 self.folders.iter().find(|f| {
-                    f.role == Role::Drafts && self.account_of(&f.name).as_deref() == Some(a)
+                    f.role == Role::Drafts && account_in(&accounts, &f.name).as_deref() == Some(a)
                 })
             })
             .map_or_else(|| self.drafts_folder(), |f| f.path.clone())
@@ -957,11 +999,22 @@ impl State {
     /// Where the copy of sent mail goes for an account, when it has a Sent.
     pub fn sent_for(&self, account: Option<&str>) -> Option<PathBuf> {
         let a = account?;
+        let accounts = self.accounts_raw();
         self.folders
             .iter()
-            .find(|f| f.role == Role::Sent && self.account_of(&f.name).as_deref() == Some(a))
+            .find(|f| f.role == Role::Sent && account_in(&accounts, &f.name).as_deref() == Some(a))
             .map(|f| f.path.clone())
     }
+}
+
+/// The account a folder name belongs to, among these (none when there is
+/// only one).
+pub fn account_in(accounts: &std::collections::BTreeSet<String>, name: &str) -> Option<String> {
+    if accounts.len() < 2 {
+        return None;
+    }
+    let a = name.split_once('/')?.0;
+    accounts.contains(a).then(|| a.to_owned())
 }
 
 impl State {

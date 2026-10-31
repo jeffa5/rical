@@ -187,6 +187,21 @@ impl Query {
         let text = o.body.text.to_lowercase();
         self.body.iter().all(|w| text.contains(w))
     }
+
+    /// Those of `candidates` whose text has the `body:` words, read on
+    /// every core (each is read whole and parsed). Stops early, with
+    /// `None`, once `wanted` says the answer is no longer wanted (another
+    /// search replaced it).
+    pub fn body_matches(
+        &self,
+        candidates: &[Summary],
+        wanted: impl Fn() -> bool + Sync,
+    ) -> Option<Vec<std::path::PathBuf>> {
+        let found = rical_index::on_every_core(candidates, |m| {
+            (wanted() && self.matches_body(m)).then(|| m.path.clone())
+        });
+        wanted().then(|| found.into_iter().flatten().collect())
+    }
 }
 
 /// Words, with "quoted phrases" kept together (the quotes dropped).

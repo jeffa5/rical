@@ -600,9 +600,22 @@ impl Reader {
             .set_label(&format!("Show {hidden} more quoted lines"));
 
         // links
+        // the buffer counts in characters, the links in bytes: counted along
+        // the text once, in order, not from its start for each link (a
+        // newsletter has thousands)
         let mut spans = Vec::new();
-        for (n, l) in o.body.links.iter().enumerate() {
-            let start = text[..l.range.start].chars().count() as i32;
+        let mut order: Vec<usize> = (0..o.body.links.len()).collect();
+        order.sort_by_key(|&n| o.body.links[n].range.start);
+        let (mut byte, mut char) = (0usize, 0usize);
+        for n in order {
+            let l = &o.body.links[n];
+            if l.range.start < byte {
+                // overlapping the last: count again from the start
+                (byte, char) = (0, 0);
+            }
+            char += text[byte..l.range.start].chars().count();
+            byte = l.range.start;
+            let start = char as i32;
             let end = start + text[l.range.clone()].chars().count() as i32;
             let (a, b) = (buf.iter_at_offset(start), buf.iter_at_offset(end));
             buf.apply_tag(&link, &a, &b);

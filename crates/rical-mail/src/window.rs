@@ -3,6 +3,7 @@
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
+    sync::atomic::Ordering,
     time::{Duration, Instant},
 };
 
@@ -32,6 +33,14 @@ pub struct Window {
     folder_list: gtk::ListBox,
     pub search: gtk::SearchEntry,
     model: gtk::StringList,
+    /// The key of each row in `model`, as last listed.
+    row_keys: RefCell<Vec<String>>,
+    /// The last toast [`Window::toast`] showed.
+    last_toast: RefCell<Option<adw::Toast>>,
+    /// The rows of `folder_list`, as last drawn.
+    folder_specs: RefCell<Vec<FolderRow>>,
+    /// The latest search inside the messages: an older one stops.
+    body_search: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub selection: gtk::SingleSelection,
     pub list: gtk::ListView,
     pub reader: Rc<Reader>,
@@ -40,8 +49,6 @@ pub struct Window {
     pub toasts: adw::ToastOverlay,
     /// The mail view and the messages being written, as tabs.
     pub tabs: adw::TabView,
-    /// The folders, for "Move to" in the message menus.
-    move_menu: gio::Menu,
     pub composes: RefCell<Vec<Rc<crate::compose::Compose>>>,
     pub history: RefCell<Vec<String>>,
     pending_keys: RefCell<Vec<rical_ui::binds::Key>>,
@@ -235,11 +242,10 @@ impl Window {
             }
         }
         // what else can be done to it: the same menu as a right click
-        let move_menu = gio::Menu::new();
         let more = gtk::MenuButton::builder()
             .icon_name("view-more-symbolic")
             .tooltip_text("More for this message")
-            .menu_model(&message_menu(&move_menu))
+            .menu_model(&message_menu())
             .build();
         reader_header.pack_end(&more);
         for (icon, tip, line) in [
@@ -329,7 +335,6 @@ impl Window {
             list_stack,
             toasts,
             tabs,
-            move_menu,
             composes: RefCell::default(),
             history: Default::default(),
             pending_keys: Default::default(),
@@ -338,6 +343,10 @@ impl Window {
             debounce: Default::default(),
             read_timer: Default::default(),
             reader_ticket: Cell::new(0),
+            row_keys: RefCell::default(),
+            last_toast: RefCell::default(),
+            folder_specs: RefCell::default(),
+            body_search: Default::default(),
             quiet_until: Cell::new(None),
             syncing: Cell::new(false),
             me: Default::default(),
@@ -405,13 +414,19 @@ impl Window {
         self.window.present();
     }
 
+    /// Say something, in place of what was said last: a high-priority
+    /// toast would otherwise put the last one back to be shown after it
+    /// ("Deleted" again after "Moved back"). One with its own button (Undo
+    /// sending) is not made here, so stays.
     pub fn toast(&self, text: &str) {
-        self.toasts.add_toast(
-            adw::Toast::builder()
-                .title(text)
-                .priority(adw::ToastPriority::High)
-                .build(),
-        );
+        let toast = adw::Toast::builder()
+            .title(text)
+            .priority(adw::ToastPriority::High)
+            .build();
+        if let Some(last) = self.last_toast.replace(Some(toast.clone())) {
+            last.dismiss();
+        }
+        self.toasts.add_toast(toast);
     }
 
     /// Say that what the app does next to the folders is its own doing.
@@ -423,7 +438,7 @@ impl Window {
     /// Each row of the list: who, when, the subject, and what is on it.
     fn setup_rows(self: &Rc<Self>, factory: &gtk::SignalListItemFactory) {
         let weak = Rc::downgrade(self);
-        let menu = message_menu(&self.move_menu);
+        let menu = message_menu();
         factory.connect_setup(move |_, item| {
             let item = item.downcast_ref::<gtk::ListItem>().unwrap();
             let outer = gtk::Box::builder()
@@ -530,13 +545,9 @@ impl Window {
         let state = self.state.clone();
         factory.connect_bind(move |_, item| {
             let item = item.downcast_ref::<gtk::ListItem>().unwrap();
-            let Some(n) = item
-                .item()
-                .and_downcast::<gtk::StringObject>()
-                .and_then(|s| s.string().parse::<usize>().ok())
-            else {
-                return;
-            };
+            // the item is only the row's key (see Window::fill_list): what
+            // it shows is the message at its place in the list
+            let n = item.position() as usize;
             let Some(outer) = item.child().and_downcast::<gtk::Box>() else {
                 return;
             };
@@ -674,11 +685,15 @@ impl Window {
             if w.syncing.get() {
                 return;
             }
-            let path = sel
-                .selected_item()
-                .and_downcast::<gtk::StringObject>()
-                .and_then(|s| s.string().parse::<usize>().ok())
-                .and_then(|n| w.state.borrow().message_at(n).map(|m| m.path.clone()));
+            let at = sel.selected();
+            let path = (at != gtk::INVALID_LIST_POSITION)
+                .then(|| {
+                    w.state
+                        .borrow()
+                        .message_at(at as usize)
+                        .map(|m| m.path.clone())
+                })
+                .flatten();
             w.state.borrow_mut().selected = path;
             w.show_message();
         });
@@ -738,6 +753,18 @@ impl Window {
             }
         });
         self.window.add_action(&open);
+        // the command line with something typed in, from a menu: "Move
+        // To…" asks for the folder there, with completion, rather than
+        // listing hundreds of them in a menu (which GTK keeps up to date
+        // for every widget added, at seconds a start)
+        let prompt = gio::SimpleAction::new("prompt", Some(glib::VariantTy::STRING));
+        let weak = Rc::downgrade(self);
+        prompt.connect_activate(move |_, param| {
+            if let (Some(w), Some(text)) = (weak.upgrade(), param.and_then(|p| p.str())) {
+                palette::open(&w, text);
+            }
+        });
+        self.window.add_action(&prompt);
 
         let keys = gtk::EventControllerKey::new();
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -841,31 +868,68 @@ impl Window {
         self.show_message();
     }
 
+    /// The folder list. What each row shows is worked out first; when the
+    /// rows are the same ones as before (only counts changed, as after a
+    /// move), just those that differ are made again, not hundreds.
     pub fn fill_folders(&self) {
-        while let Some(c) = self.folder_list.first_child() {
-            self.folder_list.remove(&c);
+        let (rows, select) = self.folder_rows();
+        let same_rows = {
+            let old = self.folder_specs.borrow();
+            old.len() == rows.len() && old.iter().zip(&rows).all(|(a, b)| a.same_row(b))
+        };
+        if same_rows {
+            let old = self.folder_specs.borrow();
+            for (i, (was, now)) in old.iter().zip(&rows).enumerate() {
+                if was != now
+                    && let Some(row) = self.folder_list.row_at_index(i as i32)
+                {
+                    let selected = row.is_selected();
+                    self.folder_list.remove(&row);
+                    let new = self.folder_row_of(now);
+                    self.folder_list.insert(&new, i as i32);
+                    if selected {
+                        self.syncing.set(true);
+                        self.folder_list.select_row(Some(&new));
+                        self.syncing.set(false);
+                    }
+                }
+            }
+        } else {
+            while let Some(c) = self.folder_list.first_child() {
+                self.folder_list.remove(&c);
+            }
+            for spec in &rows {
+                self.folder_list.append(&self.folder_row_of(spec));
+            }
         }
-        // "Move to" lists the folders, by the name the move command takes
-        self.move_menu.remove_all();
-        for f in &self.state.borrow().folders {
-            let i = gio::MenuItem::new(Some(&f.name.replace('_', "__")), None);
-            i.set_action_and_target_value(
-                Some("win.run"),
-                Some(&format!("move {}", rical_ui::command::quote(&f.name)).to_variant()),
-            );
-            self.move_menu.append_item(&i);
+        *self.folder_specs.borrow_mut() = rows;
+        let row = select.and_then(|i| self.folder_list.row_at_index(i as i32));
+        if row.as_ref() != self.folder_list.selected_row().as_ref() {
+            self.syncing.set(true);
+            self.folder_list.select_row(row.as_ref());
+            self.syncing.set(false);
         }
+    }
+
+    /// The rows of the folder list, and which is where you are.
+    fn folder_rows(&self) -> (Vec<FolderRow>, Option<usize>) {
         let s = self.state.borrow();
-        let mut select: Option<gtk::ListBoxRow> = None;
+        let mut rows = Vec::new();
+        let mut select = None;
         let remembered = rical_ui::uistate::get("folds").unwrap_or_default();
         self.folds.borrow_mut().clear();
         if s.grouped() {
             // everything together, then each account
             let open = remembered_fold(&remembered, ALL_FOLD).unwrap_or(true);
             self.folds.borrow_mut().insert(ALL_FOLD.to_owned(), open);
-            let head = fold_row("All accounts", 0, open, 0, true);
-            head.set_widget_name(&format!("fold:{ALL_FOLD}"));
-            self.folder_list.append(&head);
+            rows.push(FolderRow::Fold {
+                id: format!("fold:{ALL_FOLD}"),
+                name: "All accounts".to_owned(),
+                unread: 0,
+                open,
+                indent: 0,
+                strong: true,
+            });
             for role in [
                 Role::Inbox,
                 Role::Drafts,
@@ -886,40 +950,60 @@ impl Window {
                 } else {
                     of.iter().map(|f| f.unread).sum()
                 };
-                let row = folder_row(folder_icon(role), unified_title(role), unread, 1, None);
-                row.set_widget_name(&format!("unified:{}", unified_key(role)));
-                self.folder_list.append(&row);
                 if s.place == Place::Unified(role) {
-                    select = Some(row);
+                    select = Some(rows.len());
                 }
+                rows.push(FolderRow::Folder {
+                    id: format!("unified:{}", unified_key(role)),
+                    icon: folder_icon(role),
+                    name: unified_title(role).to_owned(),
+                    unread,
+                    indent: 1,
+                    toggle: None,
+                    drop: None,
+                });
             }
             for a in s.accounts() {
                 let entries: Vec<(String, usize)> = a
                     .folders
                     .iter()
-                    .map(|&i| (s.short_name(&s.folders[i]), i))
+                    .map(|&i| (s.folders[i].name[a.name.len() + 1..].to_owned(), i))
                     .collect();
                 let unread = counted_unread(&s, entries.iter().map(|e| e.1));
                 // open when asked to be, else when it has something unread
                 // or is where you are
                 let here = entries
                     .iter()
-                    .any(|e| s.place == Place::Folder(s.folders[e.1].path.clone()));
+                    .any(|e| matches!(&s.place, Place::Folder(p) if *p == s.folders[e.1].path));
                 let open = remembered_fold(&remembered, &a.name).unwrap_or(unread > 0 || here);
                 self.folds.borrow_mut().insert(a.name.clone(), open);
-                let head = fold_row(&a.name, unread, open, 0, true);
-                head.set_widget_name(&format!("fold:{}", a.name));
-                self.folder_list.append(&head);
+                rows.push(FolderRow::Fold {
+                    id: format!("fold:{}", a.name),
+                    name: a.name.clone(),
+                    unread,
+                    open,
+                    indent: 0,
+                    strong: true,
+                });
                 if open {
                     let entries: Vec<(Vec<&str>, usize)> = entries
                         .iter()
                         .map(|(n, i)| (n.split('/').collect(), *i))
                         .collect();
                     let prefix = format!("{}/", a.name);
-                    self.append_tree(&s, &entries, 0, 1, &prefix, &remembered, &mut select);
+                    self.tree_rows(
+                        &s,
+                        &entries,
+                        0,
+                        1,
+                        &prefix,
+                        &remembered,
+                        &mut rows,
+                        &mut select,
+                    );
                 }
             }
-            self.folder_list.append(&heading_row("Outgoing"));
+            rows.push(FolderRow::Heading("Outgoing".to_owned()));
         } else {
             let entries: Vec<(Vec<&str>, usize)> = s
                 .folders
@@ -927,28 +1011,28 @@ impl Window {
                 .enumerate()
                 .map(|(i, f)| (f.name.split('/').collect(), i))
                 .collect();
-            self.append_tree(&s, &entries, 0, 0, "", &remembered, &mut select);
+            self.tree_rows(&s, &entries, 0, 0, "", &remembered, &mut rows, &mut select);
         }
-        let n = s.outbox_count();
-        let row = folder_row("network-transmit-symbolic", "Outbox", n, 0, None);
-        row.set_widget_name("outbox");
-        self.folder_list.append(&row);
         if s.place == Place::Outbox {
-            select = Some(row);
+            select = Some(rows.len());
         }
-        drop(s);
-        if let Some(r) = select {
-            self.syncing.set(true);
-            self.folder_list.select_row(Some(&r));
-            self.syncing.set(false);
-        }
+        rows.push(FolderRow::Folder {
+            id: "outbox".to_owned(),
+            icon: "network-transmit-symbolic",
+            name: "Outbox".to_owned(),
+            unread: s.outbox_count(),
+            indent: 0,
+            toggle: None,
+            drop: None,
+        });
+        (rows, select)
     }
 
     /// Folders as a tree by the parts of their names: a folder with folders
     /// in it (`[Gmail]`, `Projects`) folds them away. `entries` are the names
     /// split at `/` with the folder's index, in the order to show them.
     #[allow(clippy::too_many_arguments)]
-    fn append_tree(
+    fn tree_rows(
         &self,
         s: &crate::state::State,
         entries: &[(Vec<&str>, usize)],
@@ -956,72 +1040,116 @@ impl Window {
         indent: i32,
         prefix: &str,
         remembered: &str,
-        select: &mut Option<gtk::ListBoxRow>,
+        rows: &mut Vec<FolderRow>,
+        select: &mut Option<usize>,
     ) {
-        // the names at this level, in order, those with nothing in them first
-        let mut names: Vec<&str> = Vec::new();
-        for (parts, _) in entries {
-            if !names.contains(&parts[depth]) {
-                names.push(parts[depth]);
+        // the names at this level in order, each with the folder of that
+        // name and those inside it; those with nothing inside first
+        let mut at: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        let mut names: Vec<(&str, Option<usize>, Entries)> = Vec::new();
+        for (parts, i) in entries {
+            let n = *at.entry(parts[depth]).or_insert_with(|| {
+                names.push((parts[depth], None, Vec::new()));
+                names.len() - 1
+            });
+            if parts.len() == depth + 1 {
+                names[n].1.get_or_insert(*i);
+            } else {
+                names[n].2.push((parts.clone(), *i));
             }
         }
-        let inside = |n: &str| {
-            entries
-                .iter()
-                .filter(|(p, _)| p.len() > depth + 1 && p[depth] == n)
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-        names.sort_by_key(|n| !inside(n).is_empty());
-        for name in names {
-            let own = entries
-                .iter()
-                .find(|(p, _)| p.len() == depth + 1 && p[depth] == name)
-                .map(|e| e.1);
-            let kids = inside(name);
+        names.sort_by_key(|(_, _, kids)| !kids.is_empty());
+        for (name, own, kids) in names {
             let key = format!("{prefix}{name}");
             let mut fold = None;
             if !kids.is_empty() {
                 let here = kids
                     .iter()
-                    .any(|e| s.place == Place::Folder(s.folders[e.1].path.clone()));
+                    .any(|e| matches!(&s.place, Place::Folder(p) if *p == s.folders[e.1].path));
                 let unread = counted_unread(s, kids.iter().map(|e| e.1));
                 let open = remembered_fold(remembered, &key).unwrap_or(unread > 0 || here);
                 self.folds.borrow_mut().insert(key.clone(), open);
                 fold = Some((key.clone(), open, unread));
             }
-            let row = match (own, &fold) {
+            match (own, &fold) {
                 (Some(i), _) => {
                     let f = &s.folders[i];
-                    let toggle = fold.as_ref().map(|(k, open, _)| (k.as_str(), *open));
-                    let row = folder_row(folder_icon(f.role), name, f.unread, indent, toggle);
-                    row.set_widget_name(&f.path.to_string_lossy());
-                    self.droppable(&row, &f.name);
-                    if s.place == Place::Folder(f.path.clone()) {
-                        *select = Some(row.clone());
+                    if matches!(&s.place, Place::Folder(p) if *p == f.path) {
+                        *select = Some(rows.len());
                     }
-                    row
+                    rows.push(FolderRow::Folder {
+                        id: f.path.to_string_lossy().into_owned(),
+                        icon: folder_icon(f.role),
+                        name: name.to_owned(),
+                        unread: f.unread,
+                        indent,
+                        toggle: fold.as_ref().map(|(k, open, _)| (k.clone(), *open)),
+                        drop: Some(f.name.clone()),
+                    });
                 }
-                (None, Some((k, open, unread))) => {
-                    let row = fold_row(name, *unread, *open, indent, false);
-                    row.set_widget_name(&format!("fold:{k}"));
-                    row
-                }
+                (None, Some((k, open, unread))) => rows.push(FolderRow::Fold {
+                    id: format!("fold:{k}"),
+                    name: name.to_owned(),
+                    unread: *unread,
+                    open: *open,
+                    indent,
+                    strong: false,
+                }),
                 (None, None) => continue,
-            };
-            self.folder_list.append(&row);
+            }
             if let Some((_, true, _)) = fold {
-                self.append_tree(
+                self.tree_rows(
                     s,
                     &kids,
                     depth + 1,
                     indent + 1,
                     &format!("{key}/"),
                     remembered,
+                    rows,
                     select,
                 );
             }
         }
+    }
+
+    /// The widget for a row of the folder list.
+    fn folder_row_of(&self, spec: &FolderRow) -> gtk::ListBoxRow {
+        let row = match spec {
+            FolderRow::Heading(text) => return heading_row(text),
+            FolderRow::Fold {
+                name,
+                unread,
+                open,
+                indent,
+                strong,
+                ..
+            } => fold_row(name, *unread, *open, *indent, *strong),
+            FolderRow::Folder {
+                icon,
+                name,
+                unread,
+                indent,
+                toggle,
+                drop,
+                ..
+            } => {
+                let row = folder_row(
+                    icon,
+                    name,
+                    *unread,
+                    *indent,
+                    toggle.as_ref().map(|(k, open)| (k.as_str(), *open)),
+                );
+                if let Some(folder) = drop {
+                    self.droppable(&row, folder);
+                }
+                row
+            }
+        };
+        if let FolderRow::Fold { id, .. } | FolderRow::Folder { id, .. } = spec {
+            row.set_widget_name(id);
+        }
+        row
     }
 
     /// Fold or open a part of the folder list (an account, a folder with
@@ -1050,7 +1178,7 @@ impl Window {
             usize,
         ) = {
             let s = self.state.borrow();
-            let items = (0..s.shown.len()).map(|n| n.to_string()).collect();
+            let items = (0..s.shown.len()).map(|n| row_key(&s, n)).collect();
             let selected = s.position().map(|p| p as u32);
             let unread = s
                 .shown
@@ -1059,10 +1187,33 @@ impl Window {
                 .count();
             (items, selected, s.place_name(), s.shown.len(), unread)
         };
-        let refs: Vec<&str> = items.iter().map(String::as_str).collect();
-        self.model.splice(0, self.model.n_items(), &refs);
+        // only the rows that differ: deleting one changes one row, not the
+        // thousands after it, which keep their place in the list (and GTK
+        // their widgets)
+        let (at, gone, new) = {
+            let old = self.row_keys.borrow();
+            let same_start = old.iter().zip(&items).take_while(|(a, b)| a == b).count();
+            let most = old.len().min(items.len()) - same_start;
+            let same_end = old
+                .iter()
+                .rev()
+                .zip(items.iter().rev())
+                .take(most)
+                .take_while(|(a, b)| a == b)
+                .count();
+            (
+                same_start,
+                old.len() - same_start - same_end,
+                same_start..items.len() - same_end,
+            )
+        };
+        if gone > 0 || !new.is_empty() {
+            let refs: Vec<&str> = items[new].iter().map(String::as_str).collect();
+            self.model.splice(at as u32, gone as u32, &refs);
+        }
         self.list_stack
-            .set_visible_child_name(if refs.is_empty() { "none" } else { "list" });
+            .set_visible_child_name(if items.is_empty() { "none" } else { "list" });
+        *self.row_keys.borrow_mut() = items;
         match selected {
             Some(p) => {
                 self.selection.set_selected(p);
@@ -1313,21 +1464,28 @@ impl Window {
             (s.query.clone(), c)
         };
         self.title.set_subtitle("Searching inside the messages…");
+        // each message is read whole: typing `body:budget` must not start a
+        // search of the whole folder for each letter, nor leave the earlier
+        // ones running, so it waits for a pause and a newer one stops it
+        let ticket = self.body_search.fetch_add(1, Ordering::Relaxed) + 1;
+        let latest = self.body_search.clone();
         let weak = Rc::downgrade(self);
         let q = query.clone();
         glib::spawn_future_local(async move {
+            glib::timeout_future(Duration::from_millis(250)).await;
+            if latest.load(Ordering::Relaxed) != ticket {
+                return;
+            }
+            let still = latest.clone();
             let found = gio::spawn_blocking(move || {
-                let parsed = rical_maildir::search::Query::parse(&q);
-                candidates
-                    .into_iter()
-                    .filter(|m| parsed.matches_body(m))
-                    .map(|m| m.path)
-                    .collect::<std::collections::HashSet<_>>()
+                rical_maildir::search::Query::parse(&q)
+                    .body_matches(&candidates, || still.load(Ordering::Relaxed) == ticket)
             })
             .await;
             let Some(w) = weak.upgrade() else { return };
-            let Ok(found) = found else { return };
-            if w.state.borrow().query != query {
+            let Ok(Some(found)) = found else { return };
+            let found: std::collections::HashSet<_> = found.into_iter().collect();
+            if w.state.borrow().query != query || latest.load(Ordering::Relaxed) != ticket {
                 return;
             }
             w.state.borrow_mut().restrict_shown(&found);
@@ -1432,7 +1590,12 @@ impl Window {
         let root = self.state.borrow().root.clone();
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {
-            let found = gio::spawn_blocking(move || rical_maildir::store::folders(&root)).await;
+            // kept, so the next start shows them at once
+            let found = gio::spawn_blocking(move || match crate::load::cache_dir() {
+                Some(dir) => rical_maildir::store::folders_kept(&root, &dir),
+                None => rical_maildir::store::folders(&root),
+            })
+            .await;
             let Some(w) = weak.upgrade() else { return };
             match found {
                 Ok(Ok(folders)) => w.state.borrow_mut().folders = folders,
@@ -1441,6 +1604,71 @@ impl Window {
             }
             then(&w);
         });
+    }
+}
+
+/// What row `n` of the list shows, as text: its message (whose file name
+/// changes with its flags) and how it is drawn there. A row whose key is
+/// the same is not drawn again.
+fn row_key(s: &crate::state::State, n: usize) -> String {
+    let Some(m) = s.message_at(n) else {
+        return String::new();
+    };
+    let folded = s
+        .folded
+        .contains(&m.path)
+        .then(|| s.thread_info.get(&m.path).copied())
+        .flatten();
+    format!(
+        "{}|{}|{folded:?}|{}|{:?}",
+        m.path.display(),
+        s.depth_at(n),
+        s.picked.contains(&m.path),
+        s.outbox_notes.get(&m.path),
+    )
+}
+
+/// Folder names split at `/`, each with the folder's index.
+type Entries<'a> = Vec<(Vec<&'a str>, usize)>;
+
+/// A row of the folder list, before it is drawn.
+#[derive(Clone, PartialEq)]
+enum FolderRow {
+    /// A name over folders (an account, `[Gmail]`): `id` is `fold:` and
+    /// its key.
+    Fold {
+        id: String,
+        name: String,
+        unread: usize,
+        open: bool,
+        indent: i32,
+        strong: bool,
+    },
+    /// A folder, a folder of every account, or the Outbox. `toggle` folds
+    /// those inside it; `drop` is the folder messages dragged on move to.
+    Folder {
+        id: String,
+        icon: &'static str,
+        name: String,
+        unread: usize,
+        indent: i32,
+        toggle: Option<(String, bool)>,
+        drop: Option<String>,
+    },
+    Heading(String),
+}
+
+impl FolderRow {
+    /// Whether `other` is this row, its count aside.
+    fn same_row(&self, other: &FolderRow) -> bool {
+        let without_count = |r: &FolderRow| {
+            let mut r = r.clone();
+            if let FolderRow::Fold { unread, .. } | FolderRow::Folder { unread, .. } = &mut r {
+                *unread = 0;
+            }
+            r
+        };
+        without_count(self) == without_count(other)
     }
 }
 
@@ -1759,7 +1987,7 @@ impl Window {
 }
 
 /// What can be done to a message, for its menu and a right click.
-fn message_menu(move_menu: &gio::Menu) -> gio::Menu {
+fn message_menu() -> gio::Menu {
     let menu = gio::Menu::new();
     let item = |m: &gio::Menu, label: &str, line: &str| {
         let i = gio::MenuItem::new(Some(label), None);
@@ -1777,7 +2005,9 @@ fn message_menu(move_menu: &gio::Menu) -> gio::Menu {
     item(&deal, "_Archive", "archive");
     item(&deal, "_Delete", "delete");
     item(&deal, "_Junk", "junk");
-    deal.append_submenu(Some("_Move To"), move_menu);
+    let to = gio::MenuItem::new(Some("_Move To…"), None);
+    to.set_action_and_target_value(Some("win.prompt"), Some(&"move ".to_variant()));
+    deal.append_item(&to);
     item(&deal, "Pick the _Conversation", "pick thread");
     menu.append_section(None, &deal);
     let look = gio::Menu::new();

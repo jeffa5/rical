@@ -509,14 +509,20 @@ impl Window {
     ) -> Result<(), String> {
         self.quiet();
         let mut done = Vec::new();
-        for path in paths {
-            let unread = self
-                .state
+        // looked up once: picking a whole big folder is thousands of paths
+        let unread_now: std::collections::HashSet<std::path::PathBuf> = {
+            let wanted: std::collections::HashSet<&std::path::PathBuf> = paths.iter().collect();
+            self.state
                 .borrow()
                 .messages
                 .iter()
-                .find(|m| &m.path == path)
-                .is_some_and(|m| m.unread());
+                .filter(|m| wanted.contains(&m.path) && m.unread())
+                .map(|m| m.path.clone())
+                .collect()
+        };
+        let mut renames = Vec::new();
+        for path in paths {
+            let unread = unread_now.contains(path);
             let before = store::flags_of(path);
             let mut now = before;
             // a message still in new/ has no flags yet but is unread
@@ -526,12 +532,20 @@ impl Window {
             if now == was && now.seen == !unread {
                 continue;
             }
-            let new = store::set_flags(path, now).map_err(|e| format!("{e:#}"))?;
+            let new = match store::set_flags(path, now) {
+                Ok(new) => new,
+                Err(e) => {
+                    // those renamed already are followed all the same
+                    self.state.borrow_mut().renamed_all(renames);
+                    return Err(format!("{e:#}"));
+                }
+            };
             let mut before = before;
             before.seen = !unread && before.seen;
-            self.state.borrow_mut().renamed(path, new.clone(), now);
+            renames.push((path.clone(), new.clone(), now));
             done.push(Undo::Flags { now: new, before });
         }
+        self.state.borrow_mut().renamed_all(renames);
         if done.is_empty() {
             return Ok(());
         }
@@ -566,16 +580,21 @@ impl Window {
         }
         self.quiet();
         let mut done = Vec::new();
+        // each to the right folder of its own account, found once per folder
+        let mut dest_of: std::collections::HashMap<std::path::PathBuf, std::path::PathBuf> =
+            std::collections::HashMap::new();
         for path in &paths {
             let from = path
                 .parent()
                 .and_then(Path::parent)
                 .map(Path::to_owned)
                 .ok_or("not in a folder")?;
-            // each to the right folder of its own account
             let to = match &dest {
                 Dest::Folder(p) => p.clone(),
-                Dest::Role(r) => self.state.borrow().folder_for(path, *r),
+                Dest::Role(r) => dest_of
+                    .entry(from.clone())
+                    .or_insert_with(|| self.state.borrow().folder_for(path, *r))
+                    .clone(),
             };
             let now = store::move_to(path, &to).map_err(|e| format!("{e:#}"))?;
             done.push(Undo::Moved { now, back_to: from });
@@ -588,15 +607,13 @@ impl Window {
             } else {
                 Undo::Batch(done)
             });
-            for p in &paths {
-                s.removed(p);
-            }
+            s.removed_all(&paths);
             s.picked.clear();
         }
         self.reload_folders(|w| w.fill_folders());
         self.refresh();
         self.toast(&format!(
-            "{said}{}. U to undo",
+            "{said}{}. u to undo",
             if n > 1 {
                 format!(" ({n} messages)")
             } else {
@@ -719,34 +736,39 @@ impl Window {
             .pop()
             .ok_or("nothing to undo")?;
         self.quiet();
-        let moved = Self::undo_step(u)?;
+        let mut back = Vec::new();
+        Self::undo_step(u, &mut back)?;
+        // what came back is selected, so the list shows it once read again
+        if let Some(first) = back.first() {
+            let mut s = self.state.borrow_mut();
+            s.selected = Some(first.clone());
+            s.opened = None;
+        }
         // a move needs the folders read again; flags only the rows
         self.reload();
-        if moved {
+        if !back.is_empty() {
             self.toast("Moved back");
         }
         Ok(())
     }
 
-    /// Undo one step (or each of a batch). Whether anything was moved.
-    fn undo_step(u: Undo) -> Result<bool, String> {
+    /// Undo one step (or each of a batch), adding where what was moved
+    /// back is now to `back`.
+    fn undo_step(u: Undo, back: &mut Vec<std::path::PathBuf>) -> Result<(), String> {
         match u {
             Undo::Moved { now, back_to } => {
-                store::move_to(&now, &back_to).map_err(|e| format!("{e:#}"))?;
-                Ok(true)
+                back.push(store::move_to(&now, &back_to).map_err(|e| format!("{e:#}"))?);
             }
             Undo::Flags { now, before } => {
                 store::set_flags(&now, before).map_err(|e| format!("{e:#}"))?;
-                Ok(false)
             }
             Undo::Batch(all) => {
-                let mut moved = false;
                 for u in all.into_iter().rev() {
-                    moved |= Self::undo_step(u)?;
+                    Self::undo_step(u, back)?;
                 }
-                Ok(moved)
             }
         }
+        Ok(())
     }
 
     fn show_links(self: &Rc<Self>) -> Result<(), String> {

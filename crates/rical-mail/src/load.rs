@@ -10,7 +10,7 @@ use rical_maildir::{
     store::{self, Folder, Role, Summary},
 };
 
-use crate::state::{Layout, Place, State};
+use crate::state::{Layout, Place, State, account_in};
 
 /// Where the header index is kept, with the app's state.
 pub fn cache_dir() -> Option<PathBuf> {
@@ -70,7 +70,8 @@ impl State {
     /// The reading the place in front needs.
     pub fn load_job(&mut self) -> Job {
         self.generation += 1;
-        let label = |f: &Folder| self.account_of(&f.name).unwrap_or_else(|| f.name.clone());
+        let accounts = self.accounts_raw();
+        let label = |f: &Folder| account_in(&accounts, &f.name).unwrap_or_else(|| f.name.clone());
         let folders: Vec<(Folder, String)> = match &self.place {
             Place::Folder(p) => self
                 .folders
