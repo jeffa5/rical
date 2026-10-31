@@ -196,3 +196,44 @@ fn date_of(w: &When, local: Tz) -> NaiveDate {
         When::Floating(f) => f.date(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_file_with_bare_line_feeds_converts_and_duplicates() {
+        // as DAVx5 writes them: \n, not \r\n
+        let d = tempfile::tempdir().unwrap();
+        let cal = d.path().join("personal");
+        std::fs::create_dir(&cal).unwrap();
+        std::fs::write(
+            cal.join("w.ics"),
+            "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:x\nBEGIN:VEVENT\nUID:w\n\
+             DTSTAMP:20261011T110447Z\nSUMMARY:Weigh-in\n\
+             DTSTART;TZID=Europe/London:20261017T070000\n\
+             DTEND;TZID=Europe/London:20261017T070500\n\
+             RRULE:FREQ=WEEKLY;BYDAY=SA\nSTATUS:CONFIRMED\nBEGIN:VALARM\n\
+             TRIGGER:-PT30M\nACTION:DISPLAY\nDESCRIPTION:Weigh-in\nEND:VALARM\n\
+             END:VEVENT\nEND:VCALENDAR\n",
+        )
+        .unwrap();
+        let mut v = Vdir::load(d.path()).unwrap();
+        let london = chrono_tz::Europe::London;
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 10, 31).unwrap();
+        let at = day.and_hms_opt(0, 0, 0).unwrap().and_utc();
+        let occ = v.query(&(at..at + TimeDelta::days(1)), &[Kind::Event], london)[0].clone();
+
+        let (_, copy) = v.duplicate(&occ).unwrap();
+        let (changes, _) = v.convert(&occ, day, london).unwrap();
+        let task = changes[0].after.as_deref().unwrap();
+        assert!(task.contains("BEGIN:VTODO\r\n") && !task.contains("\n\n"));
+        assert_eq!(task.matches('\n').count(), task.matches("\r\n").count());
+        assert!(task.contains("BEGIN:VALARM\r\nTRIGGER:-PT30M\r\n"));
+        assert!(
+            v.query(&(at..at + TimeDelta::days(1)), &[Kind::Event], london)
+                .iter()
+                .any(|o| o.uid == copy)
+        );
+    }
+}

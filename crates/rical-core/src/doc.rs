@@ -502,8 +502,11 @@ impl Document {
         })
     }
 
-    /// Add a component after the existing ones.
-    pub fn push(&mut self, c: Component) {
+    /// Add a component after the existing ones. It may come from another
+    /// file, so it is written in this file's line endings: a file mixing
+    /// them is invalid.
+    pub fn push(&mut self, mut c: Component) {
+        c.detach();
         self.root.items.push(Item::Component(c));
     }
 
