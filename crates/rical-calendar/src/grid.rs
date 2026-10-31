@@ -1,7 +1,7 @@
 //! The day and week time grid: a header of days, an all-day row, and a
 //! scrollable 24 hour grid with events drawn as blocks sized by duration.
 //! Events can be dragged to move or resize them, and dragging on empty grid
-//! creates one.
+//! (or a click there) creates one.
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -382,9 +382,13 @@ impl TimeGrid {
                             press_day: day,
                         })
                     }
-                    (None, _, Some(day)) if !all_day => Some(DragKind::Create {
+                    (None, _, Some(day)) => Some(DragKind::Create {
                         day,
-                        start_min: snap(minute_at(y) - 7.5),
+                        start_min: if all_day {
+                            0.0
+                        } else {
+                            snap(minute_at(y) - 7.5)
+                        },
                     }),
                     _ => None,
                 }
@@ -441,6 +445,11 @@ impl TimeGrid {
                     };
                     Some((occ.start, end))
                 }
+                // across the all-day row: the days dragged over
+                DragKind::Create { day: from, .. } if all_day => {
+                    let (lo, hi) = (day.min(*from), day.max(*from));
+                    Some((When::Date(lo), When::Date(hi + TimeDelta::days(1))))
+                }
                 DragKind::Create { day, start_min } => {
                     let here = snap(minute_at(y));
                     let (lo, hi) = (start_min.min(here), start_min.max(here));
@@ -454,7 +463,7 @@ impl TimeGrid {
 
         let this = Rc::downgrade(self);
         let target = area.clone();
-        gesture.connect_drag_end(move |_, _, _| {
+        gesture.connect_drag_end(move |g, _, _| {
             let Some(this) = this.upgrade() else { return };
             let Some(drag) = this.drag.borrow_mut().take() else {
                 return;
@@ -462,6 +471,20 @@ impl TimeGrid {
             this.grid.queue_draw();
             this.all_day.queue_draw();
             match (drag.moved, drag.preview, drag.kind) {
+                // a click on empty grid: an event there, in the half hour
+                // clicked (or all that day on the all-day row)
+                (false, _, DragKind::Create { day, .. }) => {
+                    let (start, end) = if drag.all_day {
+                        (When::Date(day), When::Date(day + TimeDelta::days(1)))
+                    } else {
+                        let y = g.start_point().map_or(0.0, |(_, y)| y);
+                        let min = (minute_at(y) / 30.0).floor() * 30.0;
+                        let local = this.state.borrow().local;
+                        let start = When::Zoned(layout::at_wall(day, min, local));
+                        (start, start.add(TimeDelta::hours(1)))
+                    };
+                    (this.on_drag)(DragAction::Create { start, end });
+                }
                 (false, _, DragKind::Move { .. } | DragKind::Resize { .. }) => {
                     if let Some(rect) = drag.hit_rect {
                         this.show_details_at(&target, rect);
@@ -567,7 +590,7 @@ impl TimeGrid {
                 status: None,
                 start,
                 end,
-                all_day: false,
+                all_day,
                 recurring: false,
                 due: None,
                 alarms: Vec::new(),

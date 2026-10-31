@@ -47,7 +47,9 @@ remembered.
   Moving to a day (`h`/`l`) selects its first item.
 - **Move** an event by dragging it, or with `J`/`K` (15 minutes) and
   `H`/`L` (a day). **Resize** by dragging its bottom edge, or with `]`/`[`.
-- **Create** by dragging over empty hours.
+- **Create** by clicking empty hours (an hour from the half hour clicked)
+  or dragging over them; on the all-day row, click a day or drag across
+  days for an all-day event. The editor opens with those times.
 - **Schedule a task** by dragging it from the sidebar's task list onto the
   hours (an hour then) or the all-day row (due that day).
 
@@ -73,7 +75,8 @@ On a window too narrow for them, the zone columns step aside on their own.
 
 Each day lists its events, with `+N more` when they don't fit. `j`/`k`
 select within the month, the arrow keys move the focused day, and
-`Enter` on a day with nothing selected opens it as a day.
+`Enter` on a day with nothing selected opens it as a day, as does a click
+on its number. A click on the rest of a day adds an event on it, like `c`.
 
 ## Year
 

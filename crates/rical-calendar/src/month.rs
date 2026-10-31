@@ -62,13 +62,18 @@ impl MonthView {
             this.area.grab_focus();
             let hits = this.hits.borrow().clone();
             // the topmost hit is the chip if one was clicked, else the day
-            let day = hits.iter().find_map(|h| match &h.target {
-                Target::Day(d) if h.contains(x, y) => Some(*d),
+            let cell = hits.iter().find_map(|h| match &h.target {
+                Target::Day(d) if h.contains(x, y) => Some((*d, h.x, h.y)),
                 _ => None,
             });
+            let day = cell.map(|(d, _, _)| d);
             let chip = hit_at(&hits, x, y).and_then(|h| match &h.target {
                 Target::Occurrence(k) => Some((k.clone(), h.rect())),
                 Target::Day(_) => None,
+            });
+            // the day's number opens the day; the rest of it adds an event
+            let on_number = cell.is_some_and(|(_, cx, cy)| {
+                x - cx < DAY_NUMBER_HEIGHT + 6.0 && y - cy < DAY_NUMBER_HEIGHT
             });
             {
                 let mut s = this.state.borrow_mut();
@@ -76,13 +81,19 @@ impl MonthView {
                     s.date = day;
                 }
                 s.selected = chip.as_ref().map(|(k, _)| k.clone());
-                if n_press == 2 && chip.is_none() {
+                if on_number && chip.is_none() {
                     s.view = ViewKind::Day;
                 }
             }
             on_change();
-            if let Some((_, rect)) = chip {
-                this.show_details_at(rect);
+            match chip {
+                Some((_, rect)) => this.show_details_at(rect),
+                None if n_press == 1 && day.is_some() && !on_number => {
+                    let _ = this
+                        .area
+                        .activate_action("win.run", Some(&"new".to_variant()));
+                }
+                None => {}
             }
         });
         this.area.add_controller(click);
