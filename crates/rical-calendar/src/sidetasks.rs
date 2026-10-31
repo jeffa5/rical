@@ -69,7 +69,7 @@ impl SideTasks {
             let today = s.today();
             let mut tasks = s
                 .vdir
-                .tasks()
+                .tasks_on(today, s.local)
                 .into_iter()
                 .filter(|t| {
                     // what is on now: due by today, started, or undated;

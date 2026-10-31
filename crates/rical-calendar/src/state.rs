@@ -388,7 +388,7 @@ impl State {
         if days.contains(&today) {
             occurrences.extend(
                 self.vdir
-                    .tasks()
+                    .tasks_on(today, self.local)
                     .into_iter()
                     .filter(|t| {
                         !self.hidden.contains(&t.calendar) && t.is_overdue(today, self.local)

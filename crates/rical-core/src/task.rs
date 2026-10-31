@@ -1,10 +1,10 @@
 //! Tasks (VTODO) as a list, independent of dates: listing, completing and
 //! quick creation.
 
-use std::path::PathBuf;
+use std::{ops::Range, path::PathBuf};
 
 use anyhow::Context as _;
-use chrono::{NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, TimeZone as _, Utc};
 use chrono_tz::Tz;
 
 use crate::{
@@ -104,6 +104,64 @@ impl Vdir {
         })
     }
 
+    /// Every task as it stands on `today`: a repeating one still to do is
+    /// its first repeat due on or after today, so a missed repeat is never
+    /// overdue (the next one is what is to do). One past its last repeat
+    /// is that repeat, overdue.
+    pub fn tasks_on(&self, today: NaiveDate, local: Tz) -> Vec<Task> {
+        self.all_tasks()
+            .iter()
+            .map(|t| self.task_on(t, today, local))
+            .collect()
+    }
+
+    fn task_on(&self, task: &Task, today: NaiveDate, local: Tz) -> Task {
+        if !task.recurring || !task.is_overdue(today, local) {
+            return task.clone();
+        }
+        let Some(now) = self.repeat_from(task, today, local) else {
+            return task.clone();
+        };
+        Task {
+            start: task.start.map(|_| now.start),
+            due: now.due,
+            ..task.clone()
+        }
+    }
+
+    /// A repeating task's first repeat due (or, without a due date,
+    /// starting) on or after `day`; with none left, its last.
+    fn repeat_from(&self, task: &Task, day: NaiveDate, local: Tz) -> Option<Occurrence> {
+        let from = local
+            .from_local_datetime(&day.and_time(chrono::NaiveTime::MIN))
+            .earliest()?
+            .with_timezone(&Utc);
+        let item = self.get(&task.path)?;
+        let repeats = |range: Range<DateTime<Utc>>| {
+            let components = item
+                .iter()
+                .filter(|c| c.get_uid() == Some(task.uid.as_str()));
+            crate::occurrence::expand(&task.calendar, components, &range, local)
+        };
+        let day_of = |o: &Occurrence| o.due.unwrap_or(o.start).date(local);
+        // most repeat within a year; look further only for the rest
+        [366, 366 * 10]
+            .into_iter()
+            .find_map(|days| {
+                repeats(from..from + chrono::TimeDelta::days(days))
+                    .into_iter()
+                    .filter(|o| day_of(o) >= day)
+                    .min_by_key(|o| o.start.to_utc(Tz::UTC))
+            })
+            .or_else(|| {
+                // none to come, so a series that ends: few to look through
+                let first = task.start.or(task.due)?.to_utc(Tz::UTC);
+                repeats(first..from)
+                    .into_iter()
+                    .max_by_key(|o| o.start.to_utc(Tz::UTC))
+            })
+    }
+
     pub fn task(&self, path: &std::path::Path, uid: &str) -> Option<Task> {
         self.all_tasks()
             .iter()
@@ -114,10 +172,25 @@ impl Vdir {
     /// Mark a task done (STATUS, COMPLETED, PERCENT-COMPLETE) or not done.
     /// For a repeating task, done moves it to its next occurrence instead
     /// (counting down any COUNT), and only the last one is marked done.
+    /// The repeat that is done is the one to do now ([`Vdir::tasks_on`]),
+    /// so repeats missed before it are skipped too.
     pub fn set_done(&mut self, task: &Task, done: bool) -> anyhow::Result<Change> {
+        let local = crate::when::local_timezone();
+        let today = Utc::now().with_timezone(&local).date_naive();
+        self.set_done_on(task, done, today, local)
+    }
+
+    /// [`Vdir::set_done`] as if on `today`.
+    pub fn set_done_on(
+        &mut self,
+        task: &Task,
+        done: bool,
+        today: NaiveDate,
+        local: Tz,
+    ) -> anyhow::Result<Change> {
         if done
             && task.recurring
-            && let Some(shift) = self.next_shift(task)
+            && let Some((shift, repeats)) = self.next_shift(task, today, local)
         {
             return self.edit_task(task, |c| {
                 for name in ["DTSTART", "DUE"] {
@@ -126,7 +199,7 @@ impl Vdir {
                     }
                 }
                 if let Some(rule) = c.property("RRULE").map(|l| l.value().to_owned()) {
-                    c.set(Line::property("RRULE", &[], &count_down(&rule)));
+                    c.set(Line::property("RRULE", &[], &count_down(&rule, repeats)));
                 }
             });
         }
@@ -256,30 +329,42 @@ impl Vdir {
 }
 
 impl Vdir {
-    /// How far a repeating task moves to reach its next occurrence, if it
-    /// has one.
-    fn next_shift(&self, task: &Task) -> Option<chrono::TimeDelta> {
-        let anchor = task.start.or(task.due)?;
-        let from = anchor.to_utc(Tz::UTC);
+    /// How far a repeating task moves to reach the repeat after the one to
+    /// do on `today`, and how many repeats that passes, if there is one.
+    fn next_shift(
+        &self,
+        task: &Task,
+        today: NaiveDate,
+        local: Tz,
+    ) -> Option<(chrono::TimeDelta, u32)> {
+        // from the file: `task` may be one already moved to today
+        let first = self.task(&task.path, &task.uid)?;
+        let from = first.start.or(first.due)?.to_utc(Tz::UTC);
+        let now = self.task_on(&first, today, local);
+        let after = now.start.or(now.due)?.to_utc(Tz::UTC).max(from);
         let item = self.get(&task.path)?;
         let components = item
             .iter()
             .filter(|c| c.get_uid() == Some(task.uid.as_str()));
-        let range = from..from + chrono::TimeDelta::days(366 * 5);
-        let next = crate::occurrence::expand(&task.calendar, components, &range, Tz::UTC)
+        let range = from..after + chrono::TimeDelta::days(366 * 5);
+        let starts = crate::occurrence::expand(&task.calendar, components, &range, Tz::UTC)
             .into_iter()
-            .filter(|o| o.recurrence_id.is_some() && o.start.to_utc(Tz::UTC) > from)
-            .min_by_key(|o| o.start.to_utc(Tz::UTC))?;
-        Some(next.start.to_utc(Tz::UTC) - from)
+            .filter(|o| o.recurrence_id.is_some())
+            .map(|o| o.start.to_utc(Tz::UTC))
+            .filter(|s| *s >= from)
+            .collect::<Vec<_>>();
+        let next = starts.iter().filter(|s| **s > after).min()?;
+        let passed = starts.iter().filter(|s| *s < next).count();
+        Some((*next - from, u32::try_from(passed).ok()?))
     }
 }
 
-/// One fewer remaining occurrence: COUNT counts from DTSTART, which moves.
-fn count_down(rule: &str) -> String {
+/// `n` fewer remaining occurrences: COUNT counts from DTSTART, which moves.
+fn count_down(rule: &str, n: u32) -> String {
     rule.split(';')
         .map(|part| match part.split_once('=') {
             Some((k, v)) if k.eq_ignore_ascii_case("COUNT") => match v.parse::<u32>() {
-                Ok(n) if n > 1 => format!("COUNT={}", n - 1),
+                Ok(c) if c > n => format!("COUNT={}", c - n),
                 _ => part.to_owned(),
             },
             _ => part.to_owned(),

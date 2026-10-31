@@ -138,7 +138,7 @@ impl TasksView {
         let today = state.today();
         let tasks = state
             .vdir
-            .tasks()
+            .tasks_on(today, local)
             .into_iter()
             .filter(|t| !state.hidden.contains(&t.calendar))
             .collect::<Vec<_>>();

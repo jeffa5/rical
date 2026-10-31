@@ -388,7 +388,21 @@ impl<'a> Fields<'a> {
             conferences: conferences(self.component),
             attachments: attachments(self.component),
             parent: parent_of(self.component),
-            due: self.component.prop("DUE").and_then(When::from_property),
+            // each repeat is due as long after its start as the first is
+            due: self
+                .component
+                .prop("DUE")
+                .and_then(When::from_property)
+                .map(|due| {
+                    let by = self.start.until(&start);
+                    // whole days for a due date, which a clock change in
+                    // between would otherwise leave a day short
+                    due.add(if due.is_date() {
+                        TimeDelta::days((by.num_hours() + 12).div_euclid(24))
+                    } else {
+                        by
+                    })
+                }),
         }
     }
 }
@@ -1114,5 +1128,50 @@ mod attachment_tests {
         );
         assert_eq!(name_in_uri("https://x.org/drive/view/"), None);
         assert_eq!(name_in_uri("cid:part1.1@x.org"), None);
+    }
+}
+
+#[cfg(test)]
+mod due_tests {
+    use super::*;
+    use chrono::Timelike as _;
+    #[test]
+    fn each_repeat_of_a_task_is_due_on_its_own_day() {
+        let d = tempfile::tempdir().unwrap();
+        let cal = d.path().join("home");
+        std::fs::create_dir(&cal).unwrap();
+        // timed, across the clock change on 26 Oct, and a due date only
+        std::fs::write(
+            cal.join("run.ics"),
+            "BEGIN:VCALENDAR\r\nBEGIN:VTODO\r\nUID:run\r\nSUMMARY:Run\r\n\
+             DTSTART;TZID=Europe/London:20261023T070000\r\n\
+             DUE;TZID=Europe/London:20261023T080000\r\nRRULE:FREQ=DAILY\r\n\
+             END:VTODO\r\nBEGIN:VTODO\r\nUID:bins\r\nSUMMARY:Bins\r\n\
+             DTSTART;TZID=Europe/London:20261023T070000\r\nDUE;VALUE=DATE:20261024\r\n\
+             RRULE:FREQ=DAILY\r\nEND:VTODO\r\nEND:VCALENDAR\r\n",
+        )
+        .unwrap();
+        let v = crate::Vdir::load(d.path()).unwrap();
+        let london = chrono_tz::Europe::London;
+        let day = |d| london.with_ymd_and_hms(2026, 10, d, 0, 0, 0).unwrap();
+        let range = day(25).with_timezone(&Utc)..day(29).with_timezone(&Utc);
+        let all = v.query(&range, &[Kind::Todo], london);
+        let due = |uid: &str| {
+            all.iter()
+                .filter(|o| o.uid == uid)
+                .map(|o| (o.start.date(london), o.due.unwrap()))
+                .collect::<Vec<_>>()
+        };
+        let runs = due("run");
+        assert_eq!(runs.len(), 4);
+        for (on, due) in runs {
+            let due = due.to_tz(london);
+            assert_eq!((due.date_naive(), due.hour()), (on, 8));
+        }
+        let bins = due("bins");
+        assert!(bins.len() >= 4);
+        for (on, due) in bins {
+            assert_eq!(due, When::Date(on.succ_opt().unwrap()));
+        }
     }
 }

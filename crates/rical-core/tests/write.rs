@@ -747,6 +747,8 @@ fn alarms() {
 
 #[test]
 fn completing_a_repeating_task_moves_it_on() {
+    let london = chrono_tz::Europe::London;
+    let day = |y, m, d| chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap();
     let (dir, mut vdir) = setup(&[
         (
             "home/bins.ics",
@@ -779,7 +781,8 @@ fn completing_a_repeating_task_moves_it_on() {
 
     let bins = find(&vdir, "bins");
     assert!(bins.recurring);
-    vdir.set_done(&bins, true).unwrap();
+    vdir.set_done_on(&bins, true, day(2025, 3, 3), london)
+        .unwrap();
     let text = fs::read_to_string(dir.path().join("home/bins.ics")).unwrap();
     assert!(
         text.contains("DTSTART;TZID=Europe/London:20250310T190000\r\n"),
@@ -790,11 +793,13 @@ fn completing_a_repeating_task_moves_it_on() {
     assert!(!find(&vdir, "bins").is_done());
 
     // and again, keeping its local time
-    vdir.set_done(&find(&vdir, "bins"), true).unwrap();
+    vdir.set_done_on(&find(&vdir, "bins"), true, day(2025, 3, 3), london)
+        .unwrap();
     let text = fs::read_to_string(dir.path().join("home/bins.ics")).unwrap();
     assert!(text.contains("DTSTART;TZID=Europe/London:20250317T190000\r\n"));
     // the last one is really done
-    vdir.set_done(&find(&vdir, "bins"), true).unwrap();
+    vdir.set_done_on(&find(&vdir, "bins"), true, day(2025, 3, 3), london)
+        .unwrap();
     let bins = find(&vdir, "bins");
     assert!(bins.is_done());
     assert_eq!(
@@ -803,8 +808,84 @@ fn completing_a_repeating_task_moves_it_on() {
     );
 
     // a due-only daily task moves a day
-    vdir.set_done(&find(&vdir, "plants"), true).unwrap();
+    vdir.set_done_on(&find(&vdir, "plants"), true, day(2025, 3, 3), london)
+        .unwrap();
     assert_eq!(find(&vdir, "plants").due, Some(when("20250311")));
+}
+
+#[test]
+fn a_missed_repeat_is_not_overdue_the_next_one_is_to_do() {
+    let london = chrono_tz::Europe::London;
+    let day = |d| chrono::NaiveDate::from_ymd_opt(2026, 10, d).unwrap();
+    let (dir, mut vdir) = setup(&[
+        (
+            "home/run.ics",
+            "
+            BEGIN:VTODO
+            UID:run
+            DTSTAMP:20260101T000000Z
+            DTSTART;TZID=Europe/London:20261023T070000
+            DUE;TZID=Europe/London:20261023T080000
+            RRULE:FREQ=DAILY;COUNT=20
+            SUMMARY:Run
+            END:VTODO
+            ",
+        ),
+        (
+            "home/bins.ics",
+            "
+            BEGIN:VTODO
+            UID:bins
+            DTSTAMP:20260101T000000Z
+            DUE;VALUE=DATE:20261019
+            RRULE:FREQ=WEEKLY;COUNT=2
+            SUMMARY:Bins
+            END:VTODO
+            ",
+        ),
+    ]);
+    let on = |vdir: &Vdir, uid: &str, today| {
+        vdir.tasks_on(today, london)
+            .into_iter()
+            .find(|t| t.uid == uid)
+            .unwrap()
+    };
+
+    // a week of runs missed: today's is the one to do, and it is not late
+    let run = on(&vdir, "run", day(31));
+    assert!(!run.is_overdue(day(31), london));
+    assert_eq!(
+        run.due,
+        When::parse("20261031T080000", Some("Europe/London"))
+    );
+    assert_eq!(run.start.unwrap().date(london), day(31));
+    // nothing carried onto today
+    assert!(
+        vdir.tasks_on(day(31), london)
+            .iter()
+            .filter(|t| t.uid == "run")
+            .all(|t| !t.is_overdue(day(31), london))
+    );
+
+    // done today: on to tomorrow, the missed ones counted off too
+    vdir.set_done_on(&run, true, day(31), london).unwrap();
+    let text = fs::read_to_string(dir.path().join("home/run.ics")).unwrap();
+    assert!(
+        text.contains("DTSTART;TZID=Europe/London:20261101T070000\r\n"),
+        "{text}"
+    );
+    assert!(text.contains("DUE;TZID=Europe/London:20261101T080000\r\n"));
+    assert!(text.contains("COUNT=11\r\n"), "{text}");
+    // completing the plain task (as the file has it) does the same
+    let first = vdir.tasks().into_iter().find(|t| t.uid == "run").unwrap();
+    vdir.set_done_on(&first, true, day(31), london).unwrap();
+    let text = fs::read_to_string(dir.path().join("home/run.ics")).unwrap();
+    assert!(text.contains("DUE;TZID=Europe/London:20261102T080000\r\n"));
+
+    // past its last repeat, it is overdue from that one
+    let bins = on(&vdir, "bins", day(31));
+    assert!(bins.is_overdue(day(31), london));
+    assert_eq!(bins.due, Some(When::Date(day(26))));
 }
 
 #[test]
