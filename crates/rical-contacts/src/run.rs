@@ -244,10 +244,9 @@ impl Window {
                     "next" => at.map_or(0, |a| (a + 1).min(n - 1)),
                     _ => at.map_or(0, |a| a.saturating_sub(1)),
                 };
-                if let Some(row) = self.dup_list.row_at_index(to as i32) {
-                    self.dup_list.select_row(Some(&row));
-                    row.grab_focus();
-                }
+                self.dup_selection.set_selected(to as u32);
+                self.dup_list
+                    .scroll_to(to as u32, gtk::ListScrollFlags::FOCUS, None);
             }
         }
     }

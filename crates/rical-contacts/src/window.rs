@@ -29,19 +29,28 @@ pub struct Window {
     toggle: adw::ToggleGroup,
     /// The people list: a virtualised list of index entries, by number.
     model: gtk::StringList,
+    /// What `model` holds, and the index generation its numbers are of.
+    listed: RefCell<(Option<u64>, Vec<usize>)>,
     /// The people list, or what is shown instead (no one found, loading).
     people: gtk::Stack,
     pub selection: gtk::SingleSelection,
     pub list: gtk::ListView,
-    pub dup_list: gtk::ListBox,
-    /// The headings over the duplicates: likely ones, then same names.
-    dup_headings: rical_ui::listhead::Headings,
+    /// The duplicate groups: virtualised like the people, by group number,
+    /// in sections (likely ones, then same names) for their headings.
+    dup_model: gtk::StringList,
+    pub dup_selection: gtk::SingleSelection,
+    pub dup_list: gtk::ListView,
+    /// Each group's title and why, worked out once per fill (from the
+    /// index, no card read) for its row to show as it scrolls into view.
+    dup_rows: Rc<RefCell<Vec<(String, String)>>>,
     detail: adw::NavigationPage,
     pub toasts: adw::ToastOverlay,
     pub history: RefCell<Vec<String>>,
     pending_keys: RefCell<Vec<rical_ui::binds::Key>>,
     monitors: RefCell<Vec<gio::FileMonitor>>,
     debounce: RefCell<Option<glib::SourceId>>,
+    /// Files the watcher saw change, to check once changes stop.
+    pending: RefCell<std::collections::BTreeSet<std::path::PathBuf>>,
     /// A load in the background is running, and files changed meanwhile:
     /// load again when it ends.
     load_running: Cell<bool>,
@@ -150,10 +159,33 @@ impl Window {
             .build();
         people.add_named(&loading, Some("loading"));
 
-        let dup_list = gtk::ListBox::builder()
-            .selection_mode(gtk::SelectionMode::Single)
-            .css_classes(["navigation-sidebar", "rical-list"])
+        // a group is "<section>:<number>": 0 likely the same, 1 the same
+        // name only; the section sorter only groups them (they come in
+        // that order) so the headings go between
+        let dup_model = gtk::StringList::new(&[]);
+        let section = |o: &glib::Object| {
+            o.downcast_ref::<gtk::StringObject>()
+                .map(|s| s.string().starts_with('1'))
+        };
+        let dup_sections = gtk::SortListModel::new(Some(dup_model.clone()), None::<gtk::Sorter>);
+        dup_sections.set_section_sorter(Some(&gtk::CustomSorter::new(move |a, b| {
+            section(a).cmp(&section(b)).into()
+        })));
+        let dup_selection = gtk::SingleSelection::builder()
+            .model(&dup_sections)
+            .autoselect(false)
+            .can_unselect(true)
             .build();
+        let dup_factory = gtk::SignalListItemFactory::new();
+        let dup_headers = gtk::SignalListItemFactory::new();
+        let dup_list = gtk::ListView::builder()
+            .model(&dup_selection)
+            .factory(&dup_factory)
+            .header_factory(&dup_headers)
+            .css_classes(["navigation-sidebar", "rical-list"])
+            .single_click_activate(false)
+            .build();
+        dup_list.update_property(&[gtk::accessible::Property::Label("Duplicates")]);
         let dup_scroller = gtk::ScrolledWindow::builder()
             .child(&dup_list)
             .vexpand(true)
@@ -218,17 +250,21 @@ impl Window {
             views,
             toggle,
             model,
+            listed: Default::default(),
             people: people.clone(),
             selection,
             list,
-            dup_headings: rical_ui::listhead::install(&dup_list),
+            dup_model,
+            dup_selection,
             dup_list,
+            dup_rows: Default::default(),
             detail,
             toasts,
             history: Default::default(),
             pending_keys: Default::default(),
             monitors: Default::default(),
             debounce: Default::default(),
+            pending: Default::default(),
             load_running: Cell::new(false),
             load_again: Cell::new(false),
             waiting_files: Default::default(),
@@ -240,6 +276,7 @@ impl Window {
         });
         *this.me.borrow_mut() = Rc::downgrade(&this);
         this.setup_rows(&factory);
+        this.setup_dup_rows(&dup_factory, &dup_headers);
         this.setup_signals(&people, &dups);
         this.setup_actions();
         this.watch();
@@ -420,7 +457,15 @@ impl Window {
                 .margin_top(4)
                 .margin_bottom(4)
                 .build();
-            let avatar = adw::Avatar::new(32, None, true);
+            // initials in a circle, as an avatar draws them but at a set
+            // size: an avatar measures its text for each name it is given,
+            // which a list showing new rows on every search can't afford
+            let avatar = gtk::Label::builder()
+                .css_classes(["initials"])
+                .width_request(32)
+                .height_request(32)
+                .valign(gtk::Align::Center)
+                .build();
             let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
             let name = gtk::Label::builder()
                 .xalign(0.0)
@@ -454,14 +499,84 @@ impl Window {
             let Some(e) = s.index.entries.get(n) else {
                 return;
             };
-            let avatar = b.first_child().and_downcast::<adw::Avatar>().unwrap();
+            let avatar = b.first_child().and_downcast::<gtk::Label>().unwrap();
             let text = avatar.next_sibling().unwrap();
             let name = text.first_child().and_downcast::<gtk::Label>().unwrap();
             let detail = name.next_sibling().and_downcast::<gtk::Label>().unwrap();
-            avatar.set_text(Some(&e.name));
+            avatar.set_label(&initials(&e.name));
+            avatar.set_css_classes(&["initials", INITIAL_COLOURS[colour_of(&e.name)]]);
             name.set_label(&e.name);
             detail.set_label(&e.detail);
             detail.set_visible(!e.detail.is_empty());
+        });
+    }
+
+    /// The duplicates' rows (a title and why) and their section headings.
+    fn setup_dup_rows(
+        self: &Rc<Self>,
+        factory: &gtk::SignalListItemFactory,
+        headers: &gtk::SignalListItemFactory,
+    ) {
+        factory.connect_setup(|_, item| {
+            let item = item.downcast_ref::<gtk::ListItem>().unwrap();
+            let b = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .spacing(2)
+                .margin_top(6)
+                .margin_bottom(6)
+                .margin_start(6)
+                .margin_end(6)
+                .build();
+            b.append(
+                &gtk::Label::builder()
+                    .xalign(0.0)
+                    .ellipsize(gtk::pango::EllipsizeMode::End)
+                    .build(),
+            );
+            b.append(
+                &gtk::Label::builder()
+                    .xalign(0.0)
+                    .wrap(true)
+                    .css_classes(["dim-label", "caption"])
+                    .build(),
+            );
+            item.set_child(Some(&b));
+        });
+        let rows = self.dup_rows.clone();
+        factory.connect_bind(move |_, item| {
+            let item = item.downcast_ref::<gtk::ListItem>().unwrap();
+            let Some(n) = item
+                .item()
+                .and_downcast::<gtk::StringObject>()
+                .and_then(|s| s.string().split_once(':')?.1.parse::<usize>().ok())
+            else {
+                return;
+            };
+            let Some(b) = item.child() else { return };
+            let title = b.first_child().and_downcast::<gtk::Label>().unwrap();
+            let why = title.next_sibling().and_downcast::<gtk::Label>().unwrap();
+            if let Some((t, w)) = rows.borrow().get(n) {
+                title.set_label(t);
+                why.set_label(w);
+            }
+        });
+        headers.connect_setup(|_, item| {
+            let header = item.downcast_ref::<gtk::ListHeader>().unwrap();
+            header.set_child(Some(&rical_ui::listhead::label("")));
+        });
+        headers.connect_bind(|_, item| {
+            let header = item.downcast_ref::<gtk::ListHeader>().unwrap();
+            let likely = header
+                .item()
+                .and_downcast::<gtk::StringObject>()
+                .is_some_and(|s| s.string().starts_with('0'));
+            if let Some(l) = header.child().and_downcast::<gtk::Label>() {
+                l.set_label(if likely {
+                    "Likely the same"
+                } else {
+                    "Same name only"
+                });
+            }
         });
     }
 
@@ -520,18 +635,20 @@ impl Window {
             }
         });
         let weak = Rc::downgrade(self);
-        self.dup_list.connect_row_selected(move |_, row| {
+        self.dup_selection.connect_selected_notify(move |sel| {
             let Some(w) = weak.upgrade() else { return };
             if w.syncing.get() {
                 return;
             }
-            w.state.borrow_mut().selected_group = row.map(|r| r.index() as usize);
+            let at = sel.selected();
+            w.state.borrow_mut().selected_group =
+                (at != gtk::INVALID_LIST_POSITION).then_some(at as usize);
             w.show_detail();
         });
         let weak = Rc::downgrade(self);
         // a click shows the group (on a narrow window, its own page); merging
         // is the button, m or Enter, never a stray click
-        self.dup_list.connect_row_activated(move |_, _| {
+        self.dup_list.connect_activate(move |_, _| {
             if let Some(w) = weak.upgrade() {
                 w.split.set_show_content(true);
             }
@@ -669,9 +786,8 @@ impl Window {
     /// Show the list for what is searched, keeping the selection.
     pub fn fill_list(&self) {
         self.syncing.set(true);
-        let (items, selected): (Vec<String>, Option<u32>) = {
+        let (shown, generation, selected) = {
             let mut s = self.state.borrow_mut();
-            let items = s.shown.iter().map(|n| n.to_string()).collect();
             let selected = s.selected.as_ref().and_then(|id| {
                 let n = s.index.position(id)?;
                 s.shown.iter().position(|&m| m == n).map(|p| p as u32)
@@ -685,14 +801,45 @@ impl Window {
             if selected.is_none() {
                 s.selected = None;
             }
-            (items, selected)
+            (s.shown.clone(), s.index.generation, selected)
         };
-        let refs: Vec<&str> = items.iter().map(String::as_str).collect();
-        self.model.splice(0, self.model.n_items(), &refs);
+        // only what changed: replacing all of tens of thousands of rows
+        // makes the list build its rows again, unchanged or not. Another
+        // index numbers everyone afresh, so then all of it.
+        let (from, remove, add) = {
+            let mut listed = self.listed.borrow_mut();
+            let (from, remove, add) = if listed.0 == Some(generation) {
+                let old = &listed.1;
+                let front = old.iter().zip(&shown).take_while(|(a, b)| a == b).count();
+                let back = old[front..]
+                    .iter()
+                    .rev()
+                    .zip(shown[front..].iter().rev())
+                    .take_while(|(a, b)| a == b)
+                    .count();
+                (
+                    front,
+                    old.len() - front - back,
+                    shown[front..shown.len() - back].to_vec(),
+                )
+            } else {
+                (0, listed.1.len(), shown.clone())
+            };
+            *listed = (Some(generation), shown);
+            (from, remove, add)
+        };
+        let changed = remove > 0 || !add.is_empty();
+        if changed {
+            let add: Vec<String> = add.iter().map(usize::to_string).collect();
+            let add: Vec<&str> = add.iter().map(String::as_str).collect();
+            self.model.splice(from as u32, remove as u32, &add);
+        }
         match selected {
             Some(p) => {
-                self.selection.set_selected(p);
-                self.list.scroll_to(p, gtk::ListScrollFlags::NONE, None);
+                if changed || self.selection.selected() != p {
+                    self.selection.set_selected(p);
+                    self.list.scroll_to(p, gtk::ListScrollFlags::NONE, None);
+                }
             }
             None => self.selection.set_selected(gtk::INVALID_LIST_POSITION),
         }
@@ -777,68 +924,63 @@ impl Window {
     pub fn fill_duplicates(&self) {
         let groups = self.state.borrow_mut().groups();
         // the selected row stays put; after the last is merged, the new last
-        {
+        let selected = {
             let mut s = self.state.borrow_mut();
             s.selected_group = s
                 .selected_group
                 .filter(|_| !groups.is_empty())
                 .map(|i| i.min(groups.len() - 1));
-        }
-        self.syncing.set(true);
-        while let Some(row) = self.dup_list.row_at_index(0) {
-            self.dup_list.remove(&row);
-        }
-        let s = self.state.borrow();
-        // a heading where the likely ones start, and where those that only
-        // share a name do (strong groups come first)
-        *self.dup_headings.borrow_mut() = groups
+            s.selected_group
+        };
+        // names from the index, not the cards: thousands of groups would
+        // read thousands of files
+        let rows: Vec<(String, String)> = {
+            let s = self.state.borrow();
+            let names: std::collections::HashMap<&CardId, &str> = s
+                .index
+                .entries
+                .iter()
+                .flat_map(|e| {
+                    std::iter::once(&e.id)
+                        .chain(&e.copies)
+                        .map(|id| (id, e.name.as_str()))
+                })
+                .collect();
+            groups
+                .iter()
+                .map(|g| {
+                    let names: Vec<&str> = g
+                        .cards
+                        .iter()
+                        .filter_map(|id| names.get(id).copied())
+                        .collect();
+                    let mut unique = names.clone();
+                    unique.dedup();
+                    let title = match unique[..] {
+                        [one] => format!("{one} ×{}", names.len()),
+                        _ => unique.join(", "),
+                    };
+                    let why = g
+                        .reasons
+                        .iter()
+                        .map(|r| r.describe())
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    (title, why)
+                })
+                .collect()
+        };
+        *self.dup_rows.borrow_mut() = rows;
+        let keys: Vec<String> = groups
             .iter()
             .enumerate()
-            .map(|(i, g)| {
-                let starts = i == 0 || groups[i - 1].is_strong() != g.is_strong();
-                starts.then(|| {
-                    let heading = rical_ui::listhead::label(if g.is_strong() {
-                        "Likely the same"
-                    } else {
-                        "Same name only"
-                    });
-                    // in line with the rows' text
-                    heading.set_margin_start(20);
-                    heading.upcast()
-                })
-            })
+            .map(|(i, g)| format!("{}:{i}", u8::from(!g.is_strong())))
             .collect();
-        for g in groups.iter() {
-            let names: Vec<String> = g
-                .cards
-                .iter()
-                .filter_map(|id| s.books.get(id).map(|c| c.card().display_name()))
-                .collect();
-            let mut unique = names.clone();
-            unique.dedup();
-            let title = if unique.len() == 1 {
-                format!("{} ×{}", unique[0], names.len())
-            } else {
-                unique.join(", ")
-            };
-            let why = g
-                .reasons
-                .iter()
-                .map(|r| r.describe())
-                .collect::<Vec<_>>()
-                .join("; ");
-            let row = adw::ActionRow::builder()
-                .title(gtk::glib::markup_escape_text(&title))
-                .subtitle(gtk::glib::markup_escape_text(&why))
-                .activatable(true)
-                .build();
-            self.dup_list.append(&row);
-        }
-        if let Some(i) = s.selected_group
-            && let Some(row) = self.dup_list.row_at_index(i as i32)
-        {
-            self.dup_list.select_row(Some(&row));
-        }
+        let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
+        self.syncing.set(true);
+        self.dup_model.splice(0, self.dup_model.n_items(), &keys);
+        self.dup_selection
+            .set_selected(selected.map_or(gtk::INVALID_LIST_POSITION, |i| i as u32));
         if let Some(t) = self.toggle.toggle_by_name("duplicates") {
             t.set_label(Some(&if groups.is_empty() {
                 "Duplicates".to_owned()
@@ -994,12 +1136,12 @@ impl Window {
             // it was (a row the list no longer has, so the search box)
             View::Duplicates => {
                 let list = self.dup_list.clone();
-                let focus = move || match list.selected_row() {
-                    Some(r) => {
-                        r.grab_focus();
-                    }
-                    None => {
-                        list.grab_focus();
+                let selection = self.dup_selection.clone();
+                let focus = move || {
+                    list.grab_focus();
+                    let at = selection.selected();
+                    if at != gtk::INVALID_LIST_POSITION {
+                        list.scroll_to(at, gtk::ListScrollFlags::FOCUS, None);
                     }
                 };
                 focus();
@@ -1032,7 +1174,7 @@ impl Window {
                 }
             };
             let weak = Rc::downgrade(self);
-            monitor.connect_changed(move |_, _, _, event| {
+            monitor.connect_changed(move |_, file, other, event| {
                 if matches!(
                     event,
                     gio::FileMonitorEvent::ChangesDoneHint
@@ -1041,6 +1183,10 @@ impl Window {
                     return;
                 }
                 if let Some(w) = weak.upgrade() {
+                    // a move names both ends
+                    w.pending
+                        .borrow_mut()
+                        .extend(file.path().into_iter().chain(other.and_then(|o| o.path())));
                     w.catch_up_soon();
                 }
             });
@@ -1058,11 +1204,39 @@ impl Window {
         let id = glib::timeout_add_local_once(Duration::from_millis(300), move || {
             let Some(w) = weak.upgrade() else { return };
             w.debounce.borrow_mut().take();
-            // read again in the background: only changed files are parsed
-            // (the rest come from the cache), and the index is built there
-            // too, so a sync of thousands of cards never holds the window
-            log::info!("address books changed on disk");
-            w.load();
+            if w.load_running.get() {
+                // the load may have read these before they changed
+                w.pending.borrow_mut().clear();
+                w.load_again.set(true);
+                return;
+            }
+            let paths: Vec<_> = std::mem::take(&mut *w.pending.borrow_mut())
+                .into_iter()
+                .collect();
+            // a sync of many: read again in the background, where only
+            // changed files are parsed and the index is built, so a sync of
+            // thousands of cards never holds the window
+            if paths.len() > 64 {
+                log::info!("{} cards changed on disk, reading them again", paths.len());
+                w.load();
+                return;
+            }
+            // a few: only those are looked at, and the books read again only
+            // if they really changed (not when it was this window writing
+            // them, which indexed them as it did)
+            let check = w.state.borrow().books.check_files(&paths);
+            match check {
+                Some(check) => w.run_check(check),
+                None if w.state.borrow().books.check().is_none() => {
+                    // an index in memory: only here
+                    let changed = w.state.borrow_mut().books.reload_files(&paths);
+                    if changed {
+                        w.refresh();
+                    }
+                }
+                // nothing that is a card
+                None => {}
+            }
         });
         *self.debounce.borrow_mut() = Some(id);
     }
@@ -1140,4 +1314,45 @@ pub fn reveal_row(row: &gtk::ListBoxRow) {
     } else if bottom > adj.value() + adj.page_size() {
         adj.set_value(bottom - adj.page_size());
     }
+}
+
+/// The colour classes for initials (see the app's CSS): libadwaita's
+/// fourteen avatar colours.
+const INITIAL_COLOURS: [&str; 14] = [
+    "initials-1",
+    "initials-2",
+    "initials-3",
+    "initials-4",
+    "initials-5",
+    "initials-6",
+    "initials-7",
+    "initials-8",
+    "initials-9",
+    "initials-10",
+    "initials-11",
+    "initials-12",
+    "initials-13",
+    "initials-14",
+];
+
+/// A name's colour, as an avatar picks it (GLib's string hash), so the
+/// list shows someone in the colour of their own page.
+fn colour_of(name: &str) -> usize {
+    let h = name.bytes().fold(5381u32, |h, b| {
+        // g_str_hash adds each byte as a signed char
+        h.wrapping_mul(33).wrapping_add(b as i8 as i32 as u32)
+    });
+    h as usize % INITIAL_COLOURS.len()
+}
+
+/// The first letter of a name's first and last words, as avatars show.
+fn initials(name: &str) -> String {
+    let mut words = name.split_whitespace();
+    let first = words.next().and_then(|w| w.chars().next());
+    let last = words.next_back().and_then(|w| w.chars().next());
+    first
+        .into_iter()
+        .chain(last)
+        .flat_map(char::to_uppercase)
+        .collect()
 }

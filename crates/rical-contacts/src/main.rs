@@ -21,7 +21,25 @@ pub const APP_NAME: &str = "Contacts";
 pub const APP_FULL_NAME: &str = "Contacts (rical)";
 
 /// The window's look on top of the shared one.
-const CSS: &str = "";
+///
+/// The list's initials, in libadwaita's avatar colours.
+const CSS: &str = "
+.initials { border-radius: 9999px; font-weight: bold; font-size: 0.85em; }
+.initials-1 { background-image: linear-gradient(#83b6ec, #337fdc); color: #cfe1f5; }
+.initials-2 { background-image: linear-gradient(#7ad9f1, #0f9ac8); color: #caeaf2; }
+.initials-3 { background-image: linear-gradient(#8de6b1, #29ae74); color: #cef8d8; }
+.initials-4 { background-image: linear-gradient(#b5e98a, #6ab85b); color: #e6f9d7; }
+.initials-5 { background-image: linear-gradient(#f8e359, #d29d09); color: #f9f4e1; }
+.initials-6 { background-image: linear-gradient(#ffcb62, #d68400); color: #ffead1; }
+.initials-7 { background-image: linear-gradient(#ffa95a, #ed5b00); color: #ffe5c5; }
+.initials-8 { background-image: linear-gradient(#f78773, #e62d42); color: #f8d2ce; }
+.initials-9 { background-image: linear-gradient(#e973ab, #e33b6a); color: #fac7de; }
+.initials-10 { background-image: linear-gradient(#cb78d4, #9945b5); color: #e7c2e8; }
+.initials-11 { background-image: linear-gradient(#9e91e8, #7a59ca); color: #d5d2f5; }
+.initials-12 { background-image: linear-gradient(#e3cf9c, #b08952); color: #f2eade; }
+.initials-13 { background-image: linear-gradient(#be916d, #785336); color: #e5d6ca; }
+.initials-14 { background-image: linear-gradient(#c0bfbc, #6e6d71); color: #d8d7d3; }
+";
 
 fn main() -> glib::ExitCode {
     rical_ui::app::init(rical_ui::app::App {
