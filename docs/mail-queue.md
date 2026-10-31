@@ -26,7 +26,7 @@ rical-mail-queue -v run --once      # "sends" it: appends it to /tmp/rical-wire.
 
 `rical-mail-queue run` (without `--once`) keeps going: it watches the queue
 and sends each message as it lands, so nothing needs to tell it to. Run it as
-a service (the Home Manager module's `programs.rical.mailQueue = true` does);
+a service ([the Home Manager module](#as-a-service) does);
 `--once` is for sending from a script or timer instead.
 
 There is no default `send` command: until one is configured, `run`
@@ -52,6 +52,42 @@ names), `name = value` per line:
 send = msmtp --read-envelope-from -- $RICAL_MAIL_QUEUE_RECIPIENTS
 send-from *@work.example = msmtp -a work -- $RICAL_MAIL_QUEUE_RECIPIENTS
 ```
+
+
+## As a service
+
+The Home Manager module runs the worker as a systemd user service, and
+writes the settings above:
+
+```nix
+programs.rical.mailQueue = {
+  enable = true;
+  send = "msmtp --read-envelope-from -- $RICAL_MAIL_QUEUE_RECIPIENTS";
+  sendFrom = [
+    { from = "*@work.example"; command = "msmtp -a work -- $RICAL_MAIL_QUEUE_RECIPIENTS"; }
+  ];
+  sent = "~/mail/Sent";
+  packages = [ pkgs.msmtp ];   # on the service's PATH for the send command
+};
+```
+
+| Option | Setting |
+| --- | --- |
+| `send`, `queue`, `sent`, `timeout`, `poll` | The same names. |
+| `sendFrom` | `send-from` lines, in order: a list of `{ from; command; }`. |
+| `maxAttempts`, `retryDelay` | `max-attempts`, `retry-delay`. |
+| `extraConfig` | Lines added at the end. |
+| `packages` | Put on the service's `PATH`, ahead of your profile's, for the send command and what it runs (e.g. a password command). |
+| `verbose` | Log each message's progress to the journal (default on). |
+
+If none of the settings are given, the module leaves
+`~/.config/rical-mail-queue/config` alone, so a file you keep yourself still
+works. `mailQueue = true` is short for `mailQueue.enable = true`.
+
+The service restarts when the settings change, and after a failure. With
+no send command it stops instead (exit 78) rather than retrying every half
+minute; `journalctl --user -u rical-mail-queue` says why. If you change
+`queue`, set the mail app's `queue` to the same folder.
 
 ## The send command
 

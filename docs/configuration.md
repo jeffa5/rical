@@ -195,6 +195,8 @@ The flake has a Home Manager module:
 | `extraConfig` | Lines added to the end of the config file. |
 | `openCalendarFiles` | Make rical the default for `.ics` files, so mail clients open invitations in it. |
 | `openContactFiles` | Make rical-contacts the default for `.vcf` files, so contacts opened elsewhere are shown or added there ([Contacts](contacts.md)). |
+| `mailQueue` | Run the send queue's worker as a user service ([the send queue](mail-queue.md#as-a-service)). |
+| `mail` | rical-mail's settings, written to `~/.config/rical-mail/config` ([Mail](mail.md#settings)). |
 
 The module writes these into `~/.config/rical-calendar/config`, which is then
 read-only: changes made in Preferences go to `local.conf` and override it.

@@ -3,7 +3,7 @@
 
 use std::{io::Read as _, path::PathBuf, sync::atomic::AtomicBool};
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result};
 use chrono::Utc;
 use clap::Parser as _;
 use rical_mail_queue::{
@@ -121,10 +121,16 @@ fn main() -> Result<()> {
         }
         Cmd::Run { once } => {
             if config.send.is_none() && config.routes.is_empty() {
-                bail!(
-                    "no send command: set `send = …` in {}",
-                    config::default_path().display()
+                // EX_CONFIG, so a service stops rather than retrying what
+                // cannot start until the settings change
+                eprintln!(
+                    "Error: no send command: set `send = …` in {}",
+                    args.config
+                        .clone()
+                        .unwrap_or_else(config::default_path)
+                        .display()
                 );
+                std::process::exit(78);
             }
             let worker = Worker {
                 queue: &queue,

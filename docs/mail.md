@@ -31,6 +31,26 @@ message as it arrives; otherwise e.g. `rical-mail-queue run --once`), `editor`, 
 `aspell list`; misspelt words are underlined). `--help` lists
 them all.
 
+With Home Manager, `programs.rical.mail` writes the file. It fills in
+`vdir`, `queue` and `contacts` from the rest of `programs.rical` (the
+calendar's `vdir`, `mailQueue.queue`, `settings.contacts`):
+
+```nix
+programs.rical.mail = {
+  enable = true;
+  mail = "~/mail";
+  me = [ "Me <me@example.com>" ];
+  accounts.work = [ "Me <me@work.example>" ];
+  settings = { markdown = true; read-after = "2s"; };
+  binds = "";                  # ~/.config/rical-mail/binds.conf
+  extraConfig = "include-if-exists = private.conf";
+  openMailto = true;           # rical-mail opens mailto: links
+};
+```
+
+The file is then read-only; Preferences saves to `local.conf` beside it,
+which overrides it.
+
 ## Private by default
 
 - Nothing in a message is fetched. HTML mail is drawn as HTML (`h`, or
