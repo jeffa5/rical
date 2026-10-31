@@ -405,7 +405,6 @@ impl Window {
             s.query.clear();
             s.selected = None;
             s.opened = None;
-            s.reload_folders();
             // empty until it is read, so the old place's messages do not show
             s.messages.clear();
             s.outbox_notes.clear();
@@ -418,6 +417,7 @@ impl Window {
         self.split.set_show_content(false);
         self.focus_view();
         self.open_place();
+        self.reload_folders(|w| w.fill_folders());
     }
 
     fn select(&self, which: &str) {
@@ -545,8 +545,8 @@ impl Window {
             } else {
                 Undo::Batch(done)
             });
-            s.reload_folders();
         }
+        self.reload_folders(|w| w.fill_folders());
         match single_at {
             Some(p) => self.rebind(p),
             None => self.fill_list(),
@@ -592,8 +592,8 @@ impl Window {
                 s.removed(p);
             }
             s.picked.clear();
-            s.reload_folders();
         }
+        self.reload_folders(|w| w.fill_folders());
         self.refresh();
         self.toast(&format!(
             "{said}{}. U to undo",
@@ -698,8 +698,8 @@ impl Window {
                 match store::remove(&path) {
                     Ok(()) => {
                         w.state.borrow_mut().removed(&path);
-                        w.state.borrow_mut().reload_folders();
                         w.refresh();
+                        w.reload_folders(|w| w.fill_folders());
                         w.toast("Deleted for good");
                     }
                     Err(e) => w.toast(&format!("{e:#}")),

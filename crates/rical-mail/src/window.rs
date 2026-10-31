@@ -367,6 +367,8 @@ impl Window {
         this.watch();
         this.refresh();
         this.open_place();
+        // the counts from the index, counted again away from the window
+        this.reload_folders(|w| w.fill_folders());
         this.load_others();
         this.focus_view();
         this
@@ -1426,7 +1428,7 @@ impl Window {
 
     /// Read the folders (and how many messages each has) on the background
     /// pool, then `then`.
-    fn reload_folders(self: &Rc<Self>, then: impl FnOnce(&Rc<Self>) + 'static) {
+    pub fn reload_folders(self: &Rc<Self>, then: impl FnOnce(&Rc<Self>) + 'static) {
         let root = self.state.borrow().root.clone();
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {

@@ -85,16 +85,35 @@ fn count(path: &Path) -> (usize, usize) {
 /// Everything under `root` that is a Maildir, in Maildir++ (`.Sent`,
 /// `.work.Projects`) or plain nested (`Sent`, `work/Projects`) layout.
 pub fn folders(root: &Path) -> Result<Vec<Folder>> {
+    folders_counted(root, &count)
+}
+
+/// [`folders`], counting their messages from the header index kept in
+/// `dir` (as they were when each was last listed) rather than looking at
+/// every message: quick, to show before [`folders`] counts them. A folder
+/// never listed into it is counted.
+pub fn folders_indexed(root: &Path, dir: &Path) -> Result<Vec<Folder>> {
+    let counts = crate::cache::counts(dir);
+    folders_counted(root, &|p: &Path| {
+        counts
+            .get(p.as_os_str().as_encoded_bytes())
+            .copied()
+            .unwrap_or_else(|| count(p))
+    })
+}
+
+/// The folders, with (unread, total) of each from `count`.
+fn folders_counted(root: &Path, count: &dyn Fn(&Path) -> (usize, usize)) -> Result<Vec<Folder>> {
     let mut out = Vec::new();
     if is_maildir(root) {
-        out.push(make("INBOX", root));
+        out.push(make("INBOX", root, count));
     }
-    walk(root, "", 0, &mut out)?;
+    walk(root, "", 0, &mut out, count)?;
     out.sort_by_key(|a| (a.role, a.name.to_lowercase()));
     Ok(out)
 }
 
-fn make(name: &str, path: &Path) -> Folder {
+fn make(name: &str, path: &Path, count: &dyn Fn(&Path) -> (usize, usize)) -> Folder {
     let (unread, total) = count(path);
     Folder {
         name: name.to_owned(),
@@ -105,7 +124,13 @@ fn make(name: &str, path: &Path) -> Folder {
     }
 }
 
-fn walk(dir: &Path, prefix: &str, depth: usize, out: &mut Vec<Folder>) -> Result<()> {
+fn walk(
+    dir: &Path,
+    prefix: &str,
+    depth: usize,
+    out: &mut Vec<Folder>,
+    count: &dyn Fn(&Path) -> (usize, usize),
+) -> Result<()> {
     if depth > 4 {
         return Ok(());
     }
@@ -132,10 +157,10 @@ fn walk(dir: &Path, prefix: &str, depth: usize, out: &mut Vec<Folder>) -> Result
             format!("{prefix}/{shown}")
         };
         if is_maildir(&e.path()) {
-            out.push(make(&full, &e.path()));
+            out.push(make(&full, &e.path(), count));
         }
         // a folder can hold folders (plain layout); plain directories too
-        walk(&e.path(), &full, depth + 1, out)?;
+        walk(&e.path(), &full, depth + 1, out, count)?;
     }
     Ok(())
 }
@@ -567,6 +592,52 @@ mod cache_tests {
         let first = &list_indexed(folder, &cache_dir).unwrap()[0];
         assert_eq!(first.path, read);
         assert!(first.flags.seen && !first.is_new);
+    }
+
+    #[test]
+    fn folders_are_counted_from_the_index() {
+        let d = tempfile::tempdir().unwrap();
+        let inbox = d.path().join("INBOX");
+        for seen in [false, false, true] {
+            let raw = "From: a@x.example\nSubject: Hi\n\nHi\n";
+            let flags = Flags {
+                seen,
+                ..Flags::default()
+            };
+            deliver(&inbox, raw.as_bytes(), flags, !seen).unwrap();
+        }
+        fs::create_dir_all(d.path().join("Other/cur")).unwrap();
+        let cache_dir = d.path().join("cache");
+        let counted = |fs: Vec<Folder>| -> Vec<(String, usize, usize)> {
+            fs.into_iter()
+                .map(|f| (f.name, f.unread, f.total))
+                .collect()
+        };
+        let real = counted(folders(d.path()).unwrap());
+        // not listed yet: counted as it is
+        assert_eq!(
+            counted(folders_indexed(d.path(), &cache_dir).unwrap()),
+            real
+        );
+        let inbox_folder = folders(d.path())
+            .unwrap()
+            .into_iter()
+            .find(|f| f.path == inbox)
+            .unwrap();
+        list_cached(&inbox_folder, crate::cache::Cache::open(&cache_dir, &inbox));
+        assert_eq!(
+            counted(folders_indexed(d.path(), &cache_dir).unwrap()),
+            real
+        );
+        // the index says what it was told, until listed again
+        deliver(&inbox, b"Subject: More\n\nx\n", Flags::default(), true).unwrap();
+        let stale = counted(folders_indexed(d.path(), &cache_dir).unwrap());
+        assert_eq!(stale, real);
+        list_cached(&inbox_folder, crate::cache::Cache::open(&cache_dir, &inbox));
+        assert_eq!(
+            counted(folders_indexed(d.path(), &cache_dir).unwrap()),
+            counted(folders(d.path()).unwrap())
+        );
     }
 
     /// Mark a message in new/ read, as a mail client does.

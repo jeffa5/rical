@@ -13,7 +13,11 @@ use rical_maildir::{
 use crate::state::{Layout, Place, State};
 
 /// Where the header index is kept, with the app's state.
-fn cache_dir() -> Option<PathBuf> {
+pub fn cache_dir() -> Option<PathBuf> {
+    // tests keep nothing, and never touch the real one
+    if cfg!(test) {
+        return None;
+    }
     rical_ui::app::state_dir().map(|d| d.join("cache"))
 }
 

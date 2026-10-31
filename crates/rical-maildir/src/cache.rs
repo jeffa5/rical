@@ -78,7 +78,7 @@ impl Headers {
 }
 
 /// Changed whenever what is kept changes: the index is filled again.
-const VERSION: i64 = 2;
+const VERSION: i64 = 3;
 
 const TABLES: &str = "
     CREATE TABLE messages (
@@ -87,6 +87,8 @@ const TABLES: &str = "
         -- where it is: `new` or `cur`, and its file's name (with its flags)
         sub TEXT NOT NULL,
         file TEXT NOT NULL,
+        -- in new/, or without the seen flag: for counting a folder's unread
+        unread INTEGER NOT NULL,
         size INTEGER NOT NULL,
         date INTEGER NOT NULL,
         from_name TEXT NOT NULL,
@@ -259,6 +261,41 @@ impl Cache {
     }
 }
 
+/// Each folder listed into the index in `dir` (by its path's bytes), with
+/// its (unread, total) messages as they were when it was last listed.
+pub fn counts(dir: &Path) -> HashMap<Vec<u8>, (usize, usize)> {
+    let index = open_index(dir);
+    let conn = index.conn();
+    let mut out: HashMap<Vec<u8>, (usize, usize)> = HashMap::new();
+    let listed = conn
+        .prepare("SELECT folder FROM folders")
+        .and_then(|mut st| {
+            st.query_map([], |r| r.get::<_, Vec<u8>>(0))?
+                .collect::<Result<Vec<_>, _>>()
+        });
+    for f in listed.unwrap_or_default() {
+        out.insert(f, (0, 0));
+    }
+    let counted = conn
+        .prepare("SELECT folder, sum(unread), count(*) FROM messages GROUP BY folder")
+        .and_then(|mut st| {
+            st.query_map([], |r| {
+                Ok((
+                    r.get::<_, Vec<u8>>(0)?,
+                    r.get::<_, i64>(1)? as usize,
+                    r.get::<_, i64>(2)? as usize,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+        });
+    for (f, unread, total) in counted.unwrap_or_default() {
+        if let Some(c) = out.get_mut(&f) {
+            *c = (unread, total);
+        }
+    }
+    out
+}
+
 fn read_listed(index: &rical_index::Index, folder: &[u8]) -> bool {
     index
         .conn()
@@ -321,19 +358,21 @@ fn write(
             delete.execute(params![folder, name])?;
         }
         let mut put = tx.prepare_cached(
-            "INSERT OR REPLACE INTO messages (folder, name, sub, file, size, date, from_name,
-                from_address, recipients, subject, message_id, in_reply_to, refs, attachments,
-                preview)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            "INSERT OR REPLACE INTO messages (folder, name, sub, file, unread, size, date,
+                from_name, from_address, recipients, subject, message_id, in_reply_to, refs,
+                attachments, preview)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         )?;
         for name in changed {
             let Some(e) = entries.get(name) else { continue };
             let h = &e.headers;
+            let unread = e.sub == "new" || !crate::flags::split_name(&e.file).1.seen;
             put.execute(params![
                 folder,
                 name,
                 e.sub,
                 e.file,
+                unread,
                 h.size as i64,
                 h.date,
                 h.from_name,

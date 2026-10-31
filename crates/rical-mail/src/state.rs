@@ -136,7 +136,9 @@ impl State {
             last_sent: None,
             before_search: None,
         };
-        s.reload_folders();
+        // counted as the header index has them; the window counts them
+        // again away from it
+        s.folders_from_index();
         s.build_people();
         let first = s
             .folders
@@ -150,8 +152,14 @@ impl State {
         s
     }
 
-    pub fn reload_folders(&mut self) {
-        match store::folders(&self.root) {
+    /// The folders, with their counts from the header index (as they
+    /// were when each was last listed) where it has them.
+    pub fn folders_from_index(&mut self) {
+        let found = match crate::load::cache_dir() {
+            Some(dir) => store::folders_indexed(&self.root, &dir),
+            None => store::folders(&self.root),
+        };
+        match found {
             Ok(f) => self.folders = f,
             Err(e) => log::warn!("{}: {e:#}", self.root.display()),
         }
