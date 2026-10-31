@@ -210,10 +210,30 @@ impl Index {
     pub fn sync_files<S: Schema>(&self, schema: &S, paths: &[PathBuf]) -> anyhow::Result<Changes> {
         let mut changed = Vec::new();
         let mut gone = Vec::new();
-        for p in paths {
-            match Stamp::of(p) {
-                Some(s) if p.is_file() => changed.push((p.clone(), s)),
-                _ => gone.push(p.clone()),
+        {
+            // one as it was indexed is not read again: the watcher sees
+            // what this process wrote, and indexed as it wrote it
+            let conn = self.conn();
+            let mut known =
+                conn.prepare_cached("SELECT size, secs, nanos FROM files WHERE path = ?1")?;
+            for p in paths {
+                match Stamp::of(p) {
+                    Some(s) if p.is_file() => {
+                        let had = known
+                            .query_row([p.as_os_str().as_bytes()], |r| {
+                                Ok(Stamp {
+                                    size: r.get::<_, i64>(0)? as u64,
+                                    secs: r.get(1)?,
+                                    nanos: r.get::<_, i64>(2)? as u32,
+                                })
+                            })
+                            .optional()?;
+                        if had != Some(s) {
+                            changed.push((p.clone(), s));
+                        }
+                    }
+                    _ => gone.push(p.clone()),
+                }
             }
         }
         self.write(schema, changed, gone)
