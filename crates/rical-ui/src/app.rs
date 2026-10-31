@@ -26,9 +26,28 @@ pub struct App {
 }
 
 static APP: OnceLock<App> = OnceLock::new();
+static STARTED: OnceLock<std::time::Instant> = OnceLock::new();
+
+/// How long since the app started (since [`init`]): for the `perf` lines
+/// in the log, which say how long it took to show and to be ready.
+pub fn since_start() -> std::time::Duration {
+    STARTED.get_or_init(std::time::Instant::now).elapsed()
+}
+
+/// Log, once, when `window` is first on screen (`perf` in the log).
+pub fn log_shown(window: &impl gtk::prelude::IsA<gtk::Widget>) {
+    use gtk::prelude::*;
+    let done = std::cell::Cell::new(false);
+    window.as_ref().connect_map(move |_| {
+        if !done.replace(true) {
+            log::info!(target: "perf", "window shown at {:?}", since_start());
+        }
+    });
+}
 
 /// Say which app this is; first thing in `main`.
 pub fn init(app: App) {
+    since_start();
     let _ = APP.set(app);
     move_old_files();
 }
@@ -142,6 +161,69 @@ fn move_old_files() {
             && let Some(parent) = old.parent()
         {
             let _ = std::fs::remove_dir(parent);
+        }
+    }
+}
+
+/// Runs what must wait until a window has drawn its first frame: what loads
+/// quickly (a cache read begun at start) then never holds the window back.
+#[derive(Clone, Default)]
+pub struct FirstFrame {
+    inner: std::rc::Rc<FirstFrameInner>,
+}
+
+#[derive(Default)]
+struct FirstFrameInner {
+    drawn: std::cell::Cell<bool>,
+    waiting: std::cell::RefCell<Vec<Box<dyn FnOnce()>>>,
+}
+
+impl FirstFrame {
+    /// Watch `window` for its first frame.
+    pub fn watch(window: &impl gtk::prelude::IsA<gtk::Widget>) -> Self {
+        use gtk::prelude::*;
+        let this = Self::default();
+        let inner = this.inner.clone();
+        window.as_ref().connect_map(move |w| {
+            if inner.drawn.get() {
+                return;
+            }
+            let Some(clock) = w.frame_clock() else {
+                FirstFrame::done(&inner);
+                return;
+            };
+            let id = std::rc::Rc::new(std::cell::Cell::new(None));
+            let (inner, id2) = (inner.clone(), id.clone());
+            let handler = clock.connect_after_paint(move |clock| {
+                FirstFrame::done(&inner);
+                if let Some(h) = id2.take() {
+                    clock.disconnect(h);
+                }
+            });
+            id.set(Some(handler));
+        });
+        this
+    }
+
+    fn done(inner: &FirstFrameInner) {
+        if inner.drawn.replace(true) {
+            return;
+        }
+        let waiting = std::mem::take(&mut *inner.waiting.borrow_mut());
+        // after this frame is out, not inside its painting
+        gtk::glib::idle_add_local_once(move || {
+            for f in waiting {
+                f();
+            }
+        });
+    }
+
+    /// Run `f` now if the first frame is drawn, else once it is.
+    pub fn then(&self, f: impl FnOnce() + 'static) {
+        if self.inner.drawn.get() {
+            f();
+        } else {
+            self.inner.waiting.borrow_mut().push(Box::new(f));
         }
     }
 }

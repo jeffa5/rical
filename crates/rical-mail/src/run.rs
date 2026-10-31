@@ -33,6 +33,19 @@ impl Values for StateValues<'_> {
         match key {
             "folder" => self.0.folders.iter().map(|f| f.name.clone()).collect(),
             "identity" => self.0.opts.me.iter().map(|m| m.address.clone()).collect(),
+            // what folds in the folder list: everything (*), and every
+            // account or folder with folders in it
+            "fold" => {
+                let mut v = vec!["*".to_owned()];
+                for f in &self.0.folders {
+                    for (i, _) in f.name.match_indices('/') {
+                        v.push(f.name[..i].to_owned());
+                    }
+                }
+                v.sort();
+                v.dedup();
+                v
+            }
             _ => Vec::new(),
         }
     }
@@ -172,6 +185,12 @@ impl Window {
                     return Err("no folder of that kind".into());
                 }
                 self.go(Place::Unified(role));
+            }
+            "fold-folder" => {
+                let Some(key) = p.arg(0) else {
+                    return Err("fold which? an account, a folder with folders in it, or *".into());
+                };
+                self.toggle_fold(key);
             }
             "folders" => {
                 let on = self.outer.shows_sidebar();
@@ -343,7 +362,8 @@ impl Window {
                     .map_err(|e| format!("{e:#}"))?;
                 self.toast(&format!("{n} back in the queue"));
                 self.reload();
-                if n > 0 {
+                // a running rical-mail-queue sees them come back by itself
+                if n > 0 && self.state.borrow().opts.send.is_some() {
                     self.wake()?;
                 }
             }
@@ -397,7 +417,7 @@ impl Window {
         self.refresh();
         self.split.set_show_content(false);
         self.focus_view();
-        self.load();
+        self.open_place();
     }
 
     fn select(&self, which: &str) {
@@ -1033,15 +1053,11 @@ impl Window {
         // in the address books already: open that card
         let found = {
             let s = self.state.borrow();
+            // by the index: no card is read
             s.books.as_ref().and_then(|books| {
                 books
-                    .cards()
-                    .find(|(_, _, c)| {
-                        c.emails()
-                            .iter()
-                            .any(|e| e.value.trim().eq_ignore_ascii_case(&who.address))
-                    })
-                    .map(|(id, _, _)| id.path)
+                    .with_keys(&[rical_cards::text::email_key(&who.address)], &[])
+                    .map(|id| id.path)
             })
         };
         let file = match found {
@@ -1180,7 +1196,7 @@ impl Window {
             .opts
             .send
             .clone()
-            .ok_or("set `send = rical-mail-queue run --once` in the settings to send from here; otherwise your rical-mail-queue service sends")?;
+            .ok_or("nothing to wake: a running `rical-mail-queue run` sends each message as it arrives (or set `send = rical-mail-queue run --once`)")?;
         self.run_shell(&cmd, "Sending…", "Sent what was queued", true);
         Ok(())
     }

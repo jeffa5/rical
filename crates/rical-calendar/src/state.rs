@@ -44,6 +44,15 @@ impl OccurrenceKey {
 
 pub struct State {
     pub vdir: Vdir,
+    /// Whether `vdir` holds the items yet: the window opens with only the
+    /// calendars and reads the items in the background.
+    pub loaded: bool,
+    /// The items being read since the app started, while the window is
+    /// built: [`crate::window::Window::load`] takes them.
+    pub preload: Option<(
+        std::thread::JoinHandle<anyhow::Result<Vdir>>,
+        rical_ui::util::EarlyWatch,
+    )>,
     pub local: Tz,
     pub hidden: BTreeSet<String>,
     pub view: ViewKind,
@@ -88,7 +97,7 @@ pub struct State {
     people: RefCell<(Option<PeopleKey>, Rc<People>)>,
     /// The contacts read, by what the folder looked like then; and their
     /// names by address (lower case).
-    contact_cache: RefCell<(Option<ContactsSeen>, Rc<Contacts>)>,
+    contact_cache: RefCell<(ContactsSeen, Rc<Contacts>)>,
 }
 
 /// An event someone else organised, with me (perhaps) invited.
@@ -117,6 +126,8 @@ impl State {
     pub fn new(vdir: Vdir, local: Tz, date: NaiveDate) -> Self {
         Self {
             vdir,
+            loaded: true,
+            preload: None,
             local,
             hidden: BTreeSet::new(),
             view: ViewKind::Week,
@@ -141,7 +152,7 @@ impl State {
             zones_shown: true,
             all_day_expanded: false,
             people: RefCell::new((None, Rc::new(Vec::new()))),
-            contact_cache: RefCell::new((None, Rc::default())),
+            contact_cache: RefCell::new((0, Rc::default())),
         }
     }
 
@@ -272,55 +283,17 @@ impl State {
         cache.1.clone()
     }
 
-    /// The contacts folder's vCards, read again only when a file in it
-    /// has changed (looking costs a few hundred stats, reading megabytes).
+    /// The contacts as last read (see [`read_contacts`]), and which
+    /// reading they are.
     fn contacts(&self) -> (ContactsSeen, Rc<Contacts>) {
-        let Some(dir) = &self.contacts else {
-            return ((0, None), Rc::default());
-        };
-        let seen = rical_core::people::contacts_fingerprint(dir);
-        let mut cache = self.contact_cache.borrow_mut();
-        if cache.0 != Some(seen) {
-            let books = match rical_cards::Books::load(dir) {
-                Ok(b) => Some(b),
-                Err(e) => {
-                    log::warn!("could not read the contacts in {dir:?}: {e:#}");
-                    None
-                }
-            };
-            let mut guests = Vec::new();
-            let mut by_email = std::collections::HashMap::new();
-            for (id, _, card) in books.iter().flat_map(|b| b.cards()) {
-                let name = Some(card.display_name()).filter(|n| !n.is_empty());
-                for e in card.emails() {
-                    let email = rical_cards::text::email_key(&e.value);
-                    if !email.contains('@') {
-                        continue;
-                    }
-                    by_email.entry(email.clone()).or_insert_with(|| id.clone());
-                    guests.push(Guest {
-                        email,
-                        name: name.clone(),
-                    });
-                }
-            }
-            guests.sort_by(|a, b| a.email.cmp(&b.email));
-            guests.dedup_by(|a, b| a.email == b.email);
-            let names = guests
-                .iter()
-                .filter_map(|g| Some((g.email.clone(), g.name.clone()?)))
-                .collect();
-            *cache = (
-                Some(seen),
-                Rc::new(Contacts {
-                    guests,
-                    names,
-                    books,
-                    by_email,
-                }),
-            );
-        }
-        (seen, cache.1.clone())
+        let c = self.contact_cache.borrow();
+        (c.0, c.1.clone())
+    }
+
+    /// Take contacts read in the background.
+    pub fn set_contacts(&self, contacts: Contacts) {
+        let mut c = self.contact_cache.borrow_mut();
+        *c = (c.0 + 1, Rc::new(contacts));
     }
 
     /// `f` of the contact card with `email` on it, and where it is, if any.
@@ -334,7 +307,7 @@ impl State {
             .by_email
             .get(&rical_cards::text::email_key(email))?;
         let card = contacts.books.as_ref()?.get(id)?;
-        Some(f(&card, id))
+        Some(f(&card.card(), id))
     }
 
     /// Who someone on an event is, by the name you know them by: your
@@ -566,15 +539,14 @@ impl State {
         {
             return Some(id.clone());
         }
-        let mut counts = std::collections::BTreeMap::<&str, usize>::new();
-        for (cal, _) in self.vdir.components() {
-            *counts.entry(cal.id.as_str()).or_default() += 1;
-        }
+        let counts = self.vdir.item_counts();
         self.vdir
             .calendars
             .iter()
-            .filter(|c| !self.hidden.contains(&c.id) && !c.id.contains("birthday"))
-            .max_by_key(|c| counts.get(c.id.as_str()).copied().unwrap_or(0))
+            .zip(&counts)
+            .filter(|(c, _)| !self.hidden.contains(&c.id) && !c.id.contains("birthday"))
+            .max_by_key(|(_, n)| **n)
+            .map(|(c, _)| c)
             .or_else(|| self.vdir.calendars.first())
             .map(|c| c.id.clone())
     }
@@ -654,7 +626,8 @@ impl State {
 }
 
 /// What a contacts folder looked like: how many vCards, newest change.
-type ContactsSeen = (usize, Option<std::time::SystemTime>);
+/// Which reading of the contacts: one more each time they are read.
+type ContactsSeen = u64;
 
 type People = Vec<Known>;
 
@@ -663,13 +636,70 @@ type PeopleKey = (u64, ContactsSeen);
 
 /// The contacts read from the folder.
 #[derive(Default)]
-struct Contacts {
+pub struct Contacts {
     guests: Vec<rical_core::write::Guest>,
     /// Each address (lower case) with its contact's name.
     names: std::collections::HashMap<String, String>,
     books: Option<rical_cards::Books>,
     /// Each address (lower case) with the card it is on.
     by_email: std::collections::HashMap<String, rical_cards::CardId>,
+}
+
+/// The contacts folder's address books, from their index (brought up to
+/// date first): on the background pool, as it looks at every card's file.
+pub fn read_contacts(dir: &std::path::Path) -> Contacts {
+    let books = match rical_cards::Books::open(dir) {
+        Ok(b) => b,
+        Err(e) => {
+            log::warn!("could not read the contacts in {dir:?}: {e:#}");
+            return Contacts::default();
+        }
+    };
+    let mut guests = Vec::new();
+    let mut by_email = std::collections::HashMap::new();
+    // from the index: no card is read
+    for (id, name, address) in books.addresses() {
+        let email = rical_cards::text::email_key(&address);
+        if !email.contains('@') {
+            continue;
+        }
+        by_email.entry(email.clone()).or_insert(id);
+        guests.push(Guest {
+            email,
+            name: Some(name).filter(|n| !n.is_empty()),
+        });
+    }
+    guests.sort_by(|a, b| a.email.cmp(&b.email));
+    guests.dedup_by(|a, b| a.email == b.email);
+    let names = guests
+        .iter()
+        .filter_map(|g| Some((g.email.clone(), g.name.clone()?)))
+        .collect();
+    Contacts {
+        guests,
+        names,
+        books: Some(books),
+        by_email,
+    }
+}
+
+impl Contacts {
+    /// How many addresses there are.
+    pub fn by_email_len(&self) -> usize {
+        self.by_email.len()
+    }
+
+    /// The folders to watch for changes to the cards.
+    pub fn dirs(&self) -> Vec<std::path::PathBuf> {
+        let Some(b) = &self.books else {
+            return Vec::new();
+        };
+        let mut dirs = vec![b.root.clone()];
+        dirs.extend(b.books.iter().map(|b| b.path.clone()));
+        dirs.sort();
+        dirs.dedup();
+        dirs
+    }
 }
 
 #[cfg(test)]

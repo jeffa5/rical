@@ -13,7 +13,7 @@
 //! timeout = 60s
 //! max-attempts = 8
 //! retry-delay = 30s        # doubles each time, up to an hour
-//! poll = 5s
+//! poll = 1m               # the longest it waits; arrivals wake it at once
 //! ```
 //!
 //! There is no default `send`: until one is configured, nothing is sent.
@@ -47,7 +47,7 @@ impl Default for Config {
             timeout: Duration::from_secs(60),
             max_attempts: 8,
             retry_delay: Duration::from_secs(30),
-            poll: Duration::from_secs(5),
+            poll: Duration::from_secs(60),
         }
     }
 }

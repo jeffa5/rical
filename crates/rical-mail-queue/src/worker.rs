@@ -46,8 +46,11 @@ impl Worker<'_> {
         Ok(report)
     }
 
-    /// Keep going until told to stop, looking again every `poll`.
+    /// Keep going until told to stop: sending what arrives as it arrives
+    /// (watching the queue), what is held back or retrying when it comes
+    /// due, and looking again after `poll` at the longest.
     pub fn run(&self, stop: &AtomicBool) -> Result<()> {
+        let watch = crate::watch::Watch::new(&self.queue.arrivals());
         while !stop.load(Ordering::Relaxed) {
             let r = self.run_once(Utc::now())?;
             if !r.is_empty() {
@@ -58,7 +61,15 @@ impl Worker<'_> {
                     r.failed
                 );
             }
-            std::thread::sleep(self.config.poll);
+            // a message that arrives after run_once looked raises the watch
+            // as well, so nothing is missed between looking and waiting
+            let mut wait = self.config.poll;
+            if let Some(due) = self.queue.next_due()? {
+                let until = (due - Utc::now()).to_std().unwrap_or_default();
+                // a moment over, so that it is due when looked at
+                wait = wait.min(until + std::time::Duration::from_millis(50));
+            }
+            watch.wait(wait);
         }
         Ok(())
     }

@@ -90,15 +90,29 @@ fn memory_mb() -> f64 {
 
 fn run(dir: &Path) {
     let before = memory_mb();
+    // the index beside the cards: made by the first run (run again to
+    // time opening with it)
+    let file = dir.with_extension("index.sqlite");
+    if !file.exists() {
+        let t = Instant::now();
+        drop(Books::load_cached(dir, Some(&file)).unwrap());
+        println!(
+            "index build  {:>8.1} ms (the first open)",
+            t.elapsed().as_secs_f64() * 1e3
+        );
+    }
     let t = Instant::now();
-    let books = Books::load(dir).unwrap();
+    let books = Books::load_cached(dir, Some(&file)).unwrap();
     println!("cards        {}", books.len());
-    println!("load         {:>8.1} ms", t.elapsed().as_secs_f64() * 1e3);
+    println!(
+        "open         {:>8.1} ms (index up to date)",
+        t.elapsed().as_secs_f64() * 1e3
+    );
     let t = Instant::now();
     let index = Index::build(&books);
-    println!("index        {:>8.1} ms", t.elapsed().as_secs_f64() * 1e3);
+    println!("list         {:>8.1} ms", t.elapsed().as_secs_f64() * 1e3);
     println!(
-        "memory       {:>8.1} MB (index about {:.1} MB)",
+        "memory       {:>8.1} MB (list about {:.1} MB)",
         memory_mb() - before,
         index.size() as f64 / 1e6
     );

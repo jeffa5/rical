@@ -39,10 +39,12 @@ fn find_calendar(vdir: &Vdir, name: Option<&str>) -> anyhow::Result<String> {
             .map(|c| c.id.clone())
             .with_context(|| format!("no calendar {name:?}"));
     }
-    let count = |id: &str| vdir.components().filter(|(c, _)| c.id == id).count();
+    let counts = vdir.item_counts();
     cals.iter()
-        .filter(|c| !c.id.contains("birthday"))
-        .max_by_key(|c| count(&c.id))
+        .zip(&counts)
+        .filter(|(c, _)| !c.id.contains("birthday"))
+        .max_by_key(|(_, n)| **n)
+        .map(|(c, _)| c)
         .or(cals.first())
         .map(|c| c.id.clone())
         .context("the vdir has no calendars")

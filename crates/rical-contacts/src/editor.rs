@@ -377,7 +377,7 @@ pub fn open(win: &Rc<Window>, id: Option<CardId>) {
         let draft = id
             .as_ref()
             .and_then(|id| s.books.get(id))
-            .map(|c| Draft::of(&c))
+            .map(|c| Draft::of(&c.card()))
             .unwrap_or_default();
         let names: Vec<String> = s.books.books.iter().map(|b| b.name.clone()).collect();
         let places: Vec<String> = (0..names.len()).map(|i| s.books.book_place(i)).collect();

@@ -1,14 +1,18 @@
 //! Search over every field of every card, quick at tens of thousands of
-//! cards.
+//! cards, from the address books' index (see [`crate::book`]).
 //!
 //! Each card's words (names, nicknames, emails and their parts, the
 //! organisation and title, addresses, notes, categories, links) are folded
-//! (lower case, accents off) and kept in one sorted list, their text in a
-//! single buffer. A query's words each find their prefix in the list by
-//! binary search, and a card must match them all. Phone numbers are matched
-//! by digits, anywhere in the number, however either is written: spaces and
-//! punctuation aside, and with a trunk 0 or a country code. A match in a
-//! name counts for more than one in a note.
+//! (lower case, accents off) and kept in the index. A query's words each
+//! find the words they start, through its index of words, and a card must
+//! match them all. Phone numbers are matched by digits, anywhere in the
+//! number, however either is written: spaces and punctuation aside, and
+//! with a trunk 0 or a country code. A match in a name counts for more
+//! than one in a note.
+
+use std::{collections::HashMap, sync::Arc};
+
+use rical_index::rusqlite::params;
 
 use crate::{
     book::{Books, CardId},
@@ -17,7 +21,7 @@ use crate::{
 };
 
 /// Where a word came from, best first: matches rank by it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum Field {
     Name = 0,
@@ -42,102 +46,64 @@ pub struct Entry {
     pub copies: Vec<CardId>,
 }
 
-#[derive(Clone, Copy)]
-struct Token {
-    start: u32,
-    len: u16,
-    entry: u32,
-    field: Field,
-}
-
-/// The search index of a set of address books, at one generation.
+/// Everyone in a set of address books, at one generation, to list and
+/// search.
 pub struct Index {
     pub generation: u64,
     pub entries: Vec<Entry>,
     /// Each entry's place in name order, to sort by without comparing
     /// names each time.
     rank: Vec<u32>,
-    text: String,
-    tokens: Vec<Token>,
-    /// Each phone number's digits, by entry.
-    phones: Vec<(String, u32)>,
+    db: Arc<rical_index::Index>,
+    /// Each card (by its file's id in the index, and place in it) to its
+    /// entry (a copy's, to the entry it is a copy in).
+    by_card: HashMap<(i64, i64), u32>,
 }
 
 impl Index {
+    /// Everyone, from the index: no card is read.
     pub fn build(books: &Books) -> Self {
         // one entry per person: a card with the same UID in another address
         // book (two synced copies of one account, say) is a copy, noted
-        let mut cards: Vec<(CardId, Card, Vec<CardId>)> = Vec::with_capacity(books.len());
-        let mut seen: std::collections::HashMap<&str, usize> = Default::default();
-        for (id, _, card) in books.cards() {
-            if let Some(uid) = card.uid().filter(|u| !u.is_empty())
-                && let Some(&i) = seen.get(uid)
-                && books.book_of(&cards[i].0.path) != books.book_of(&id.path)
-            {
-                cards[i].2.push(id);
-                continue;
+        let listed = books.listed();
+        let mut entries: Vec<Entry> = Vec::with_capacity(listed.len());
+        let mut by_card = HashMap::with_capacity(listed.len());
+        let mut seen: HashMap<String, usize> = HashMap::new();
+        for l in listed {
+            let book = books.book_of(&l.id.path).unwrap_or(0);
+            if let Some(uid) = l.uid.as_ref().filter(|u| !u.is_empty()) {
+                if let Some(&i) = seen.get(uid)
+                    && entries[i].book != book
+                {
+                    by_card.insert((l.file, l.id.index as i64), i as u32);
+                    entries[i].copies.push(l.id);
+                    continue;
+                }
+                seen.entry(uid.clone()).or_insert(entries.len());
             }
-            if let Some(uid) = card.uid().filter(|u| !u.is_empty()) {
-                seen.entry(uid).or_insert(cards.len());
-            }
-            cards.push((id, card, Vec::new()));
+            by_card.insert((l.file, l.id.index as i64), entries.len() as u32);
+            entries.push(Entry {
+                id: l.id,
+                name: l.name,
+                sort: l.sort,
+                detail: l.detail,
+                book,
+                copies: Vec::new(),
+            });
         }
-
-        // the words of each card, on every core, in chunks joined after
-        let threads = std::thread::available_parallelism()
-            .map_or(1, |n| n.get())
-            .min(16);
-        let chunk = cards.len().div_ceil(threads).max(256);
-        let parts: Vec<Part> = std::thread::scope(|s| {
-            let handles: Vec<_> = cards
-                .chunks(chunk)
-                .enumerate()
-                .map(|(i, slice)| {
-                    let first = (i * chunk) as u32;
-                    s.spawn(move || index_cards(books, slice, first))
-                })
-                .collect();
-            handles.into_iter().map(|h| h.join().unwrap()).collect()
-        });
-        let mut entries = Vec::with_capacity(cards.len());
-        let mut text = String::new();
-        let mut tokens = Vec::new();
-        let mut phones = Vec::new();
-        for p in parts {
-            let offset = text.len() as u32;
-            text.push_str(&p.text);
-            tokens.extend(p.tokens.into_iter().map(|mut t| {
-                t.start += offset;
-                t
-            }));
-            entries.extend(p.entries);
-            phones.extend(p.phones);
-        }
-        tokens.sort_unstable_by(|a, b| {
-            let ta = &text[a.start as usize..(a.start + a.len as u32) as usize];
-            let tb = &text[b.start as usize..(b.start + b.len as u32) as usize];
-            ta.cmp(tb).then(a.entry.cmp(&b.entry))
-        });
-        text.shrink_to_fit();
         let rank = ranks(&entries, SortBy::Shown);
-        tokens.shrink_to_fit();
         Index {
             generation: books.generation(),
             entries,
             rank,
-            text,
-            tokens,
-            phones,
+            db: books.index(),
+            by_card,
         }
     }
 
     /// Put everyone in this order, for lists and ties between matches.
     pub fn sort_by(&mut self, by: SortBy) {
         self.rank = ranks(&self.entries, by);
-    }
-
-    fn token(&self, t: &Token) -> &str {
-        &self.text[t.start as usize..(t.start + t.len as u32) as usize]
     }
 
     /// Entries matching `query`, best first; all of them, by name, for an
@@ -149,37 +115,51 @@ impl Index {
             all.sort_by_key(|&e| self.rank[e]);
             return all;
         }
+        let conn = self.db.conn();
         // scores by entry: lower is better, summed over the words
-        let mut scores: Option<std::collections::HashMap<u32, u32>> = None;
+        let mut scores: Option<HashMap<u32, u32>> = None;
         for QueryWord { word, phone } in query_words(query) {
-            let mut found: std::collections::HashMap<u32, u32> = Default::default();
+            let mut found: HashMap<u32, u32> = HashMap::new();
+            let mut note = |card: (i64, i64), s: u32| {
+                if let Some(&e) = self.by_card.get(&card) {
+                    found.entry(e).and_modify(|b| *b = (*b).min(s)).or_insert(s);
+                }
+            };
             // a number: in a phone number, however either is written
-            if !phone.is_empty() {
-                for (p, e) in &self.phones {
+            if !phone.is_empty()
+                && let Ok(mut st) = conn.prepare_cached("SELECT file, idx, digits FROM phones")
+                && let Ok(rows) = st.query_map([], |r| {
+                    Ok((
+                        (r.get::<_, i64>(0)?, r.get::<_, i64>(1)?),
+                        r.get::<_, String>(2)?,
+                    ))
+                })
+            {
+                for (card, p) in rows.flatten() {
                     if let Some(c) = phone.iter().find(|c| p.contains(c.as_str())) {
-                        let s = Field::Phone as u32 * 10 + u32::from(!p.ends_with(c.as_str()));
-                        found
-                            .entry(*e)
-                            .and_modify(|b| *b = (*b).min(s))
-                            .or_insert(s);
+                        note(
+                            card,
+                            Field::Phone as u32 * 10 + u32::from(!p.ends_with(c.as_str())),
+                        );
                     }
                 }
             }
-            // words starting with it, by binary search to the first
-            let first = self
-                .tokens
-                .partition_point(|t| self.token(t) < word.as_str());
-            for t in &self.tokens[first..] {
-                let tok = self.token(t);
-                if !tok.starts_with(word.as_str()) {
-                    break;
+            // words starting with it, through the index of words
+            let mut upper = word.clone();
+            upper.push(char::MAX);
+            if let Ok(mut st) = conn.prepare_cached(
+                "SELECT file, idx, field, word = ?1 FROM words WHERE word >= ?1 AND word < ?2",
+            ) && let Ok(rows) = st.query_map(params![word, upper], |r| {
+                Ok((
+                    (r.get::<_, i64>(0)?, r.get::<_, i64>(1)?),
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, bool>(3)?,
+                ))
+            }) {
+                for (card, field, exact) in rows.flatten() {
+                    // an exact word beats a prefix of one
+                    note(card, field as u32 * 10 + u32::from(!exact));
                 }
-                // an exact word beats a prefix of one
-                let s = t.field as u32 * 10 + u32::from(tok.len() != word.len());
-                found
-                    .entry(t.entry)
-                    .and_modify(|b| *b = (*b).min(s))
-                    .or_insert(s);
             }
             scores = Some(match scores {
                 None => found,
@@ -199,19 +179,84 @@ impl Index {
         self.entries.iter().position(|e| &e.id == id)
     }
 
-    /// How much memory the index holds, roughly, in bytes.
+    /// How much memory the list holds, roughly, in bytes (the words are
+    /// in the index, on disk).
     pub fn size(&self) -> usize {
-        self.text.capacity()
-            + self.tokens.capacity() * std::mem::size_of::<Token>()
-            + self
-                .entries
-                .iter()
-                .map(|e| {
-                    e.name.len() + e.sort.len() + e.detail.len() + e.id.path.as_os_str().len() + 96
-                })
-                .sum::<usize>()
-            + self.phones.iter().map(|(p, _)| p.len() + 28).sum::<usize>()
+        self.entries
+            .iter()
+            .map(|e| {
+                e.name.len() + e.sort.len() + e.detail.len() + e.id.path.as_os_str().len() + 96
+            })
+            .sum::<usize>()
+            + self.by_card.len() * 24
+            + self.rank.len() * 4
     }
+}
+
+/// A card's words, each with its field; its numbers' digits; and the line
+/// to show under its name.
+pub(crate) fn words_of(card: Card) -> (Vec<(String, Field)>, Vec<String>, String) {
+    let mut out = Vec::new();
+    let mut push = |s: &str, field: Field| {
+        for w in words(s) {
+            out.push((w, field));
+        }
+    };
+    let display = card.display_name();
+    push(&display, Field::Name);
+    if let Some(name) = card.name() {
+        for p in [
+            &name.given,
+            &name.family,
+            &name.additional,
+            &name.prefixes,
+            &name.suffixes,
+        ] {
+            push(p, Field::Name);
+        }
+    }
+    for nick in card.nicknames() {
+        push(&nick, Field::Name);
+    }
+    for o in card.org() {
+        push(&o, Field::Org);
+    }
+    for t in card.title().into_iter().chain(card.role()) {
+        push(&t, Field::Org);
+    }
+    let emails = card.emails();
+    for e in &emails {
+        // the address's parts by the word splitting, and it whole
+        push(&e.value, Field::Email);
+    }
+    for a in card.addresses() {
+        push(&a.one_line(), Field::Place);
+    }
+    for c in card.categories() {
+        push(&c, Field::Other);
+    }
+    for note in card.notes() {
+        push(&note, Field::Other);
+    }
+    for u in card.urls().into_iter().chain(card.chats()) {
+        push(&u.value, Field::Other);
+    }
+    for e in &emails {
+        out.push((fold(&e.value), Field::Email));
+    }
+    out.retain(|(w, _)| !w.is_empty());
+    let phones = card.phones();
+    let digits = phones
+        .iter()
+        .map(|p| phone_digits(&p.value).trim_start_matches('+').to_owned())
+        .filter(|d| !d.is_empty())
+        .collect();
+    let detail = emails
+        .first()
+        .map(|e| e.value.clone())
+        .or_else(|| phones.first().map(|p| p.value.clone()))
+        .unwrap_or_else(|| card.org().join(", "));
+    (out, digits, detail)
 }
 
 /// How the list of everyone is sorted.
@@ -322,107 +367,6 @@ fn query_words(q: &str) -> Vec<QueryWord> {
     out
 }
 
-fn push_token(text: &mut String, tokens: &mut Vec<Token>, w: &str, entry: u32, field: Field) {
-    if w.is_empty() || w.len() > u16::MAX as usize {
-        return;
-    }
-    tokens.push(Token {
-        start: text.len() as u32,
-        len: w.len() as u16,
-        entry,
-        field,
-    });
-    text.push_str(w);
-}
-
-fn push_words(text: &mut String, tokens: &mut Vec<Token>, s: &str, entry: u32, field: Field) {
-    for w in words(s) {
-        push_token(text, tokens, &w, entry, field);
-    }
-}
-/// Part of an index, made on one thread.
-struct Part {
-    entries: Vec<Entry>,
-    text: String,
-    tokens: Vec<Token>,
-    phones: Vec<(String, u32)>,
-}
-
-/// Index `cards`, numbering entries from `first`.
-fn index_cards(books: &Books, cards: &[(CardId, Card, Vec<CardId>)], first: u32) -> Part {
-    let mut part = Part {
-        entries: Vec::with_capacity(cards.len()),
-        text: String::new(),
-        tokens: Vec::new(),
-        phones: Vec::new(),
-    };
-    for (i, (id, card, copies)) in cards.iter().enumerate() {
-        let n = first + i as u32;
-        let (text, tokens) = (&mut part.text, &mut part.tokens);
-        let display = card.display_name();
-        push_words(text, tokens, &display, n, Field::Name);
-        if let Some(name) = card.name() {
-            for p in [
-                &name.given,
-                &name.family,
-                &name.additional,
-                &name.prefixes,
-                &name.suffixes,
-            ] {
-                push_words(text, tokens, p, n, Field::Name);
-            }
-        }
-        for nick in card.nicknames() {
-            push_words(text, tokens, &nick, n, Field::Name);
-        }
-        for o in card.org() {
-            push_words(text, tokens, &o, n, Field::Org);
-        }
-        for t in card.title().into_iter().chain(card.role()) {
-            push_words(text, tokens, &t, n, Field::Org);
-        }
-        let emails = card.emails();
-        for e in &emails {
-            // the address whole, and its parts by the word splitting
-            push_words(text, tokens, &e.value, n, Field::Email);
-            push_token(text, tokens, &fold(&e.value), n, Field::Email);
-        }
-        let phones = card.phones();
-        for p in &phones {
-            let digits = phone_digits(&p.value);
-            if !digits.is_empty() {
-                part.phones
-                    .push((digits.trim_start_matches('+').to_owned(), n));
-            }
-        }
-        for a in card.addresses() {
-            push_words(text, tokens, &a.one_line(), n, Field::Place);
-        }
-        for c in card.categories() {
-            push_words(text, tokens, &c, n, Field::Other);
-        }
-        for note in card.notes() {
-            push_words(text, tokens, &note, n, Field::Other);
-        }
-        for u in card.urls().into_iter().chain(card.chats()) {
-            push_words(text, tokens, &u.value, n, Field::Other);
-        }
-        let detail = emails
-            .first()
-            .map(|e| e.value.clone())
-            .or_else(|| phones.first().map(|p| p.value.clone()))
-            .unwrap_or_else(|| card.org().join(", "));
-        part.entries.push(Entry {
-            detail,
-            sort: card.sort_key(),
-            name: display,
-            book: books.book_of(&id.path).unwrap_or(0),
-            id: id.clone(),
-            copies: copies.clone(),
-        });
-    }
-    part
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -492,6 +436,40 @@ mod tests {
             names(&index, ""),
             ["Sam Lee", "Samantha O'Brien", "Priya Shah", "Zoë Ørsted"]
         );
+    }
+}
+
+#[cfg(test)]
+mod shared_tests {
+    use super::*;
+
+    /// Another app reading a file again (and so writing its cards anew)
+    /// leaves a search built before it working.
+    #[test]
+    fn search_survives_a_file_read_again_elsewhere() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("contacts");
+        std::fs::create_dir(&root).unwrap();
+        let card = |name: &str| {
+            format!("BEGIN:VCARD\r\nVERSION:4.0\r\nUID:{name}\r\nFN:{name}\r\nEND:VCARD\r\n")
+        };
+        std::fs::write(root.join("a.vcf"), card("Ada")).unwrap();
+        std::fs::write(root.join("b.vcf"), card("Bo")).unwrap();
+        let cache = dir.path().join("index.sqlite");
+        let books = Books::load_cached(&root, Some(&cache)).unwrap();
+        let index = Index::build(&books);
+        // elsewhere: the file is touched and indexed again
+        let mut other = Books::load_cached(&root, Some(&cache)).unwrap();
+        std::fs::write(root.join("a.vcf"), card("Ada")).unwrap();
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::File::options()
+            .write(true)
+            .open(root.join("a.vcf"))
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        assert!(other.refresh().unwrap());
+        assert_eq!(tests::names(&index, "ada"), ["Ada"]);
     }
 }
 

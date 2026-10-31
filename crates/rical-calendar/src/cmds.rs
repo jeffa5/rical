@@ -265,6 +265,13 @@ pub static SPECS: &[Spec] = &[
         )
     },
     Spec {
+        aliases: &["dup"],
+        ..spec(
+            "duplicate",
+            "Copy the selected event, task or journal entry (a whole series), without its guests",
+        )
+    },
+    Spec {
         aliases: &["to-task", "to-event"],
         ..spec(
             "convert",

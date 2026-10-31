@@ -118,13 +118,6 @@ fn file_name(uid: &str) -> String {
 }
 
 impl Vdir {
-    /// The file holding `uid`, in any calendar.
-    pub(crate) fn path_of(&self, uid: &str) -> Option<std::path::PathBuf> {
-        self.components()
-            .find(|(_, c)| c.get_uid() == Some(uid))
-            .map(|(_, c)| c.path().to_owned())
-    }
-
     /// What importing `text` would do.
     pub fn plan_import(&self, text: &str) -> anyhow::Result<Plan> {
         let incoming = Document::parse(text).context("not an iCalendar file")?;
@@ -178,8 +171,9 @@ impl Vdir {
                 }
                 (_, None) => Action::Add,
                 (_, Some(path)) => {
-                    let newer = self
-                        .get(&path)
+                    let item = self.get(&path);
+                    let newer = item
+                        .as_deref()
                         .and_then(|cs| cs.iter().find(|c| c.get_uid() == Some(uid.as_str())))
                         .map(|c| {
                             let seq = c

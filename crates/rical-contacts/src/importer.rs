@@ -27,6 +27,13 @@ struct Queue {
 impl Window {
     /// Import the files given on the command line or by another app.
     pub fn import_files(self: &Rc<Self>, files: &[gio::File]) {
+        // what is imported is matched with who is there: wait for them
+        if !self.state.borrow().loaded {
+            self.waiting_files
+                .borrow_mut()
+                .extend(files.iter().cloned());
+            return;
+        }
         let mut incoming = Vec::new();
         for f in files {
             let Some(path) = f.path() else {
@@ -185,7 +192,7 @@ impl Window {
             .borrow()
             .books
             .get(id)
-            .map_or("them".to_owned(), |c| c.display_name())
+            .map_or("them".to_owned(), |c| c.card().display_name())
     }
 
     fn replace(

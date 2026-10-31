@@ -40,7 +40,8 @@ enum Cmd {
     Enqueue { file: Option<PathBuf> },
     /// Show what is in the queue
     List,
-    /// Send what is due; keep going and look again unless --once
+    /// Send what is due, then keep going: watch the queue and send what
+    /// arrives as it arrives (with --once, send what is due and stop)
     Run {
         #[clap(long)]
         once: bool,

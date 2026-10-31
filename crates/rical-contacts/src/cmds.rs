@@ -72,6 +72,13 @@ pub static SPECS: &[Spec] = &[
     },
     spec("edit", "Edit the selected contact"),
     Spec {
+        aliases: &["dup"],
+        ..spec(
+            "duplicate",
+            "Copy the selected contact, to start another from (then edit it)",
+        )
+    },
+    Spec {
         aliases: &["rm"],
         ..spec("delete", "Delete the selected contact")
     },

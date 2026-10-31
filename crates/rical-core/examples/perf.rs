@@ -205,15 +205,28 @@ fn time<T>(n: u32, mut f: impl FnMut() -> T) -> (Duration, T) {
 fn run(dir: &Path) {
     let local: Tz = chrono_tz::Europe::London;
     let (before, _) = memory();
+    // the index beside the items: made by the first run (run again to
+    // time opening with it, and the memory that holds)
+    let index = dir.with_extension("index.sqlite");
+    if !index.exists() {
+        let start = Instant::now();
+        drop(Vdir::load_cached(dir, Some(&index)).unwrap());
+        println!(
+            "index build    {:>8.1} ms (the first open)",
+            start.elapsed().as_secs_f64() * 1e3
+        );
+    }
     let start = Instant::now();
-    let vdir = Vdir::load(dir).unwrap();
+    let vdir = Vdir::load_cached(dir, Some(&index)).unwrap();
     let load = start.elapsed();
     let (after, peak) = memory();
-    let items = vdir.components().count();
-    println!("items          {items}");
-    println!("load           {:>8.1} ms", load.as_secs_f64() * 1e3);
+    println!("items          {}", vdir.len());
     println!(
-        "memory         {:>8.1} MB held after load ({:.1} MB peak)",
+        "open           {:>8.1} ms (index up to date)",
+        load.as_secs_f64() * 1e3
+    );
+    println!(
+        "memory         {:>8.1} MB held after open ({:.1} MB peak)",
         after - before,
         peak
     );
@@ -226,6 +239,12 @@ fn run(dir: &Path) {
         ("agenda 30d", day(2026, 10, 21)..day(2026, 11, 20)),
     ];
     for (name, r) in &ranges {
+        // the first time reads its items from their files
+        let (first, _) = time(1, || {
+            vdir.query(r, &[Kind::Event, Kind::Todo, Kind::Journal], local)
+                .len()
+        });
+        println!("{name:<14} {:>8.2} ms first", first.as_secs_f64() * 1e3);
         let (t, n) = time(10, || {
             vdir.query(r, &[Kind::Event, Kind::Todo, Kind::Journal], local)
                 .len()
@@ -247,6 +266,11 @@ fn run(dir: &Path) {
     println!("journals       {:>8.2} ms ({n})", t.as_secs_f64() * 1e3);
     let (t, n) = time(3, || vdir.people(&[]).len());
     println!("people         {:>8.2} ms ({n})", t.as_secs_f64() * 1e3);
+    let (after, _) = memory();
+    println!(
+        "memory         {:>8.1} MB held after the queries",
+        after - before
+    );
     let _ = now.year();
 }
 

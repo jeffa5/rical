@@ -96,7 +96,7 @@ pub fn show(win: &Rc<Window>) {
     ));
     sending.add(&text(
         "send",
-        "Send at once with (rical-mail-queue run --once)",
+        "Send with (only without a rical-mail-queue run service)",
         any,
     ));
 

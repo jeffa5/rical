@@ -101,6 +101,7 @@ fn main() -> glib::ExitCode {
                 return None;
             };
             let w = window::Window::new(app, state, binds);
+            rical_ui::app::log_shown(&w.window);
             w.present();
             *window.borrow_mut() = Some(w.clone());
             Some(w)
@@ -133,9 +134,19 @@ fn setup(o: config::Options) -> Result<(state::SharedState, rical_ui::binds::Bin
          or RICAL_CONTACTS_CONTACTS (see --help)",
     )?;
     let started = std::time::Instant::now();
-    let books = rical_cards::Books::load(&root).map_err(|e| format!("{e:#}"))?;
+    // the address books only: the window reads their cards in the background
+    let books = rical_cards::Books::scan(&root).map_err(|e| format!("{e:#}"))?;
     let loaded = started.elapsed();
     let mut state = state::State::new(books);
+    state.loaded = false;
+    // start reading the cards now, while GTK builds the window
+    // (watching the folders first, to know if they change under the read)
+    let early = rical_ui::util::EarlyWatch::new(
+        std::iter::once(root.as_path()).chain(state.books.books.iter().map(|b| b.path.as_path())),
+    );
+    let read = root.clone();
+    let read = std::thread::spawn(move || window::read_books(&read, false));
+    state.preload = Some((read, early));
     state.default_book = o.book;
     state.set_sort(config::sort_by(o.sort.as_deref()));
     state.history = Some(rical_ui::history::open(

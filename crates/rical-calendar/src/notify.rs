@@ -21,6 +21,11 @@ pub type Plan = Option<((u64, Option<TimeDelta>, chrono_tz::Tz), AlarmPlan)>;
 impl Window {
     /// Show any alarms that went off since the last check.
     pub(super) fn check_alarms(self: &Rc<Self>) {
+        // until the items are read there is nothing to check, and the time
+        // checked up to must not move past alarms not yet seen
+        if !self.state.borrow().loaded {
+            return;
+        }
         let now = Utc::now();
         let from = self.alarm_check.get();
         if now <= from {

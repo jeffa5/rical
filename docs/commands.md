@@ -56,6 +56,7 @@ out, rical asks.
 | `:repeat [--every EVERY] [--on ON] [--count COUNT] [--until UNTIL] <rule...>` | Make the selected event repeat: none, daily, weekly, monthly, yearly or an RRULE, e.g. :repeat weekly --on mo,we --count 10. Flags: --every (every N days/weeks/...); --on (weekdays, e.g. mo,we,fr); --count (end after this many times); --until (end on this date) |
 | `:delete [scope]` (also `:rm`) | Delete the selected event (this occurrence, from here on, or all) |
 | `:convert` (also `:to-task`, `:to-event`) | Turn the selected event into a task, or task into an event |
+| `:duplicate` (also `:dup`) | Copy the selected event, task or journal entry (a whole series), without its guests |
 | `:undo` | Undo the last change |
 | `:redo` | Redo the last undone change |
 | `:history` | Everything changed and deleted, to undo or redo any of it (kept after restarts) |

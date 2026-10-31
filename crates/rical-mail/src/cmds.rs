@@ -125,6 +125,13 @@ pub static SPECS: &[Spec] = &[
     },
     spec("folders", "Show or hide the list of folders"),
     Spec {
+        args: &[arg("which", Kind::Dynamic("fold"))],
+        ..spec(
+            "fold-folder",
+            "Fold or open part of the folder list: an account, a folder with folders in it, or * for all accounts together",
+        )
+    },
+    Spec {
         aliases: &["find"],
         args: &[text("text", "text")],
         ..spec(

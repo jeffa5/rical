@@ -10,17 +10,35 @@ use rical_maildir::{
     store::{self, Folder, Role, Summary},
 };
 
-use crate::state::{Place, State};
+use crate::state::{Layout, Place, State};
+
+/// Where the header index is kept, with the app's state.
+fn cache_dir() -> Option<PathBuf> {
+    rical_ui::app::state_dir().map(|d| d.join("cache"))
+}
 
 /// The header cache of a folder, kept with the app's state.
 pub fn cache_for(f: &Folder) -> rical_maildir::cache::Cache {
-    match rical_ui::app::state_dir() {
-        Some(d) => rical_maildir::cache::Cache::open(&d.join("cache"), &f.path),
+    match cache_dir() {
+        Some(d) => rical_maildir::cache::Cache::open(&d, &f.path),
         None => rical_maildir::cache::Cache::none(),
     }
 }
 
+/// A folder's messages: from the header index alone if `quick` (as the
+/// folder was when last listed), else listed (reading what is new).
+fn list(f: &Folder, quick: bool) -> Vec<Summary> {
+    if quick
+        && let Some(dir) = cache_dir()
+        && let Some(found) = store::list_indexed(f, &dir)
+    {
+        return found;
+    }
+    store::list_cached(f, cache_for(f))
+}
+
 /// What to read, with what reading it needs.
+#[derive(Clone)]
 pub struct Job {
     pub generation: u64,
     pub place: Place,
@@ -28,6 +46,11 @@ pub struct Job {
     folders: Vec<(Folder, String)>,
     queue: PathBuf,
     builtin: bool,
+    /// How to lay the list out: done here too, as for a big folder it is
+    /// a noticeable part of the work.
+    layout: Layout,
+    /// From the header index alone, without looking at the folders.
+    quick: bool,
 }
 
 pub struct Loaded {
@@ -35,6 +58,8 @@ pub struct Loaded {
     pub place: Place,
     pub messages: Vec<Summary>,
     pub notes: HashMap<PathBuf, String>,
+    pub layout: Layout,
+    pub rows: Vec<rical_maildir::thread::Row>,
 }
 
 impl State {
@@ -72,6 +97,8 @@ impl State {
             folders,
             queue: self.opts.queue.clone(),
             builtin: self.opts.search == Backend::Builtin,
+            layout: self.layout(),
+            quick: false,
         }
     }
 
@@ -80,14 +107,47 @@ impl State {
         if l.generation != self.generation || l.place != self.place {
             return false;
         }
+        self.put_loaded(l);
+        true
+    }
+
+    /// [`State::apply_loaded`] of what catches up with what was shown
+    /// from the header index: only if it differs.
+    pub fn apply_caught_up(&mut self, l: Loaded) -> bool {
+        if l.generation != self.generation
+            || l.place != self.place
+            || (l.messages == self.messages && l.notes == self.outbox_notes)
+        {
+            return false;
+        }
+        self.put_loaded(l);
+        true
+    }
+
+    fn put_loaded(&mut self, l: Loaded) {
         self.messages = l.messages;
         self.outbox_notes = l.notes;
-        self.arrange();
-        true
+        // laid out as it is still wanted, or again if that changed
+        if l.layout == self.layout() {
+            self.rows = l.rows;
+            self.arranged();
+        } else {
+            self.arrange();
+        }
     }
 }
 
 impl Job {
+    /// The same reading from the header index alone, to show at once
+    /// (before this one catches up with the folders), if the place is
+    /// folders.
+    pub fn quick(&self) -> Option<Job> {
+        matches!(self.place, Place::Folder(_) | Place::Unified(_)).then(|| Job {
+            quick: true,
+            ..self.clone()
+        })
+    }
+
     /// Read: on any thread.
     pub fn run(self) -> Loaded {
         let mut notes = HashMap::new();
@@ -95,12 +155,12 @@ impl Job {
             Place::Folder(_) => self
                 .folders
                 .first()
-                .map(|(f, _)| store::list_cached(f, cache_for(f)))
+                .map(|(f, _)| list(f, self.quick))
                 .unwrap_or_default(),
             Place::Unified(_) => {
                 let mut all = Vec::new();
                 for (f, label) in &self.folders {
-                    for m in store::list_cached(f, cache_for(f)) {
+                    for m in list(f, self.quick) {
                         notes.insert(m.path.clone(), label.clone());
                         all.push(m);
                     }
@@ -132,11 +192,14 @@ impl Job {
             }
             Place::Outbox => outbox(&self.queue, &mut notes),
         };
+        let rows = self.layout.rows(&messages);
         Loaded {
             generation: self.generation,
             place: self.place,
             messages,
             notes,
+            layout: self.layout,
+            rows,
         }
     }
 }

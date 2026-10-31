@@ -363,7 +363,7 @@ impl Books {
         if self.is_stale(&id.path) {
             bail!("{:?} changed on disk; reload and try again", id.path);
         }
-        let before = Draft::of(&card);
+        let before = Draft::of(&card.card());
         if id.index > 0 {
             bail!("{:?} holds several cards; edit it in another app", id.path);
         }
@@ -390,6 +390,29 @@ impl Books {
         let uid = uuid::Uuid::new_v4().to_string();
         let mut doc = Document::new_card(&uid);
         apply_draft(&mut doc.root, &Draft::default(), draft);
+        let path = dir.join(format!("{uid}.vcf"));
+        let change = Change {
+            path: path.clone(),
+            before: None,
+            after: Some(doc.write()),
+        };
+        self.apply(&change)?;
+        Ok((change, CardId { path, index: 0 }))
+    }
+
+    /// A copy of card `id` with a new UID, in a file of its own beside it
+    /// (as it is, its version kept), to start another from.
+    pub fn duplicate(&mut self, id: &CardId) -> anyhow::Result<(Change, CardId)> {
+        if id.index > 0 {
+            bail!("{:?} holds several cards; copy it in another app", id.path);
+        }
+        let mut doc = Document::parse_card(&read(&id.path)?)?;
+        let uid = uuid::Uuid::new_v4().to_string();
+        doc.root.set(Line::property("UID", &[], &uid));
+        // Apple's own id would make the copy the same card to it
+        doc.root.remove("X-ABUID");
+        set_single(&mut doc.root, "REV", Some(now_stamp()));
+        let dir = id.path.parent().context("the card has no folder")?;
         let path = dir.join(format!("{uid}.vcf"));
         let change = Change {
             path: path.clone(),
@@ -474,10 +497,34 @@ mod tests {
     }
 
     #[test]
+    fn a_copy_keeps_the_card_with_a_new_uid() {
+        let (dir, mut books) = setup(&[("p.vcf", APPLE)]);
+        let original = id(&dir, "p.vcf");
+        let uid = books
+            .get(&original)
+            .unwrap()
+            .card()
+            .uid()
+            .unwrap()
+            .to_owned();
+        let (change, copy) = books.duplicate(&original).unwrap();
+        let c = books.get(&copy).unwrap();
+        let c = c.card();
+        assert_eq!(c.display_name(), "Priya Shah");
+        assert_eq!(c.emails().len(), 2);
+        assert_eq!(c.version(), Some("3.0"));
+        assert_ne!(c.uid(), Some(uid.as_str()));
+        assert_eq!(books.by_uid(&uid), [original]);
+        assert_eq!(books.len(), 2);
+        books.undo(&change).unwrap();
+        assert_eq!(books.len(), 1);
+    }
+
+    #[test]
     fn edits_change_only_what_changed() {
         let (dir, mut books) = setup(&[("p.vcf", APPLE)]);
         let id = id(&dir, "p.vcf");
-        let mut d = Draft::of(&books.get(&id).unwrap());
+        let mut d = Draft::of(&books.get(&id).unwrap().card());
         // a new title, a phone added, the old email gone
         d.title = "Lead, Platform".into();
         d.phones.push(Field {
@@ -502,6 +549,7 @@ mod tests {
         assert!(after.contains("\r\nREV:"));
         // and it reads back as edited
         let c = books.get(&id).unwrap();
+        let c = c.card();
         assert_eq!(c.title().as_deref(), Some("Lead, Platform"));
         assert_eq!(c.phones().len(), 2);
         assert_eq!(c.emails().len(), 1);
@@ -544,6 +592,7 @@ mod tests {
         );
         assert!(text.contains("TEL;TYPE=cell:+44 7700 900456\r\n"), "{text}");
         let c = books.get(&id).unwrap();
+        let c = c.card();
         assert_eq!(c.display_name(), "Sam Lee");
         assert_eq!(books.by_uid(c.uid().unwrap()), [id]);
     }
@@ -552,7 +601,7 @@ mod tests {
     fn refuses_to_overwrite_a_change_made_elsewhere() {
         let (dir, mut books) = setup(&[("p.vcf", APPLE)]);
         let id = id(&dir, "p.vcf");
-        let mut d = Draft::of(&books.get(&id).unwrap());
+        let mut d = Draft::of(&books.get(&id).unwrap().card());
         std::fs::write(&id.path, APPLE.replace("Northwind", "Southwind")).unwrap();
         // a later modification time, as another program's write would have
         let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);

@@ -9,7 +9,7 @@ use std::{
 
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
-use rical_cards::CardId;
+use rical_cards::{Books, CardId};
 use rical_ui::{
     binds::{Binds, Lookup},
     keys::{is_navigation, key_of},
@@ -29,6 +29,8 @@ pub struct Window {
     toggle: adw::ToggleGroup,
     /// The people list: a virtualised list of index entries, by number.
     model: gtk::StringList,
+    /// The people list, or what is shown instead (no one found, loading).
+    people: gtk::Stack,
     pub selection: gtk::SingleSelection,
     pub list: gtk::ListView,
     pub dup_list: gtk::ListBox,
@@ -40,6 +42,14 @@ pub struct Window {
     pending_keys: RefCell<Vec<rical_ui::binds::Key>>,
     monitors: RefCell<Vec<gio::FileMonitor>>,
     debounce: RefCell<Option<glib::SourceId>>,
+    /// A load in the background is running, and files changed meanwhile:
+    /// load again when it ends.
+    load_running: Cell<bool>,
+    load_again: Cell<bool>,
+    /// Files to import once the cards are loaded.
+    pub waiting_files: RefCell<Vec<gio::File>>,
+    /// Loaded cards are shown after the window's first frame.
+    first_frame: rical_ui::app::FirstFrame,
     trim: rical_ui::util::Trimmer,
     /// Set while the window updates widgets, so their signals are ignored.
     pub syncing: Cell<bool>,
@@ -131,6 +141,14 @@ impl Window {
         let people = gtk::Stack::new();
         people.add_named(&people_scroller, Some("list"));
         people.add_named(&no_one, Some("none"));
+        let loading = gtk::Spinner::builder()
+            .spinning(true)
+            .width_request(32)
+            .height_request(32)
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::Center)
+            .build();
+        people.add_named(&loading, Some("loading"));
 
         let dup_list = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::Single)
@@ -189,6 +207,7 @@ impl Window {
         narrow.add_setter(&split, "collapsed", Some(&true.to_value()));
         window.add_breakpoint(narrow);
 
+        let first_frame = rical_ui::app::FirstFrame::watch(&window);
         let this = Rc::new(Self {
             window,
             state,
@@ -199,6 +218,7 @@ impl Window {
             views,
             toggle,
             model,
+            people: people.clone(),
             selection,
             list,
             dup_headings: rical_ui::listhead::install(&dup_list),
@@ -209,6 +229,10 @@ impl Window {
             pending_keys: Default::default(),
             monitors: Default::default(),
             debounce: Default::default(),
+            load_running: Cell::new(false),
+            load_again: Cell::new(false),
+            waiting_files: Default::default(),
+            first_frame,
             trim: Default::default(),
             syncing: Cell::new(false),
             me: Default::default(),
@@ -222,7 +246,156 @@ impl Window {
         this.refresh();
         this.show_detail();
         this.focus_view();
+        if !this.state.borrow().loaded {
+            this.people.set_visible_child_name("loading");
+            this.title.set_subtitle("Loading…");
+            this.load();
+        }
         this
+    }
+
+    /// Read the address books and build their index in the background
+    /// (taking cards from the cache where files have not changed), and
+    /// show them when done.
+    pub fn load(self: &Rc<Self>) {
+        if self.load_running.replace(true) {
+            self.load_again.set(true);
+            return;
+        }
+        let root = self.state.borrow().books.root.clone();
+        let (preload, early) = match self.state.borrow_mut().preload.take() {
+            Some((read, early)) => (Some(read), Some(early)),
+            None => (None, None),
+        };
+        let weak = Rc::downgrade(self);
+        let started = std::time::Instant::now();
+        glib::spawn_future_local(async move {
+            let loaded = gio::spawn_blocking(move || match preload {
+                Some(h) => h
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("reading the address books failed"))?,
+                None => read_books(&root, true),
+            })
+            .await;
+            let Some(w) = weak.upgrade() else { return };
+            // shown once the window is (a quick read must not hold it back)
+            let first = w.first_frame.clone();
+            first.then(move || w.loaded(loaded, early, started));
+        });
+    }
+
+    /// Run `check` on the background pool; if it found changes, read the
+    /// books again (also there) to show them.
+    fn run_check(self: &Rc<Self>, check: rical_cards::book::Check) {
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let started = std::time::Instant::now();
+            // what can be found quickly first (new and gone cards, and
+            // those shown), then the rest
+            let first = check.clone();
+            let found = gio::spawn_blocking(move || first.run_first()).await;
+            let Some(w) = weak.upgrade() else { return };
+            w.checked(found, "new, gone and shown cards", started);
+            if !check.is_full() {
+                return;
+            }
+            drop(w);
+            let found = gio::spawn_blocking(move || check.run()).await;
+            let Some(w) = weak.upgrade() else { return };
+            w.checked(found, "the rest", started);
+        });
+    }
+
+    /// Read the books again (on the background pool) if a check found
+    /// changes.
+    fn checked(
+        self: &Rc<Self>,
+        found: Result<anyhow::Result<rical_cards::book::Changes>, Box<dyn std::any::Any + Send>>,
+        what: &str,
+        started: std::time::Instant,
+    ) {
+        match found {
+            Ok(Ok(changes)) => {
+                log::info!(
+                    "checked {what} at {:?}: {} file(s) read again, {} gone",
+                    started.elapsed(),
+                    changes.read.len(),
+                    changes.gone.len()
+                );
+                if !changes.is_empty() {
+                    self.load();
+                }
+            }
+            Ok(Err(e)) => log::warn!("could not check the address books: {e:#}"),
+            Err(_) => {}
+        }
+    }
+
+    /// Show what [`Window::load`] read.
+    fn loaded(
+        self: &Rc<Self>,
+        loaded: Result<
+            anyhow::Result<(Books, rical_cards::search::Index)>,
+            Box<dyn std::any::Any + Send>,
+        >,
+        early: Option<rical_ui::util::EarlyWatch>,
+        started: std::time::Instant,
+    ) {
+        let w = self;
+        w.load_running.set(false);
+        // begun at start, before the window watched the folders: if
+        // they changed meanwhile, read again
+        if early.is_some_and(|e| e.changed()) {
+            w.load_again.set(true);
+        }
+        // the spinner goes whatever happened (an empty list changes
+        // nothing, so would leave it spinning)
+        w.people.set_visible_child_name(if w.model.n_items() > 0 {
+            "list"
+        } else {
+            "none"
+        });
+        match loaded {
+            Ok(Ok((books, index))) => {
+                let read = started.elapsed();
+                w.state.borrow_mut().set_loaded(books, index);
+                w.watch();
+                w.refresh();
+                w.show_detail();
+                w.people.set_visible_child_name(if w.model.n_items() > 0 {
+                    "list"
+                } else {
+                    "none"
+                });
+                // an empty list changed nothing, so said nothing
+                if w.model.n_items() == 0 && w.state.borrow().index.entries.is_empty() {
+                    w.title.set_subtitle("0 people");
+                }
+                log::info!(
+                    target: "perf",
+                    "{} cards read and indexed in {read:?}, shown in {:?} (ready at {:?})",
+                    w.state.borrow().index.entries.len(),
+                    started.elapsed(),
+                    rical_ui::app::since_start()
+                );
+                let files = std::mem::take(&mut *w.waiting_files.borrow_mut());
+                if !files.is_empty() {
+                    w.import_files(&files);
+                }
+                // then whether the files changed since the index was
+                // brought up to date, away from the window
+                let check = w.state.borrow().books.check();
+                if let Some(check) = check {
+                    w.run_check(check);
+                }
+            }
+            Ok(Err(e)) => w.toast(&format!("Could not read the address books: {e:#}")),
+            Err(_) => w.toast("Could not read the address books"),
+        }
+        // what changed while it was reading may have been missed
+        if w.load_again.take() {
+            w.load();
+        }
     }
 
     pub fn present(&self) {
@@ -367,7 +540,14 @@ impl Window {
         let (p, d) = (people.clone(), dups.clone());
         let weak = Rc::downgrade(self);
         self.model.connect_items_changed(move |m, _, _, _| {
-            p.set_visible_child_name(if m.n_items() == 0 { "none" } else { "list" });
+            let loading = weak.upgrade().is_some_and(|w| !w.state.borrow().loaded);
+            p.set_visible_child_name(if m.n_items() > 0 {
+                "list"
+            } else if loading {
+                "loading"
+            } else {
+                "none"
+            });
             if let Some(w) = weak.upgrade() {
                 let n = w.state.borrow().index.entries.len();
                 let shown = m.n_items();
@@ -568,18 +748,27 @@ impl Window {
     /// The duplicates again: now when they are showing, else once the
     /// window is drawn (with 50,000 people it takes a moment).
     pub fn duplicates_soon(&self) {
+        // what there is now, then worked out again on the background pool
+        // if the cards changed
         if self.state.borrow().view == View::Duplicates {
             self.fill_duplicates();
+        }
+        if !self.state.borrow().groups_stale() || self.dups_pending.replace(true) {
             return;
         }
-        if self.dups_pending.replace(true) {
-            return;
-        }
+        let (generation, job) = self.state.borrow_mut().groups_job();
         let weak = self.me.borrow().clone();
-        glib::idle_add_local_once(move || {
-            if let Some(w) = weak.upgrade() {
-                w.dups_pending.set(false);
+        glib::spawn_future_local(async move {
+            let found = gio::spawn_blocking(job).await;
+            let Some(w) = weak.upgrade() else { return };
+            w.dups_pending.set(false);
+            let Ok(groups) = found else { return };
+            if w.state.borrow_mut().set_groups(generation, groups) {
                 w.fill_duplicates();
+            }
+            // changed meanwhile: again
+            if w.state.borrow().groups_stale() {
+                w.duplicates_soon();
             }
         });
     }
@@ -623,7 +812,7 @@ impl Window {
             let names: Vec<String> = g
                 .cards
                 .iter()
-                .filter_map(|id| s.books.get(id).map(|c| c.display_name()))
+                .filter_map(|id| s.books.get(id).map(|c| c.card().display_name()))
                 .collect();
             let mut unique = names.clone();
             unique.dedup();
@@ -686,6 +875,7 @@ impl Window {
                 .and_then(|id| Some((id, s.books.get(id)?)))
             {
                 Some((id, card)) => {
+                    let card = card.card();
                     title = card.display_name();
                     content.append(&rical_ui::card::heading(&card, 96));
                     content.append(&self.actions(&card));
@@ -868,18 +1058,30 @@ impl Window {
         let id = glib::timeout_add_local_once(Duration::from_millis(300), move || {
             let Some(w) = weak.upgrade() else { return };
             w.debounce.borrow_mut().take();
-            let changed = w.state.borrow_mut().books.refresh();
-            match changed {
-                Ok(true) => {
-                    log::info!("address books changed on disk");
-                    w.refresh();
-                }
-                Ok(false) => {}
-                Err(e) => log::warn!("could not read the address books: {e:#}"),
-            }
+            // read again in the background: only changed files are parsed
+            // (the rest come from the cache), and the index is built there
+            // too, so a sync of thousands of cards never holds the window
+            log::info!("address books changed on disk");
+            w.load();
         });
         *self.debounce.borrow_mut() = Some(id);
     }
+}
+
+/// The address books under `root` and their index, read (from the cache
+/// where files have not changed).
+pub fn read_books(
+    root: &std::path::Path,
+    checked: bool,
+) -> anyhow::Result<(Books, rical_cards::search::Index)> {
+    // unchecked: as the index has it, checked against the files after
+    let books = if checked {
+        Books::open(root)?
+    } else {
+        Books::open_unchecked(root)?
+    };
+    let index = rical_cards::search::Index::build(&books);
+    Ok((books, index))
 }
 
 /// Where a person's card is kept (and any copies of it, by UID, in other

@@ -81,40 +81,34 @@ impl Task {
 impl Vdir {
     /// Every task (the master of each VTODO), dated or not.
     pub fn tasks(&self) -> Vec<Task> {
-        self.components()
-            .filter(|(_, c)| {
-                c.component_kind() == "VTODO" && c.property_value("RECURRENCE-ID").is_none()
-            })
-            .map(|(cal, c)| {
-                let when = |name| c.prop(name).and_then(When::from_property);
-                Task {
-                    calendar: cal.id.clone(),
-                    path: c.path().to_owned(),
-                    uid: c.get_uid().unwrap_or_default().to_owned(),
-                    summary: c
-                        .property_value("SUMMARY")
-                        .map(unescape_text)
-                        .unwrap_or_default(),
-                    description: c.property_value("DESCRIPTION").map(unescape_text),
-                    status: c.property_value("STATUS").map(str::to_owned),
-                    due: when("DUE"),
-                    start: when("DTSTART"),
-                    completed: when("COMPLETED"),
-                    priority: c
-                        .property_value("PRIORITY")
-                        .and_then(|p| p.trim().parse().ok())
-                        .filter(|p| *p > 0),
-                    recurring: c.property_value("RRULE").is_some(),
-                    parent: crate::occurrence::parent_of(c),
-                }
-            })
-            .collect()
+        self.all_tasks().as_ref().clone()
+    }
+
+    /// The tasks, worked out from the items with tasks once per change
+    /// to them.
+    pub(crate) fn all_tasks(&self) -> std::sync::Arc<Vec<Task>> {
+        self.remembered_tasks(|| {
+            let mut out = Vec::new();
+            for (cal, item) in self.items_of(crate::Kind::Todo) {
+                let calendar = &self.calendars[cal].id;
+                out.extend(
+                    item.iter()
+                        .filter(|c| {
+                            c.component_kind() == "VTODO"
+                                && c.property_value("RECURRENCE-ID").is_none()
+                        })
+                        .map(|c| task_of(calendar, c)),
+                );
+            }
+            out
+        })
     }
 
     pub fn task(&self, path: &std::path::Path, uid: &str) -> Option<Task> {
-        self.tasks()
-            .into_iter()
+        self.all_tasks()
+            .iter()
             .find(|t| t.path == path && t.uid == uid)
+            .cloned()
     }
 
     /// Mark a task done (STATUS, COMPLETED, PERCENT-COMPLETE) or not done.
@@ -267,8 +261,8 @@ impl Vdir {
     fn next_shift(&self, task: &Task) -> Option<chrono::TimeDelta> {
         let anchor = task.start.or(task.due)?;
         let from = anchor.to_utc(Tz::UTC);
-        let components = self
-            .get(&task.path)?
+        let item = self.get(&task.path)?;
+        let components = item
             .iter()
             .filter(|c| c.get_uid() == Some(task.uid.as_str()));
         let range = from..from + chrono::TimeDelta::days(366 * 5);
@@ -292,4 +286,29 @@ fn count_down(rule: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(";")
+}
+
+/// The task a VTODO is.
+fn task_of(calendar: &str, c: &crate::AnyComponent) -> Task {
+    let when = |name| c.prop(name).and_then(When::from_property);
+    Task {
+        calendar: calendar.to_owned(),
+        path: c.path().to_owned(),
+        uid: c.get_uid().unwrap_or_default().to_owned(),
+        summary: c
+            .property_value("SUMMARY")
+            .map(unescape_text)
+            .unwrap_or_default(),
+        description: c.property_value("DESCRIPTION").map(unescape_text),
+        status: c.property_value("STATUS").map(str::to_owned),
+        due: when("DUE"),
+        start: when("DTSTART"),
+        completed: when("COMPLETED"),
+        priority: c
+            .property_value("PRIORITY")
+            .and_then(|p| p.trim().parse().ok())
+            .filter(|p| *p > 0),
+        recurring: c.property_value("RRULE").is_some(),
+        parent: crate::occurrence::parent_of(c),
+    }
 }

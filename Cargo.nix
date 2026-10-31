@@ -103,6 +103,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "rical-index" = rec {
+      packageId = "rical-index";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "rical-index";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "rical-mail" = rec {
       packageId = "rical-mail";
       build = internal.buildRustCrateWithFeatures {
@@ -2038,6 +2048,33 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "std" ];
       };
+      "fallible-iterator" = rec {
+        crateName = "fallible-iterator";
+        version = "0.3.0";
+        edition = "2018";
+        sha256 = "0ja6l56yka5vn4y4pk6hn88z0bpny7a8k1919aqjzp0j1yhy9k1a";
+        libName = "fallible_iterator";
+        authors = [
+          "Steven Fackler <sfackler@gmail.com>"
+        ];
+        features = {
+          "default" = [ "alloc" ];
+          "std" = [ "alloc" ];
+        };
+        resolvedDefaultFeatures = [ "alloc" "default" ];
+      };
+      "fallible-streaming-iterator" = rec {
+        crateName = "fallible-streaming-iterator";
+        version = "0.1.9";
+        edition = "2015";
+        sha256 = "0nj6j26p71bjy8h42x6jahx1hn0ng6mc2miwpgwnp8vnwqf4jq3k";
+        libName = "fallible_streaming_iterator";
+        authors = [
+          "Steven Fackler <sfackler@gmail.com>"
+        ];
+        features = {
+        };
+      };
       "fastrand" = rec {
         crateName = "fastrand";
         version = "2.5.0";
@@ -2084,6 +2121,18 @@ rec {
         sha256 = "09x1sfinrz86bkm6i2d85lpsfnxn0w797g5zisv1nwhaz1w1h1aj";
         libName = "find_msvc_tools";
 
+      };
+      "foldhash" = rec {
+        crateName = "foldhash";
+        version = "0.2.0";
+        edition = "2021";
+        sha256 = "1nvgylb099s11xpfm1kn2wcsql080nqmnhj1l25bp3r2b35j9kkp";
+        authors = [
+          "Orson Peters <orsonpeters@gmail.com>"
+        ];
+        features = {
+          "default" = [ "std" ];
+        };
       };
       "futf" = rec {
         crateName = "futf";
@@ -3384,6 +3433,14 @@ rec {
         version = "0.17.1";
         edition = "2024";
         sha256 = "0jmqz7i4yl6cm7rbn0i2ffkfrmwi6xkmzkaldr2v8bcsx2v0jngd";
+        dependencies = [
+          {
+            name = "foldhash";
+            packageId = "foldhash";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+        ];
         features = {
           "alloc" = [ "dep:alloc" ];
           "allocator-api2" = [ "dep:allocator-api2" ];
@@ -3396,6 +3453,7 @@ rec {
           "rustc-dep-of-std" = [ "nightly" "core" "alloc" "rustc-internal-api" ];
           "serde" = [ "dep:serde_core" "dep:serde" ];
         };
+        resolvedDefaultFeatures = [ "default-hasher" ];
       };
       "hashify" = rec {
         crateName = "hashify";
@@ -3422,6 +3480,24 @@ rec {
           }
         ];
 
+      };
+      "hashlink" = rec {
+        crateName = "hashlink";
+        version = "0.12.2";
+        edition = "2024";
+        sha256 = "1ywhg7p92fdslbvhqv7hc1q0an3jpjp4l5hsqk55xk6j1srg35m5";
+        dependencies = [
+          {
+            name = "hashbrown";
+            packageId = "hashbrown";
+            usesDefaultFeatures = false;
+            features = [ "default-hasher" ];
+          }
+        ];
+        features = {
+          "serde" = [ "dep:serde" ];
+          "serde_impl" = [ "serde" ];
+        };
       };
       "heck" = rec {
         crateName = "heck";
@@ -4008,6 +4084,55 @@ rec {
           "use_std" = [ "std" ];
         };
         resolvedDefaultFeatures = [ "default" "std" ];
+      };
+      "libsqlite3-sys" = rec {
+        crateName = "libsqlite3-sys";
+        version = "0.39.1";
+        edition = "2024";
+        links = "sqlite3";
+        sha256 = "1cx2z7q7rqacffszy2qsv0vlcxmwdkwhcg23gg80a9xrhwdz198l";
+        libName = "libsqlite3_sys";
+        authors = [
+          "The rusqlite developers"
+        ];
+        buildDependencies = [
+          {
+            name = "cc";
+            packageId = "cc";
+            optional = true;
+          }
+          {
+            name = "pkg-config";
+            packageId = "pkg-config";
+            optional = true;
+          }
+          {
+            name = "vcpkg";
+            packageId = "vcpkg";
+            optional = true;
+          }
+        ];
+        features = {
+          "bindgen" = [ "dep:bindgen" ];
+          "buildtime_bindgen" = [ "bindgen" "pkg-config" "vcpkg" ];
+          "bundled" = [ "cc" "bundled_bindings" ];
+          "bundled-sqlcipher" = [ "bundled" "dep:sqlcipher-src" ];
+          "bundled-sqlcipher-vendored-openssl" = [ "bundled-sqlcipher" "openssl-sys/vendored" ];
+          "bundled-windows" = [ "cc" "bundled_bindings" ];
+          "cc" = [ "dep:cc" ];
+          "default" = [ "min_sqlite_version_3_45_3" ];
+          "loadable_extension" = [ "prettyplease" "quote" "syn" ];
+          "min_sqlite_version_3_45_3" = [ "pkg-config" "vcpkg" ];
+          "openssl-sys" = [ "dep:openssl-sys" ];
+          "pkg-config" = [ "dep:pkg-config" ];
+          "prettyplease" = [ "dep:prettyplease" ];
+          "preupdate_hook" = [ "buildtime_bindgen" ];
+          "quote" = [ "dep:quote" ];
+          "session" = [ "preupdate_hook" "buildtime_bindgen" ];
+          "syn" = [ "dep:syn" ];
+          "vcpkg" = [ "dep:vcpkg" ];
+        };
+        resolvedDefaultFeatures = [ "bundled" "bundled_bindings" "cc" "default" "min_sqlite_version_3_45_3" "pkg-config" "vcpkg" ];
       };
       "linux-raw-sys" = rec {
         crateName = "linux-raw-sys";
@@ -5782,6 +5907,10 @@ rec {
             packageId = "rical-core";
           }
           {
+            name = "rical-index";
+            packageId = "rical-index";
+          }
+          {
             name = "uuid";
             packageId = "uuid";
             features = [ "v4" ];
@@ -5886,6 +6015,10 @@ rec {
             features = [ "kv" ];
           }
           {
+            name = "rical-index";
+            packageId = "rical-index";
+          }
+          {
             name = "rrule";
             packageId = "rrule";
           }
@@ -5902,6 +6035,36 @@ rec {
             name = "uuid";
             packageId = "uuid";
             features = [ "v4" ];
+          }
+        ];
+        devDependencies = [
+          {
+            name = "tempfile";
+            packageId = "tempfile";
+          }
+        ];
+
+      };
+      "rical-index" = rec {
+        crateName = "rical-index";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ./crates/rical-index; };
+        libName = "rical_index";
+        dependencies = [
+          {
+            name = "anyhow";
+            packageId = "anyhow";
+          }
+          {
+            name = "log";
+            packageId = "log";
+            features = [ "kv" ];
+          }
+          {
+            name = "rusqlite";
+            packageId = "rusqlite";
+            features = [ "bundled" ];
           }
         ];
         devDependencies = [
@@ -6070,6 +6233,10 @@ rec {
             features = [ "html" ];
           }
           {
+            name = "rical-index";
+            packageId = "rical-index";
+          }
+          {
             name = "scraper";
             packageId = "scraper";
           }
@@ -6187,6 +6354,117 @@ rec {
           "serde_with" = [ "dep:serde_with" ];
         };
         resolvedDefaultFeatures = [ "default" ];
+      };
+      "rsqlite-vfs" = rec {
+        crateName = "rsqlite-vfs";
+        version = "0.2.0";
+        edition = "2021";
+        sha256 = "19qqkn0f6civfm4dsp13adapknqgbxmdija2didhhnqdh7wp8frm";
+        libName = "rsqlite_vfs";
+        dependencies = [
+          {
+            name = "thiserror";
+            packageId = "thiserror";
+            usesDefaultFeatures = false;
+          }
+        ];
+
+      };
+      "rusqlite" = rec {
+        crateName = "rusqlite";
+        version = "0.41.1";
+        edition = "2024";
+        sha256 = "1555j4yrk3zc9dm68036i4c8vd0qpq2xz1k51895w4q66mpvm6ys";
+        authors = [
+          "The rusqlite developers"
+        ];
+        dependencies = [
+          {
+            name = "bitflags";
+            packageId = "bitflags";
+          }
+          {
+            name = "fallible-iterator";
+            packageId = "fallible-iterator";
+          }
+          {
+            name = "fallible-streaming-iterator";
+            packageId = "fallible-streaming-iterator";
+          }
+          {
+            name = "hashlink";
+            packageId = "hashlink";
+            optional = true;
+          }
+          {
+            name = "libsqlite3-sys";
+            packageId = "libsqlite3-sys";
+            optional = true;
+            target = { target, features }: ((builtins.elem "wasm" target."family") && ("unknown" == target."os" or null));
+          }
+          {
+            name = "libsqlite3-sys";
+            packageId = "libsqlite3-sys";
+            target = { target, features }: (!((builtins.elem "wasm" target."family") && ("unknown" == target."os" or null)));
+          }
+          {
+            name = "smallvec";
+            packageId = "smallvec";
+          }
+          {
+            name = "sqlite-wasm-rs";
+            packageId = "sqlite-wasm-rs";
+            optional = true;
+            usesDefaultFeatures = false;
+            target = { target, features }: ((builtins.elem "wasm" target."family") && ("unknown" == target."os" or null));
+          }
+        ];
+        devDependencies = [
+          {
+            name = "sqlite-wasm-rs";
+            packageId = "sqlite-wasm-rs";
+            usesDefaultFeatures = false;
+            target = { target, features }: ((builtins.elem "wasm" target."family") && ("unknown" == target."os" or null));
+          }
+        ];
+        features = {
+          "array" = [ "vtab" "pointer" ];
+          "buildtime_bindgen" = [ "libsqlite3-sys?/buildtime_bindgen" "sqlite-wasm-rs?/bindgen" ];
+          "bundled" = [ "libsqlite3-sys?/bundled" "modern_sqlite" ];
+          "bundled-full" = [ "modern-full" "bundled" ];
+          "bundled-sqlcipher" = [ "libsqlite3-sys?/bundled-sqlcipher" "bundled" ];
+          "bundled-sqlcipher-vendored-openssl" = [ "libsqlite3-sys?/bundled-sqlcipher-vendored-openssl" "bundled-sqlcipher" ];
+          "bundled-windows" = [ "libsqlite3-sys?/bundled-windows" ];
+          "cache" = [ "hashlink" ];
+          "chrono" = [ "dep:chrono" ];
+          "column_metadata" = [ "libsqlite3-sys?/column_metadata" ];
+          "csv" = [ "dep:csv" ];
+          "csvtab" = [ "csv" "vtab" ];
+          "default" = [ "cache" "ffi-sqlite-wasm-rs" ];
+          "ffi-sqlite-wasm-rs" = [ "dep:sqlite-wasm-rs" ];
+          "hashlink" = [ "dep:hashlink" ];
+          "hooks" = [ "wal" ];
+          "in_gecko" = [ "modern_sqlite" "libsqlite3-sys?/in_gecko" ];
+          "jiff" = [ "dep:jiff" ];
+          "libsqlite3-sys" = [ "dep:libsqlite3-sys" ];
+          "loadable_extension" = [ "libsqlite3-sys?/loadable_extension" ];
+          "modern-full" = [ "array" "backup" "blob" "modern_sqlite" "chrono" "collation" "column_metadata" "column_decltype" "csvtab" "extra_check" "functions" "hooks" "i128_blob" "jiff" "limits" "load_extension" "serde_json" "serialize" "series" "time" "trace" "unlock_notify" "url" "uuid" "vtab" "wal" "window" ];
+          "modern_sqlite" = [ "libsqlite3-sys?/bundled_bindings" ];
+          "preupdate_hook" = [ "libsqlite3-sys?/preupdate_hook" "hooks" ];
+          "rusqlite-macros" = [ "dep:rusqlite-macros" ];
+          "serde_json" = [ "dep:serde_json" ];
+          "series" = [ "vtab" ];
+          "session" = [ "libsqlite3-sys?/session" "hooks" ];
+          "sqlcipher" = [ "libsqlite3-sys?/sqlcipher" ];
+          "time" = [ "dep:time" ];
+          "unlock_notify" = [ "libsqlite3-sys?/unlock_notify" ];
+          "url" = [ "dep:url" ];
+          "uuid" = [ "dep:uuid" ];
+          "wasm32-wasi-vfs" = [ "libsqlite3-sys?/wasm32-wasi-vfs" ];
+          "window" = [ "functions" ];
+          "with-asan" = [ "libsqlite3-sys?/with-asan" ];
+        };
+        resolvedDefaultFeatures = [ "bundled" "cache" "default" "ffi-sqlite-wasm-rs" "hashlink" "modern_sqlite" ];
       };
       "rustc_version" = rec {
         crateName = "rustc_version";
@@ -6885,6 +7163,35 @@ rec {
           "v3_8" = [ "v3_6" ];
         };
         resolvedDefaultFeatures = [ "v3_0" ];
+      };
+      "sqlite-wasm-rs" = rec {
+        crateName = "sqlite-wasm-rs";
+        version = "0.6.2";
+        edition = "2021";
+        links = "wsqlite3";
+        sha256 = "06765qlwlm7d65glw179mcf8d81shacxzw9dbc09l608pwlqxg9n";
+        libName = "sqlite_wasm_rs";
+        authors = [
+          "Spxg <noz@live.com>"
+        ];
+        dependencies = [
+          {
+            name = "rsqlite-vfs";
+            packageId = "rsqlite-vfs";
+          }
+        ];
+        buildDependencies = [
+          {
+            name = "cc";
+            packageId = "cc";
+          }
+        ];
+        features = {
+          "bindgen" = [ "dep:bindgen" ];
+          "sqlcipher" = [ "dep:sqlcipher-src" ];
+          "sqlite3mc" = [ "dep:sqlite3mc-src" ];
+          "wasm-bindgen" = [ "dep:wasm-bindgen" "dep:js-sys" ];
+        };
       };
       "stable_deref_trait" = rec {
         crateName = "stable_deref_trait";
@@ -7784,6 +8091,16 @@ rec {
           "zerocopy" = [ "dep:zerocopy" ];
         };
         resolvedDefaultFeatures = [ "default" "js" "rng" "serde" "std" "v4" ];
+      };
+      "vcpkg" = rec {
+        crateName = "vcpkg";
+        version = "0.2.15";
+        edition = "2015";
+        sha256 = "09i4nf5y8lig6xgj3f7fyrvzd3nlaw4znrihw8psidvv5yk4xkdc";
+        authors = [
+          "Jim McGrath <jimmc2@gmail.com>"
+        ];
+
       };
       "version-compare" = rec {
         crateName = "version-compare";

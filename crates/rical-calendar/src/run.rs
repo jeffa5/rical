@@ -122,6 +122,7 @@ impl Window {
             "details" => self.show_details(),
             "reveal" => self.reveal()?,
             "convert" => self.convert()?,
+            "duplicate" => self.duplicate()?,
             "person" => self.show_person(p.arg(0).unwrap_or_default())?,
             "settings" => self.show_settings(),
             "about" => self.show_about(),

@@ -38,8 +38,9 @@ pub const SETTINGS: &[(&str, &str)] = &[
     ),
     (
         "send",
-        "A command run after a message is queued, so it goes at once: for example \
-         `rical-mail-queue run --once`. Default none: your rical-mail-queue service sends it.",
+        "A command run after a message is queued. Not needed when `rical-mail-queue run` \
+         is running: it watches the queue and sends each message as it arrives. Without \
+         one, `rical-mail-queue run --once` sends what is due. Default none.",
     ),
     (
         "drafts",

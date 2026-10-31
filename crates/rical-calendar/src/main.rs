@@ -158,6 +158,7 @@ fn main() -> glib::ExitCode {
             }
             let (state, binds) = ui.borrow().clone()?;
             let w = window::Window::new(app, state, binds);
+            rical_ui::app::log_shown(&w.window);
             w.present();
             *window.borrow_mut() = Some(w.clone());
             Some(w)
@@ -190,7 +191,8 @@ fn setup(o: config::Options) -> Result<(state::SharedState, binds::Binds), Strin
         "which vdir? Set `vdir = PATH` in ~/.config/rical-calendar/config, or RICAL_VDIR (see --help)",
     )?;
     let local = local_timezone();
-    let vdir = Vdir::load(&vdir_path).map_err(|e| format!("{e:#}"))?;
+    // the calendars only: the window reads their items in the background
+    let vdir = Vdir::scan(&vdir_path).map_err(|e| format!("{e:#}"))?;
     let date = o
         .date
         .unwrap_or_else(|| Utc::now().with_timezone(&local).date_naive());
@@ -209,6 +211,20 @@ fn setup(o: config::Options) -> Result<(state::SharedState, binds::Binds), Strin
     };
 
     let mut state = state::State::new(vdir, local, date);
+    state.loaded = false;
+    // start reading the items now, while GTK builds the window, watching
+    // the folders first to know if they change under the read
+    let early = rical_ui::util::EarlyWatch::new(state.vdir.dirs.iter().map(|d| d.as_path()));
+    let range = layout::days_range(&layout::visible_days(view, date), local);
+    let read = std::thread::spawn(move || {
+        // as the index has it: the window checks it against the files
+        // once it shows
+        let vdir = Vdir::open_unchecked(&vdir_path)?;
+        // and what the first view shows, so that it is there to show
+        vdir.warm(&range, local);
+        Ok(vdir)
+    });
+    state.preload = Some((read, early));
     state.view = view;
     state.week_view = week_view;
     state.last_calendar = o.calendar;

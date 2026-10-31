@@ -276,7 +276,7 @@ pub fn list_cached(folder: &Folder, mut cache: crate::cache::Cache) -> Vec<Summa
                 flags.seen = false;
             }
             let size = e.metadata().map_or(0, |m| m.len());
-            if let Some(h) = cache.get(unique, size) {
+            if let Some(h) = cache.get(unique, size, sub, &name) {
                 out.push(
                     h.clone()
                         .into_summary(e.path(), &folder.name, flags, is_new),
@@ -285,7 +285,7 @@ pub fn list_cached(folder: &Folder, mut cache: crate::cache::Cache) -> Vec<Summa
             }
             match summarize(&e.path(), &folder.name, is_new) {
                 Some(s) => {
-                    cache.put(unique, crate::cache::Headers::of(&s));
+                    cache.put(unique, crate::cache::Headers::of(&s), sub, &name);
                     out.push(s);
                 }
                 None => log::debug!("{}: not a message", e.path().display()),
@@ -295,6 +295,27 @@ pub fn list_cached(folder: &Folder, mut cache: crate::cache::Cache) -> Vec<Summa
     cache.save();
     out.sort_by(|a, b| b.date.cmp(&a.date).then_with(|| a.path.cmp(&b.path)));
     out
+}
+
+/// The messages of a folder as the header index (kept in `dir`) had them
+/// when the folder was last listed, newest first, without looking at the
+/// folder: to show at once, before [`list_cached`] catches up with it.
+/// `None` if the folder was never listed into it.
+pub fn list_indexed(folder: &Folder, dir: &Path) -> Option<Vec<Summary>> {
+    let mut out: Vec<Summary> = crate::cache::indexed(dir, &folder.path)?
+        .into_iter()
+        .map(|(sub, file, h)| {
+            let is_new = sub == "new";
+            let (_, mut flags) = split_name(&file);
+            if is_new {
+                flags.seen = false;
+            }
+            let path = folder.path.join(&sub).join(&file);
+            h.into_summary(path, &folder.name, flags, is_new)
+        })
+        .collect();
+    out.sort_by(|a, b| b.date.cmp(&a.date).then_with(|| a.path.cmp(&b.path)));
+    Some(out)
 }
 
 /// A name for a new message that no other has.
@@ -500,7 +521,7 @@ mod cache_tests {
         let folder = &folders(d.path()).unwrap()[0];
         let cache_dir = d.path().join("cache");
         let first = list_cached(folder, crate::cache::Cache::open(&cache_dir, &folder.path));
-        assert!(fs::read_dir(&cache_dir).unwrap().count() == 1);
+        assert!(cache_dir.join("headers.sqlite").is_file());
         // break every message: only the cache can answer now
         for e in fs::read_dir(inbox.join("new")).unwrap().flatten() {
             let len = e.metadata().unwrap().len() as usize;
@@ -516,6 +537,47 @@ mod cache_tests {
             list_cached(folder, crate::cache::Cache::open(&cache_dir, &folder.path)).len(),
             49
         );
+    }
+
+    #[test]
+    fn the_index_alone_shows_a_folder_as_last_listed() {
+        let d = tempfile::tempdir().unwrap();
+        let inbox = d.path().join("INBOX");
+        for i in 0..5 {
+            let raw = format!(
+                "From: A <a{i}@x.example>\nSubject: Hello {i}\nDate: Thu, 5 Nov 2026 14:00:0{i} +0000\n\nHi\n"
+            );
+            deliver(&inbox, raw.as_bytes(), Flags::default(), true).unwrap();
+        }
+        let folder = &folders(d.path()).unwrap()[0];
+        let cache_dir = d.path().join("cache");
+        // never listed: nothing to show from it
+        assert!(list_indexed(folder, &cache_dir).is_none());
+        let listed = list_cached(folder, crate::cache::Cache::open(&cache_dir, &folder.path));
+        assert_eq!(list_indexed(folder, &cache_dir).unwrap(), listed);
+
+        // read one (it moves to cur/ with its flag), and one goes
+        let read = move_to_cur_seen(&listed[0].path);
+        fs::remove_file(&listed[1].path).unwrap();
+        // the index still says what it said, until the folder is listed
+        assert_eq!(list_indexed(folder, &cache_dir).unwrap(), listed);
+        let now = list_cached(folder, crate::cache::Cache::open(&cache_dir, &folder.path));
+        assert_eq!(now.len(), 4);
+        assert_eq!(list_indexed(folder, &cache_dir).unwrap(), now);
+        let first = &list_indexed(folder, &cache_dir).unwrap()[0];
+        assert_eq!(first.path, read);
+        assert!(first.flags.seen && !first.is_new);
+    }
+
+    /// Mark a message in new/ read, as a mail client does.
+    fn move_to_cur_seen(path: &Path) -> PathBuf {
+        let folder = path.parent().unwrap().parent().unwrap();
+        let cur = folder.join("cur").join(format!(
+            "{}:2,S",
+            path.file_name().unwrap().to_string_lossy()
+        ));
+        fs::rename(path, &cur).unwrap();
+        cur
     }
 }
 

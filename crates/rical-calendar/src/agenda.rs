@@ -1,4 +1,7 @@
-//! The agenda view: a list of upcoming occurrences grouped by day.
+//! The agenda view: a list of upcoming occurrences grouped by day. Rows
+//! are made as they are wanted: a screenful first, more as the list is
+//! scrolled or the selection moves near the last made, as thirty busy days
+//! can be thousands.
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -11,13 +14,25 @@ use crate::{
     state::{OccurrenceKey, SharedState},
 };
 
+/// Rows made at first: more than a tall screen shows.
+const FIRST: usize = 60;
+/// Rows made at a time after.
+const CHUNK: usize = 100;
+/// How close to the last row made the selection may come before more are.
+const AHEAD: usize = 30;
+
 pub struct AgendaView {
     pub widget: gtk::Stack,
     list: gtk::ListBox,
     headings: listhead::Headings,
     state: SharedState,
-    /// Occurrence key of each row, None for day headers.
+    /// Occurrence key of each row (made or not), None for day headers.
     rows: Rc<RefCell<Vec<Option<OccurrenceKey>>>>,
+    /// What each row shows: its occurrence, and the heading above it.
+    items: RefCell<Vec<(usize, Option<String>)>>,
+    occurrences: RefCell<Rc<Vec<Occurrence>>>,
+    /// How many of the rows are made.
+    made: std::cell::Cell<usize>,
     syncing: Rc<std::cell::Cell<bool>>,
     on_toggle: Rc<dyn Fn((std::path::PathBuf, String), bool)>,
     /// What the rows were built from: (generation, first day, today).
@@ -67,15 +82,35 @@ impl AgendaView {
             list,
             state,
             rows: Default::default(),
+            items: Default::default(),
+            occurrences: Default::default(),
+            made: Default::default(),
             syncing: Default::default(),
             on_toggle,
             built: Default::default(),
+        });
+
+        // more rows when scrolled near the end of those made
+        let weak = Rc::downgrade(&this);
+        scroller.vadjustment().connect_value_changed(move |adj| {
+            let Some(this) = weak.upgrade() else { return };
+            if adj.value() + adj.page_size() * 2.0 >= adj.upper() {
+                this.make(this.made.get() + CHUNK);
+            }
         });
 
         let weak = Rc::downgrade(&this);
         let changed = on_change.clone();
         this.list.connect_row_selected(move |_, row| {
             let Some(this) = weak.upgrade() else { return };
+            // and when the selection comes near the last made
+            if let Some(r) = row {
+                let i = r.index() as usize;
+                if i + AHEAD >= this.made.get() {
+                    let this = this.clone();
+                    gtk::glib::idle_add_local_once(move || this.make(i + AHEAD + CHUNK));
+                }
+            }
             if this.syncing.get() {
                 return;
             }
@@ -140,6 +175,9 @@ impl AgendaView {
                 .position(|r| r.as_ref().is_some_and(|k| s.selected.as_ref() == Some(k)))
         };
         self.syncing.set(true);
+        if let Some(i) = index {
+            self.make(i + AHEAD);
+        }
         match index.and_then(|i| self.list.row_at_index(i as i32)) {
             Some(row) => {
                 self.list.select_row(Some(&row));
@@ -150,63 +188,96 @@ impl AgendaView {
         self.syncing.set(false);
     }
 
+    /// Work out the rows (without making them), then make those the first
+    /// screen, and the selection, need.
     fn rebuild(&self) {
         self.syncing.set(true);
         self.headings.borrow_mut().clear();
         while let Some(row) = self.list.row_at_index(0) {
             self.list.remove(&row);
         }
-        let state = self.state.borrow();
-        let days = state.visible_days();
-        let occ = state.occurrences(&days);
-        let today = Utc::now().with_timezone(&state.local).date_naive();
-
-        let mut rows = Vec::new();
-        let mut selected_row = None;
-        for day in &days {
-            let mut on_day = occ
-                .iter()
-                .filter(|o| {
-                    // multi-day occurrences show on their first visible day
-                    let first = o.start.date(state.local).max(days[0]);
-                    first == *day
-                })
-                .collect::<Vec<_>>();
-            // all-day items (and tasks carried over) first, then by time
-            on_day.sort_by_key(|o| (!layout::is_all_day_row(o), o.start.to_utc(state.local)));
-            if on_day.is_empty() {
-                continue;
-            }
-            let title = if *day == today {
-                format!("Today · {}", format::day(*day))
-            } else if *day == today + Days::new(1) {
-                format!("Tomorrow · {}", format::day(*day))
-            } else {
-                day.format("%A %-d %B").to_string()
-            };
-            // the heading sits on the day's first row, not a row of its own,
-            // so keyboard navigation goes straight through
-            let mut heading = Some(listhead::label(&title));
-            for o in on_day {
-                let row = self.row(o, &state);
-                self.headings
-                    .borrow_mut()
-                    .push(heading.take().map(|l| l.upcast()));
-                if state.selected.as_ref().is_some_and(|k| k.matches(o)) {
-                    selected_row = Some(row.clone());
+        self.made.set(0);
+        let (occ, items, rows, selected) = {
+            let state = self.state.borrow();
+            let days = state.visible_days();
+            let occ = state.occurrences(&days);
+            let today = Utc::now().with_timezone(&state.local).date_naive();
+            // each occurrence on its first visible day (one begun earlier
+            // shows on the first)
+            let mut by_day: Vec<Vec<usize>> = vec![Vec::new(); days.len()];
+            for (i, o) in occ.iter().enumerate() {
+                let first = o.start.date(state.local).max(days[0]);
+                if let Ok(d) = days.binary_search(&first) {
+                    by_day[d].push(i);
                 }
-                self.list.append(&row);
-                rows.push(Some(OccurrenceKey::of(o)));
             }
-        }
+            let mut items = Vec::new();
+            let mut rows = Vec::new();
+            let mut selected = None;
+            for (day, mut on_day) in days.iter().zip(by_day) {
+                if on_day.is_empty() {
+                    continue;
+                }
+                // all-day items (and tasks carried over) first, then by time
+                on_day.sort_by_key(|&i| {
+                    let o = &occ[i];
+                    (!layout::is_all_day_row(o), o.start.to_utc(state.local))
+                });
+                let title = if *day == today {
+                    format!("Today · {}", format::day(*day))
+                } else if *day == today + Days::new(1) {
+                    format!("Tomorrow · {}", format::day(*day))
+                } else {
+                    day.format("%A %-d %B").to_string()
+                };
+                // the heading sits on the day's first row, not a row of its
+                // own, so keyboard navigation goes straight through
+                let mut heading = Some(title);
+                for i in on_day {
+                    let o = &occ[i];
+                    if state.selected.as_ref().is_some_and(|k| k.matches(o)) {
+                        selected = Some(rows.len());
+                    }
+                    items.push((i, heading.take()));
+                    rows.push(Some(OccurrenceKey::of(o)));
+                }
+            }
+            (occ, items, rows, selected)
+        };
         self.widget
             .set_visible_child_name(if rows.is_empty() { "empty" } else { "list" });
         *self.rows.borrow_mut() = rows;
-        self.list.select_row(selected_row.as_ref());
-        if let Some(row) = &selected_row {
+        *self.items.borrow_mut() = items;
+        *self.occurrences.borrow_mut() = occ;
+        self.make(selected.map_or(0, |i| i + AHEAD).max(FIRST));
+        let row = selected.and_then(|i| self.list.row_at_index(i as i32));
+        self.list.select_row(row.as_ref());
+        if let Some(row) = &row {
             listhead::reveal(row);
         }
         self.syncing.set(false);
+    }
+
+    /// Make the rows up to `n` (of those there are).
+    fn make(&self, n: usize) {
+        let items = self.items.borrow();
+        let n = n.min(items.len());
+        let from = self.made.get();
+        if n <= from {
+            return;
+        }
+        let occ = self.occurrences.borrow().clone();
+        let state = self.state.borrow();
+        let syncing = self.syncing.replace(true);
+        for (i, heading) in &items[from..n] {
+            let row = self.row(&occ[*i], &state);
+            self.headings
+                .borrow_mut()
+                .push(heading.as_deref().map(|t| listhead::label(t).upcast()));
+            self.list.append(&row);
+        }
+        self.syncing.set(syncing);
+        self.made.set(n);
     }
 
     pub fn focus(&self) {

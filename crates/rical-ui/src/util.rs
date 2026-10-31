@@ -147,3 +147,46 @@ impl Trimmer {
         });
     }
 }
+
+/// Folders watched from the start, before the window (and its own
+/// watching) exists, so a read begun then can tell whether anything changed
+/// under it: [`EarlyWatch::changed`].
+pub struct EarlyWatch {
+    _monitors: Vec<gtk::gio::FileMonitor>,
+    changed: std::rc::Rc<std::cell::Cell<bool>>,
+}
+
+impl EarlyWatch {
+    pub fn new<'a>(dirs: impl IntoIterator<Item = &'a std::path::Path>) -> Self {
+        use gtk::{gio, prelude::*};
+        let changed = std::rc::Rc::new(std::cell::Cell::new(false));
+        let monitors = dirs
+            .into_iter()
+            .filter_map(|d| {
+                gio::File::for_path(d)
+                    .monitor_directory(
+                        gio::FileMonitorFlags::WATCH_MOVES,
+                        None::<&gio::Cancellable>,
+                    )
+                    .ok()
+            })
+            .inspect(|m| {
+                let c = changed.clone();
+                m.connect_changed(move |_, _, _, event| {
+                    if !matches!(event, gio::FileMonitorEvent::ChangesDoneHint) {
+                        c.set(true);
+                    }
+                });
+            })
+            .collect();
+        Self {
+            _monitors: monitors,
+            changed,
+        }
+    }
+
+    /// Whether anything in the folders changed since watching began.
+    pub fn changed(&self) -> bool {
+        self.changed.get()
+    }
+}

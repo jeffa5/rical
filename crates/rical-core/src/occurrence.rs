@@ -401,6 +401,68 @@ type SeriesKey<'a> = (&'a std::ffi::OsStr, String);
 ///
 /// Components sharing a UID are treated as one recurring series: the one
 /// without `RECURRENCE-ID` is the master, the others override instances.
+/// The time an item's components can show in, in seconds (UTC), for a
+/// viewer anywhere: `None` when they repeat (they may show any time), and
+/// an empty span when none can show. A query looks no further at items
+/// whose span it misses.
+pub fn span(components: &[AnyComponent]) -> Option<(i64, i64)> {
+    // floating times and dates are in the viewer's zone: a day either side
+    // covers every zone
+    const SLACK: i64 = 26 * 3600;
+    let mut lo = i64::MAX;
+    let mut hi = i64::MIN;
+    for c in components {
+        let Some(f) = Fields::new(c) else { continue };
+        // a change to this and every later one moves instances anywhere
+        if f.recurrence_id().is_some_and(|(_, future)| future) {
+            return None;
+        }
+        let (first, last) = if f.is_recurring() {
+            series_bounds(&f)?
+        } else {
+            (f.start, f.start)
+        };
+        let start = first.to_utc(Tz::UTC).timestamp();
+        let end = last.add(f.duration).to_utc(Tz::UTC).timestamp();
+        lo = lo.min(start.min(end) - SLACK);
+        hi = hi.max(start.max(end) + SLACK);
+    }
+    Some((lo, hi))
+}
+
+/// The first and last instances of a series that ends (an RRULE with
+/// UNTIL or COUNT, or RDATEs only), or None if it goes on (or is too long
+/// to be worth working out).
+fn series_bounds(master: &Fields) -> Option<(When, When)> {
+    const MOST: usize = 5000;
+    let mut starts = master.whens("RDATE");
+    starts.push(master.start);
+    if let Some(rule) = master.component.property_value("RRULE") {
+        let upper = rule.to_ascii_uppercase();
+        if !upper.contains("UNTIL=") && !upper.contains("COUNT=") {
+            return None;
+        }
+        let set = rrule_set(rule, &master.start).ok()?;
+        let mut all = set.into_iter().take(MOST + 1);
+        let mut n = 0;
+        let mut last = None;
+        for dt in all.by_ref() {
+            n += 1;
+            last = Some(dt);
+        }
+        if n > MOST {
+            return None;
+        }
+        if let Some(dt) = last {
+            starts.push(from_rrule(dt, &master.start));
+        }
+    }
+    let key = |w: &When| w.to_utc(Tz::UTC);
+    let first = *starts.iter().min_by_key(|w| key(w))?;
+    let last = *starts.iter().max_by_key(|w| key(w))?;
+    Some((first, last))
+}
+
 pub fn expand<'a>(
     calendar: &str,
     components: impl IntoIterator<Item = &'a AnyComponent>,
@@ -774,8 +836,12 @@ pub fn journal_entry(calendar: &str, component: &AnyComponent) -> Option<(Occurr
 impl crate::Vdir {
     /// Every journal entry, dated or not (first instances only).
     pub fn journals(&self) -> Vec<(Occurrence, bool)> {
-        self.components()
-            .filter_map(|(cal, c)| journal_entry(&cal.id, c))
+        self.items_of(Kind::Journal)
+            .iter()
+            .flat_map(|(cal, item)| {
+                let calendar = &self.calendars[*cal].id;
+                item.iter().filter_map(move |c| journal_entry(calendar, c))
+            })
             .collect()
     }
 }

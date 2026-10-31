@@ -154,7 +154,8 @@ impl Change {
 impl Vdir {
     /// The draft to start editing `occ` from.
     pub fn draft(&self, occ: &Occurrence) -> Draft {
-        let master = self.get(&occ.path).and_then(|components| {
+        let item = self.get(&occ.path);
+        let master = item.as_deref().and_then(|components| {
             components.iter().find(|c| {
                 c.get_uid() == Some(occ.uid.as_str()) && c.property_value("RECURRENCE-ID").is_none()
             })

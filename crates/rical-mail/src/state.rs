@@ -86,7 +86,6 @@ pub struct State {
     pub people: Vec<Person>,
     pub books: Option<Books>,
     /// The calendars, to compare an invitation with what is there.
-    pub vdir: Option<rical_core::Vdir>,
     pub undo: Vec<Undo>,
     /// Counts the readings of a place, so a slow one that finishes late is dropped.
     pub generation: u64,
@@ -131,7 +130,6 @@ impl State {
             outbox_notes: HashMap::new(),
             people: Vec::new(),
             books,
-            vdir: None,
             undo: Vec::new(),
             generation: 0,
             picked: Default::default(),
@@ -231,14 +229,23 @@ impl State {
             .map_or(0, |l| l.len())
     }
 
+    /// How the list is laid out: in conversations or not, and the order.
+    pub fn layout(&self) -> Layout {
+        Layout {
+            threaded: self.threaded && !matches!(self.place, Place::Outbox | Place::Search(_)),
+            sort: self.sort,
+            reverse: self.sort_reverse,
+        }
+    }
+
     /// Lay the messages out and apply the search.
     pub fn arrange(&mut self) {
-        let threaded = self.threaded && !matches!(self.place, Place::Outbox | Place::Search(_));
-        self.rows = if threaded {
-            thread::threads_sorted(&self.messages, self.sort, self.sort_reverse)
-        } else {
-            thread::sorted(&self.messages, self.sort, self.sort_reverse)
-        };
+        self.rows = self.layout().rows(&self.messages);
+        self.arranged();
+    }
+
+    /// With the rows laid out: count the conversations, apply the search.
+    pub fn arranged(&mut self) {
         // how big each conversation is, and how much of it is unread
         self.thread_info.clear();
         let mut at = 0;
@@ -328,19 +335,17 @@ impl State {
     pub fn build_people(&mut self) {
         let mut people: Vec<Person> = Vec::new();
         if let Some(books) = &self.books {
-            for (_, _, card) in books.cards() {
-                let name = card.display_name();
-                for e in card.emails() {
-                    people.push(Person {
-                        name: if name.contains('@') {
-                            String::new()
-                        } else {
-                            name.clone()
-                        },
-                        address: e.value.trim().to_owned(),
-                        contact: true,
-                    });
-                }
+            // from the index: no card is read
+            for (_, name, address) in books.addresses() {
+                people.push(Person {
+                    name: if name.contains('@') {
+                        String::new()
+                    } else {
+                        name
+                    },
+                    address,
+                    contact: true,
+                });
             }
         }
         people.sort_by_key(|p| p.name.to_lowercase());
@@ -466,24 +471,30 @@ impl State {
     }
 }
 
-impl State {
-    /// What the invitation in a message changes in the calendars (if a
-    /// calendar folder is set and the message has one).
-    pub fn invite_diffs(&mut self, path: &std::path::Path) -> Vec<rical_core::diff::Diff> {
-        let Some(vdir) = &mut self.vdir else {
+/// What the invitation in message `path` changes in the calendars under
+/// `vdir` (if set, and the message has one): on the background pool, as it
+/// checks the calendars' files against their index first.
+pub fn invite_diffs(
+    vdir: Option<&std::path::Path>,
+    path: &std::path::Path,
+) -> Vec<rical_core::diff::Diff> {
+    let Some(root) = vdir else {
+        return Vec::new();
+    };
+    let Ok(ics) = rical_maildir::read::calendar_text(path) else {
+        return Vec::new();
+    };
+    let vdir = match rical_core::Vdir::open(root) {
+        Ok(v) => v,
+        Err(e) => {
+            log::warn!("calendar {}: {e:#}", root.display());
             return Vec::new();
-        };
-        let Ok(ics) = rical_maildir::read::calendar_text(path) else {
-            return Vec::new();
-        };
-        if let Err(e) = vdir.refresh() {
-            log::warn!("calendar: {e:#}");
         }
-        vdir.diff_invite(&ics).unwrap_or_else(|e| {
-            log::warn!("invitation: {e:#}");
-            Vec::new()
-        })
-    }
+    };
+    vdir.diff_invite(&ics).unwrap_or_else(|e| {
+        log::warn!("invitation: {e:#}");
+        Vec::new()
+    })
 }
 
 impl State {
@@ -540,6 +551,24 @@ fn default_name(role: Role) -> &'static str {
         Role::Junk => "Junk",
         Role::Trash => "Trash",
         Role::Other => "Other",
+    }
+}
+
+/// How the list is laid out, for laying it out away from the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Layout {
+    pub threaded: bool,
+    pub sort: thread::SortKey,
+    pub reverse: bool,
+}
+
+impl Layout {
+    pub fn rows(&self, messages: &[Summary]) -> Vec<thread::Row> {
+        if self.threaded {
+            thread::threads_sorted(messages, self.sort, self.reverse)
+        } else {
+            thread::sorted(messages, self.sort, self.reverse)
+        }
     }
 }
 

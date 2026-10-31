@@ -138,6 +138,11 @@
           default = false;
           description = "Run `rical remind` as a user service so reminders arrive without rical-calendar open (rical-calendar then leaves reminders to it).";
         };
+        mailQueue = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = "Run `rical-mail-queue run` as a user service: it watches the queue and sends each message as it arrives (configure `send` in ~/.config/rical-mail-queue/config).";
+        };
         binds = lib.mkOption {
           type = lib.types.lines;
           default = "";
@@ -200,6 +205,15 @@
             Restart = "on-failure";
           };
           Install.WantedBy = ["graphical-session.target"];
+        };
+        systemd.user.services.rical-mail-queue = lib.mkIf cfg.mailQueue {
+          Unit.Description = "rical mail queue: sends what is queued as it arrives";
+          Service = {
+            ExecStart = "${cfg.package}/bin/rical-mail-queue run";
+            Restart = "on-failure";
+            RestartSec = "30s";
+          };
+          Install.WantedBy = ["default.target"];
         };
         xdg.mimeApps.defaultApplications = lib.mkMerge [
           (lib.mkIf cfg.openCalendarFiles {

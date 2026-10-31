@@ -24,6 +24,11 @@ rical-mail-queue list
 rical-mail-queue -v run --once      # "sends" it: appends it to /tmp/rical-wire.log
 ```
 
+`rical-mail-queue run` (without `--once`) keeps going: it watches the queue
+and sends each message as it lands, so nothing needs to tell it to. Run it as
+a service (the Home Manager module's `programs.rical.mailQueue = true` does);
+`--once` is for sending from a script or timer instead.
+
 There is no default `send` command: until one is configured, `run`
 refuses to start and nothing can leave the machine.
 
@@ -41,7 +46,7 @@ names), `name = value` per line:
 | `timeout` | `60s` | How long the command has. It is killed, with anything it started, after that. |
 | `max-attempts` | `8` | Then the message moves to `failed/`. |
 | `retry-delay` | `30s` | Doubles after each failure, up to an hour. |
-| `poll` | `5s` | How often `run` looks at the queue. |
+| `poll` | `1m` | The longest `run` waits before looking at the queue again. It watches the queue (inotify), so a message is sent as it arrives, and a held-back or retrying one when it comes due; this only catches what a watch cannot see, such as a queue on a network file system. |
 
 ```ini
 send = msmtp --read-envelope-from -- $RICAL_MAIL_QUEUE_RECIPIENTS

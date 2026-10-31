@@ -131,6 +131,7 @@ fn main() -> glib::ExitCode {
                 return None;
             };
             let w = window::Window::new(app, state, binds);
+            rical_ui::app::log_shown(&w.window);
             w.present();
             *window.borrow_mut() = Some(w.clone());
             Some(w)
@@ -170,27 +171,8 @@ fn setup(o: config::Options) -> Result<(state::SharedState, rical_ui::binds::Bin
          or RICAL_MAIL_MAIL (see --help)",
     )?;
     let started = std::time::Instant::now();
-    let books = o
-        .contacts
-        .as_ref()
-        .and_then(|c| match rical_cards::Books::load(c) {
-            Ok(b) => Some(b),
-            Err(e) => {
-                log::warn!("contacts {}: {e:#}", c.display());
-                None
-            }
-        });
-    let mut st = state::State::new(o.clone(), root, books);
-    st.vdir = o
-        .vdir
-        .as_ref()
-        .and_then(|v| match rical_core::Vdir::load(v) {
-            Ok(v) => Some(v),
-            Err(e) => {
-                log::warn!("calendar {}: {e:#}", v.display());
-                None
-            }
-        });
+    // the contacts and calendar are read in the background (Window::new)
+    let st = state::State::new(o.clone(), root, None);
     log::info!(
         "{} folders, {} messages in {}: ready in {:?}",
         st.folders.len(),

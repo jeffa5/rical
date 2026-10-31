@@ -1019,6 +1019,38 @@ impl Window {
         Ok(())
     }
 
+    /// `:duplicate`: copy the selected item (a whole series) beside it,
+    /// and select the copy.
+    pub(super) fn duplicate(self: &Rc<Self>) -> Result<(), String> {
+        let occ = self.current_item().ok_or("select an event or task first")?;
+        crate::details::close();
+        let mut made = None;
+        if !self.perform("duplicate it", |v| {
+            let (change, uid) = v.duplicate(&occ)?;
+            made = Some((change.path.clone(), uid));
+            Ok(vec![change])
+        }) {
+            return Ok(());
+        }
+        let (path, uid) = made.unwrap();
+        let view = self.state.borrow().view;
+        match view {
+            ViewKind::Tasks => self.state.borrow_mut().selected_task = Some((path, uid)),
+            ViewKind::Journal => {
+                self.state.borrow_mut().selected_journal = Some((path, uid));
+            }
+            _ => self.reselect(&uid, &occ.start),
+        }
+        self.refresh();
+        let guests = if occ.attendees.is_empty() {
+            ""
+        } else {
+            ", without its guests"
+        };
+        self.toast_now(&format!("Copied “{}”{guests} · u undoes", occ.summary));
+        Ok(())
+    }
+
     /// `:convert`: turn the selected event into a task, or task into an
     /// event, and select what it became.
     pub(super) fn convert(self: &Rc<Self>) -> Result<(), String> {

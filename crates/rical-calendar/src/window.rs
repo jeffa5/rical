@@ -73,8 +73,19 @@ pub struct Window {
     /// First day and number of days the grid last showed.
     last_grid_days: Cell<Option<(chrono::NaiveDate, usize)>>,
     monitors: RefCell<Vec<gio::FileMonitor>>,
+    /// The contacts folder's, and a read of it waiting for them to settle.
+    contact_monitors: RefCell<Vec<gio::FileMonitor>>,
+    contacts_debounce: RefCell<Option<glib::SourceId>>,
     pending: RefCell<BTreeSet<PathBuf>>,
     reload_all_pending: Cell<bool>,
+    /// A load in the background is running, and files changed meanwhile:
+    /// load again when it ends.
+    load_running: Cell<bool>,
+    load_again: Cell<bool>,
+    /// Files to import once the items are loaded.
+    waiting_files: RefCell<Vec<gio::File>>,
+    /// Loaded items are shown after the window's first frame.
+    first_frame: rical_ui::app::FirstFrame,
     debounce: RefCell<Option<glib::SourceId>>,
     toasts: adw::ToastOverlay,
     binds: Binds,
@@ -135,6 +146,9 @@ impl Window {
         this.watch();
         this.rebuild_calendar_list();
         this.refresh();
+        if !this.state.borrow().loaded {
+            this.load();
+        }
 
         // reminders
         this.check_alarms();
@@ -400,6 +414,7 @@ impl Window {
         narrow.add_setter(&today_icon, "visible", Some(&true.to_value()));
         window.add_breakpoint(narrow);
 
+        let first_frame = rical_ui::app::FirstFrame::watch(&window);
         Self {
             window,
             state,
@@ -424,8 +439,14 @@ impl Window {
             trim: Default::default(),
             last_grid_days: Cell::new(None),
             monitors: Default::default(),
+            contact_monitors: Default::default(),
+            contacts_debounce: Default::default(),
             pending: Default::default(),
             reload_all_pending: Cell::new(false),
+            load_running: Cell::new(false),
+            load_again: Cell::new(false),
+            waiting_files: RefCell::new(Vec::new()),
+            first_frame,
             debounce: Default::default(),
             toasts,
             binds,
@@ -830,15 +851,106 @@ impl Window {
         self.focus_view();
     }
 
+    /// Read everything again: calendars, their metadata and items.
     fn reload_all(self: &Rc<Self>) {
-        let result = self.state.borrow_mut().vdir.reload_all();
-        if let Err(e) = result {
-            warn!("reload failed: {e:#}");
+        self.load();
+    }
+
+    /// Read the calendars and their items in the background (from the
+    /// cache where files have not changed), and show them when read.
+    pub fn load(self: &Rc<Self>) {
+        if self.load_running.replace(true) {
+            self.load_again.set(true);
+            return;
         }
-        self.state.borrow_mut().invalidate();
-        self.watch();
-        self.rebuild_calendar_list();
-        self.refresh();
+        let (root, range, local) = {
+            let s = self.state.borrow();
+            let range = crate::layout::days_range(&s.visible_days(), s.local);
+            (s.vdir.root.clone(), range, s.local)
+        };
+        let (preload, early) = match self.state.borrow_mut().preload.take() {
+            Some((read, early)) => (Some(read), Some(early)),
+            None => (None, None),
+        };
+        let weak = Rc::downgrade(self);
+        let started = std::time::Instant::now();
+        glib::spawn_future_local(async move {
+            let loaded = gio::spawn_blocking(move || {
+                use rical_core::vdir::Vdir;
+                match preload {
+                    Some(h) => h
+                        .join()
+                        .map_err(|_| anyhow::anyhow!("reading the calendars failed"))?,
+                    None => {
+                        let vdir = Vdir::open(&root)?;
+                        vdir.warm(&range, local);
+                        Ok(vdir)
+                    }
+                }
+            })
+            .await;
+            let Some(w) = weak.upgrade() else { return };
+            // shown once the window is (a quick read must not hold it back)
+            let first = w.first_frame.clone();
+            first.then(move || w.loaded(loaded, early, started));
+        });
+    }
+
+    /// Show what [`Window::load`] read.
+    fn loaded(
+        self: &Rc<Self>,
+        loaded: Result<anyhow::Result<rical_core::vdir::Vdir>, Box<dyn std::any::Any + Send>>,
+        early: Option<rical_ui::util::EarlyWatch>,
+        started: std::time::Instant,
+    ) {
+        let w = self;
+        w.load_running.set(false);
+        // begun at start, before the window watched the folders: if they
+        // changed meanwhile, read again
+        if early.is_some_and(|e| e.changed()) {
+            w.load_again.set(true);
+        }
+        match loaded {
+            Ok(Ok(vdir)) => {
+                let read = started.elapsed();
+                let items = vdir.len();
+                {
+                    let mut s = w.state.borrow_mut();
+                    s.vdir = vdir;
+                    s.loaded = true;
+                    s.invalidate();
+                }
+                w.watch();
+                w.rebuild_calendar_list();
+                w.refresh();
+                let files = std::mem::take(&mut *w.waiting_files.borrow_mut());
+                if !files.is_empty() {
+                    w.import_files(&files);
+                }
+                w.check_alarms();
+                // then whether the files changed since the index was
+                // brought up to date, away from the window
+                if let Some(check) = w.state.borrow().vdir.check() {
+                    w.run_check(check);
+                }
+                if w.contact_monitors.borrow().is_empty() {
+                    w.load_contacts();
+                }
+                info!(
+                    target: "perf",
+                    "{items} calendar items read in {read:?}, shown in {:?} (ready at {:?})",
+                    started.elapsed(),
+                    rical_ui::app::since_start()
+                );
+            }
+            Ok(Err(e)) => w.toast(&format!("Could not read the calendars: {e:#}")),
+            Err(_) => w.toast("Could not read the calendars"),
+        }
+        // what changed while it was reading may have been missed
+        if w.load_again.take() {
+            w.pending.borrow_mut().clear();
+            w.load();
+        }
     }
 
     /// Watch the vdir root and each calendar folder, reloading changed items
@@ -914,29 +1026,152 @@ impl Window {
         let id = glib::timeout_add_local_once(Duration::from_millis(300), move || {
             let Some(w) = weak.upgrade() else { return };
             w.debounce.borrow_mut().take();
+            if w.load_running.get() {
+                // the load may have read these before they changed
+                w.load_again.set(true);
+                return;
+            }
             if w.reload_all_pending.take() {
                 info!("reloading vdir");
                 w.pending.borrow_mut().clear();
                 w.reload_all();
                 return;
             }
-            let paths = std::mem::take(&mut *w.pending.borrow_mut());
-            let mut changed = false;
-            {
-                let mut s = w.state.borrow_mut();
-                for path in &paths {
-                    changed |= s.vdir.reload(path);
-                }
-                if changed {
-                    info!("reloaded {} item(s)", paths.len());
-                    s.invalidate();
-                }
+            let paths: Vec<_> = std::mem::take(&mut *w.pending.borrow_mut())
+                .into_iter()
+                .collect();
+            // a sync of many: brought up to date away from the window
+            if paths.len() > 64 {
+                info!("{} items changed, reading them again", paths.len());
+                w.load();
+                return;
             }
-            if changed {
-                w.refresh();
+            let check = w.state.borrow().vdir.check_files(&paths);
+            match check {
+                Some(check) => w.run_check(check),
+                // an index in memory: only here
+                None => {
+                    let changed = w.state.borrow_mut().vdir.reload_files(&paths);
+                    if changed {
+                        w.state.borrow_mut().invalidate();
+                        w.refresh();
+                    }
+                }
             }
         });
         *self.debounce.borrow_mut() = Some(id);
+    }
+
+    /// Read the contacts folder (for guests' names and suggestions) on the
+    /// background pool, and watch it to read it again when it changes.
+    fn load_contacts(self: &Rc<Self>) {
+        let Some(dir) = self.state.borrow().contacts.clone() else {
+            return;
+        };
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let started = std::time::Instant::now();
+            let Ok(contacts) = gio::spawn_blocking(move || crate::state::read_contacts(&dir)).await
+            else {
+                return;
+            };
+            let Some(w) = weak.upgrade() else { return };
+            info!(
+                "read {} contact addresses in {:?}",
+                contacts.by_email_len(),
+                started.elapsed()
+            );
+            let dirs = contacts.dirs();
+            w.state.borrow().set_contacts(contacts);
+            w.watch_contacts(&dirs);
+            // names on screen may be contacts' now
+            w.refresh();
+        });
+    }
+
+    fn watch_contacts(self: &Rc<Self>, dirs: &[PathBuf]) {
+        let mut monitors = Vec::new();
+        for dir in dirs {
+            let Ok(monitor) = gio::File::for_path(dir).monitor_directory(
+                gio::FileMonitorFlags::WATCH_MOVES,
+                None::<&gio::Cancellable>,
+            ) else {
+                continue;
+            };
+            let weak = Rc::downgrade(self);
+            monitor.connect_changed(move |_, _, _, _| {
+                let Some(w) = weak.upgrade() else { return };
+                if let Some(id) = w.contacts_debounce.borrow_mut().take() {
+                    id.remove();
+                }
+                let weak = Rc::downgrade(&w);
+                let id = glib::timeout_add_local_once(Duration::from_secs(2), move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.contacts_debounce.borrow_mut().take();
+                        w.load_contacts();
+                    }
+                });
+                *w.contacts_debounce.borrow_mut() = Some(id);
+            });
+            monitors.push(monitor);
+        }
+        *self.contact_monitors.borrow_mut() = monitors;
+    }
+
+    /// Run `check` on the background pool, and show what it found: what
+    /// can be found quickly first (new and gone items, and those on
+    /// screen), then the rest.
+    fn run_check(self: &Rc<Self>, check: rical_core::vdir::Check) {
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let started = std::time::Instant::now();
+            let first = check.clone();
+            let found = gio::spawn_blocking(move || first.run_first()).await;
+            let Some(w) = weak.upgrade() else { return };
+            w.checked(found, "new, gone and shown items", started);
+            if !check.is_full() {
+                return;
+            }
+            drop(w);
+            let found = gio::spawn_blocking(move || check.run()).await;
+            let Some(w) = weak.upgrade() else { return };
+            w.checked(found, "the rest", started);
+        });
+    }
+
+    /// Show what a check found.
+    fn checked(
+        self: &Rc<Self>,
+        found: Result<anyhow::Result<rical_core::vdir::Changes>, Box<dyn std::any::Any + Send>>,
+        what: &str,
+        started: std::time::Instant,
+    ) {
+        let changes = match found {
+            Ok(Ok(c)) => c,
+            Ok(Err(e)) => {
+                log::warn!("could not check the calendars: {e:#}");
+                return;
+            }
+            Err(_) => return,
+        };
+        let changed = {
+            let mut s = self.state.borrow_mut();
+            let changed = s.vdir.take_changes(&changes);
+            if changed {
+                s.invalidate();
+            }
+            changed
+        };
+        info!(
+            "checked {what} at {:?}: {} item(s) read again, {} gone",
+            started.elapsed(),
+            changes.read.len(),
+            changes.gone.len()
+        );
+        if changed {
+            self.refresh();
+            self.check_alarms();
+        }
     }
 }
 
@@ -970,13 +1205,14 @@ fn calendar_check(row: &gtk::ListBoxRow) -> Option<gtk::CheckButton> {
 
 /// Details of a calendar: where it is on disk and what it holds.
 fn calendar_info(cal: &rical_core::Calendar, state: &crate::state::State) -> gtk::Popover {
+    // from the index: no item is read
     let items = state
         .vdir
-        .components()
-        .filter(|(c, _)| c.id == cal.id)
-        .map(|(_, comp)| comp.path().to_owned())
-        .collect::<std::collections::BTreeSet<_>>()
-        .len();
+        .calendars
+        .iter()
+        .position(|c| c.id == cal.id)
+        .and_then(|i| state.vdir.item_counts().get(i).copied())
+        .unwrap_or(0);
     let grid = gtk::Grid::builder()
         .row_spacing(6)
         .column_spacing(12)

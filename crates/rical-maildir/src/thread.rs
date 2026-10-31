@@ -73,10 +73,6 @@ pub fn base_subject(subject: &str) -> String {
     s.to_lowercase()
 }
 
-fn has_reply_prefix(subject: &str) -> bool {
-    base_subject(subject) != subject.trim().to_lowercase()
-}
-
 /// Messages in conversations, the newest conversation first.
 pub fn threads(messages: &[Summary]) -> Vec<Row> {
     threads_sorted(messages, SortKey::Date, false)
@@ -105,48 +101,77 @@ pub fn threads_sorted(messages: &[Summary], key: SortKey, reverse: bool) -> Vec<
 
     // a reply that lost its references still belongs under what it answers:
     // the latest earlier message with the same subject, within six weeks
-    let mut by_subject: HashMap<String, Vec<usize>> = HashMap::new();
-    for (i, m) in messages.iter().enumerate() {
-        by_subject
-            .entry(base_subject(&m.subject))
-            .or_default()
-            .push(i);
+    let bases: Vec<String> = messages.iter().map(|m| base_subject(&m.subject)).collect();
+    let mut by_subject: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, b) in bases.iter().enumerate() {
+        by_subject.entry(b).or_default().push(i);
+    }
+    // each subject's messages by date (then index), to find the latest
+    // earlier one by halves
+    for same in by_subject.values_mut() {
+        same.sort_by_key(|&j| (messages[j].date, j));
     }
     for i in 0..messages.len() {
         let m = &messages[i];
+        let base = bases[i].as_str();
         if parents[i].is_some()
-            || !has_reply_prefix(&m.subject)
-            || base_subject(&m.subject).is_empty()
+            || base.is_empty()
+            // no Re: or Fwd: before it
+            || base == m.subject.trim().to_lowercase()
         {
             continue;
         }
-        parents[i] = by_subject
-            .get(&base_subject(&m.subject))
-            .into_iter()
-            .flatten()
+        // the latest first, back to six weeks before
+        let Some(same) = by_subject.get(base) else {
+            continue;
+        };
+        let upto = same.partition_point(|&j| messages[j].date <= m.date);
+        parents[i] = same[..upto]
+            .iter()
+            .rev()
             .copied()
-            .filter(|&j| {
+            .take_while(|&j| m.date - messages[j].date < 42 * 86_400)
+            .find(|&j| {
                 j != i
-                    && messages[j].date <= m.date
-                    && m.date - messages[j].date < 42 * 86_400
                     // not something that is itself a reply to this one
                     && !(messages[j].in_reply_to.iter().chain(&messages[j].references))
                         .any(|id| Some(id.as_str()) == m.message_id.as_deref())
-            })
-            .max_by_key(|&j| (messages[j].date, j));
+            });
     }
 
-    // no loops: a parent chain that returns to itself is cut
+    // no loops: a parent chain that returns to itself is cut. A chain
+    // known to end is not walked again, so this is linear.
+    let mut ends = vec![false; messages.len()];
+    let mut walk = vec![usize::MAX; messages.len()];
+    let mut path = Vec::new();
     for i in 0..messages.len() {
-        let mut seen = vec![i];
+        if ends[i] {
+            continue;
+        }
+        path.clear();
+        path.push(i);
+        walk[i] = i;
         let mut p = parents[i];
+        let mut cycle = false;
         while let Some(x) = p {
-            if seen.contains(&x) {
-                parents[i] = None;
+            if ends[x] {
                 break;
             }
-            seen.push(x);
+            if walk[x] == i {
+                cycle = true;
+                break;
+            }
+            walk[x] = i;
+            path.push(x);
             p = parents[x];
+        }
+        if cycle {
+            parents[i] = None;
+            ends[i] = true;
+        } else {
+            for &x in &path {
+                ends[x] = true;
+            }
         }
     }
     let mut children: Vec<Vec<usize>> = vec![Vec::new(); messages.len()];
@@ -160,51 +185,67 @@ pub fn threads_sorted(messages: &[Summary], key: SortKey, reverse: bool) -> Vec<
     for c in &mut children {
         c.sort_by_key(|&i| (messages[i].date, i));
     }
-    // the newest message anywhere in each tree, and the size of all of it
-    fn newest(i: usize, messages: &[Summary], children: &[Vec<usize>]) -> i64 {
-        children[i]
-            .iter()
-            .map(|&c| newest(c, messages, children))
-            .max()
-            .unwrap_or(i64::MIN)
-            .max(messages[i].date)
+    // each tree in order, parents before children (no recursion: a long
+    // chain of replies is as deep as it is long)
+    let mut order: Vec<(usize, usize)> = Vec::with_capacity(messages.len());
+    let mut stack: Vec<(usize, usize)> = Vec::new();
+    for &r in &roots {
+        stack.push((r, 0));
+        while let Some((i, depth)) = stack.pop() {
+            order.push((i, depth));
+            stack.extend(children[i].iter().rev().map(|&c| (c, depth + 1)));
+        }
     }
-    fn total(i: usize, messages: &[Summary], children: &[Vec<usize>]) -> u64 {
-        messages[i].size
-            + children[i]
-                .iter()
-                .map(|&c| total(c, messages, children))
-                .sum::<u64>()
+    // the newest message anywhere in each tree, and the size of all of it,
+    // worked out once, children first
+    let mut newest: Vec<i64> = messages.iter().map(|m| m.date).collect();
+    let mut total: Vec<u64> = messages.iter().map(|m| m.size).collect();
+    for &(i, _) in order.iter().rev() {
+        if let Some(p) = parents[i] {
+            newest[p] = newest[p].max(newest[i]);
+            total[p] += total[i];
+        }
     }
     let mut roots: Vec<usize> = roots;
-    roots.sort_by(|&a, &b| {
-        let ord = match key {
-            SortKey::Date => newest(b, messages, &children).cmp(&newest(a, messages, &children)),
-            SortKey::From => from_key(&messages[a]).cmp(&from_key(&messages[b])),
-            SortKey::Subject => {
-                base_subject(&messages[a].subject).cmp(&base_subject(&messages[b].subject))
-            }
-            SortKey::Size => total(b, messages, &children).cmp(&total(a, messages, &children)),
-        };
-        ord.then(a.cmp(&b))
-    });
+    match key {
+        SortKey::Date => roots.sort_by_key(|&r| (std::cmp::Reverse(newest[r]), r)),
+        SortKey::Size => roots.sort_by_key(|&r| (std::cmp::Reverse(total[r]), r)),
+        SortKey::From => roots.sort_by_cached_key(|&r| (from_key(&messages[r]), r)),
+        SortKey::Subject => roots.sort_by_key(|&r| (bases[r].as_str(), r)),
+    }
     if reverse {
         roots.reverse();
     }
 
-    let mut out = Vec::with_capacity(messages.len());
-    fn emit(i: usize, depth: usize, head: bool, children: &[Vec<usize>], out: &mut Vec<Row>) {
-        out.push(Row {
-            index: i,
-            depth,
-            head,
-        });
-        for &c in &children[i] {
-            emit(c, depth + 1, false, children, out);
+    // where each tree starts in `order`, to lay them out in sorted order
+    let mut start = vec![0usize; messages.len()];
+    let mut at = 0;
+    while at < order.len() {
+        let r = order[at].0;
+        start[r] = at;
+        at += 1;
+        while at < order.len() && order[at].1 > 0 {
+            at += 1;
         }
     }
+    let mut out = Vec::with_capacity(messages.len());
     for r in roots {
-        emit(r, 0, true, &children, &mut out);
+        let from = start[r];
+        out.push(Row {
+            index: r,
+            depth: 0,
+            head: true,
+        });
+        out.extend(
+            order[from + 1..]
+                .iter()
+                .take_while(|(_, d)| *d > 0)
+                .map(|&(index, depth)| Row {
+                    index,
+                    depth,
+                    head: false,
+                }),
+        );
     }
     out
 }
@@ -261,6 +302,32 @@ mod tests {
             attachments: false,
             preview: String::new(),
         }
+    }
+
+    #[test]
+    fn a_long_chain_of_replies_and_a_loop_are_laid_out() {
+        // each answers the one before, 50,000 deep: no recursion to run out
+        // of stack, and in order
+        let ids: Vec<String> = (0..50_000).map(|i| format!("m{i}")).collect();
+        let mut msgs: Vec<Summary> = (0..ids.len())
+            .map(|i| {
+                let before: Vec<&str> = if i == 0 { vec![] } else { vec![&ids[i - 1]] };
+                m(&ids[i], &before, i as i64)
+            })
+            .collect();
+        // and two that answer each other
+        msgs.push(m("x", &["y"], 1));
+        msgs.push(m("y", &["x"], 2));
+        let rows = threads(&msgs);
+        assert_eq!(rows.len(), msgs.len());
+        let chain: Vec<&Row> = rows.iter().filter(|r| r.index < 50_000).collect();
+        assert!(
+            chain
+                .iter()
+                .enumerate()
+                .all(|(i, r)| r.index == i && r.depth == i)
+        );
+        assert_eq!(rows.iter().filter(|r| r.head).count(), 2);
     }
 
     #[test]

@@ -285,6 +285,26 @@ impl Queue {
         Ok(out)
     }
 
+    /// The directory messages arrive in, to watch.
+    pub fn arrivals(&self) -> PathBuf {
+        self.dir("new")
+    }
+
+    /// When the next waiting message comes due (a retry, or one held back
+    /// to be taken back), if any is waiting.
+    pub fn next_due(&self) -> Result<Option<DateTime<Utc>>> {
+        let mut next: Option<DateTime<Utc>> = None;
+        for id in self.ids("new")? {
+            let Ok(raw) = fs::read(self.dir("new").join(&id)) else {
+                continue;
+            };
+            if let Some(t) = next_attempt(&raw) {
+                next = Some(next.map_or(t, |n| n.min(t)));
+            }
+        }
+        Ok(next)
+    }
+
     /// Take the oldest message that is due at `now`, if there is one.
     pub fn claim_next(&self, now: DateTime<Utc>) -> Result<Option<Claim>> {
         for id in self.ids("new")? {

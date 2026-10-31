@@ -26,7 +26,7 @@ pub fn remind(vdir: &Path, before: Option<&str>, once: bool) -> anyhow::Result<(
     let mut from = Utc::now() - CATCH_UP;
     // loaded once; after that only files that changed are read again, and
     // the alarms of the hours ahead are planned once rather than every check
-    let mut vdir = Vdir::load(vdir)?;
+    let mut vdir = Vdir::open(vdir)?;
     let mut plan: Option<AlarmPlan> = None;
     loop {
         let now = Utc::now();
@@ -36,7 +36,7 @@ pub fn remind(vdir: &Path, before: Option<&str>, once: bool) -> anyhow::Result<(
             Err(e) => {
                 warn!("could not read {:?}: {e:#}", vdir.root);
                 // calendars come and go too: start again
-                if let Ok(v) = Vdir::load(&vdir.root) {
+                if let Ok(v) = Vdir::open(&vdir.root) {
                     vdir = v;
                     plan = None;
                 }

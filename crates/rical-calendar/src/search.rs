@@ -181,9 +181,17 @@ fn find(w: &Window, query: &str) -> Vec<Hit> {
     let local = state.local;
     let days = |d: NaiveDate| [d - Days::new(366), d + Days::new(366)];
     let range = layout::days_range(&days(today), local);
+    // only items whose text in the index has the words are worked out
+    // into occurrences (then matched properly): a few, rather than all of
+    // two years
     let mut occ = state
         .vdir
-        .query(&range, &[Kind::Event, Kind::Todo, Kind::Journal], local)
+        .query_matching(
+            &range,
+            &[Kind::Event, Kind::Todo, Kind::Journal],
+            local,
+            Some(&q),
+        )
         .into_iter()
         .filter(|o| !state.hidden.contains(&o.calendar) && matches(o, &q))
         .collect::<Vec<_>>();

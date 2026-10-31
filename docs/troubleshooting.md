@@ -12,6 +12,24 @@ For more detail, set `RUST_LOG`: `RUST_LOG=debug rical-calendar` logs
 everything, to the file and the terminal; `RUST_LOG=rical_core=debug`
 narrows it to one part.
 
+### Slow to start?
+
+Each app logs how long it took to show its window and to be ready, as
+`perf` lines:
+
+```text
+perf: window shown at 512ms
+perf: 50000 calendar items read in 120ms, shown in 140ms (ready at 0.62s)
+```
+
+To measure on something big without your own data, `scripts/demo-big.sh`
+writes a fake calendar, address books and mail of any size, and
+`scripts/perf.sh` times an app on them in a private headless session (time
+to the window, time to ready, CPU while idle, memory). The first start
+after an upgrade, or with an empty `~/.cache/rical/`, reads every file to
+build the [index](files-and-sync.md#other-files-rical-uses), so it is
+slower; later starts read only what changed.
+
 ## Details for a bug report
 
 **About Calendar** (in the main menu) → **Troubleshooting** →

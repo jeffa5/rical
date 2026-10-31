@@ -20,6 +20,7 @@ bottom:
 | + | `:subtask` | Adds a subtask to a task |
 | Locate | `v` | Shows it in the calendar (from lists) |
 | Make it a task / event | `Ctrl+T` | See [Converting](#converting-between-events-and-tasks) |
+| Duplicate | `Ctrl+D` | A copy beside it (a whole series), selected; see [Duplicating](#duplicating) |
 | Raw | `R` | Shows the `.ics` file as it is on disk |
 | Delete | `x` | Deletes it |
 
@@ -90,6 +91,14 @@ kept. The converted item gets a new file and identity (servers may refuse a
 change of type in place). rical won't convert an event with guests (removing
 the original would tell them it was cancelled or declined) or a task with
 subtasks.
+
+## Duplicating
+
+`Ctrl+D` (`:duplicate`) copies the selected event, task or journal entry
+into a new file in the same calendar, and selects the copy. A repeating
+event is copied whole, with its moved and changed instances. The copy has
+no guests (written with them, a scheduling server would invite them all
+again as it syncs), and a copied task is not done yet. Undo removes it.
 
 ## Guests
 

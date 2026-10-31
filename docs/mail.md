@@ -26,8 +26,8 @@ address and your contacts folder, and saves them.
 ones: `mail` (the Maildir root), `me` (your addresses), `contacts` (for
 completing addresses), `account NAME = Name <addr>` (your address in each
 account), `send`
-(e.g. `rical-mail-queue run --once`, run when you send; leave it empty if a
-service sends), `editor`, `wrap`, `signature`, `markdown`, `spell` (e.g.
+(leave it empty when `rical-mail-queue run` is running, as it sends each
+message as it arrives; otherwise e.g. `rical-mail-queue run --once`), `editor`, `wrap`, `signature`, `markdown`, `spell` (e.g.
 `aspell list`; misspelt words are underlined). `--help` lists
 them all.
 
@@ -157,8 +157,13 @@ applies it; the mail app never writes to the calendar.
   and subject (`notify`).
 - A draft is kept every minute while you write, and files dropped on the
   window attach.
-- Big folders open from a header cache: 20,000 messages in about a tenth of
-  a second.
+- Big folders open from a header index (`headers.sqlite` in
+  `~/.local/state/rical-mail/cache/`): 20,000 messages in about a tenth of
+  a second. It keeps headers, the preview line and where each message is
+  (with its read and flagged marks); a message's body is read from its
+  file when you open it. A folder you open shows at once as the index had
+  it, and is then listed in the background: mail that arrived, went or
+  was marked meanwhile appears a moment later.
 
 ## Searching
 

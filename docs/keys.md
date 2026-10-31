@@ -104,6 +104,7 @@ x =                        # unbind x
 | `R` | `:raw` |
 | `v` | `:reveal` |
 | `<C-t>` | `:convert` |
+| `<C-d>` | `:duplicate` |
 | `<C-e>` | `:edit` |
 | `x` | `:delete` |
 | `<Delete>` | `:delete` |

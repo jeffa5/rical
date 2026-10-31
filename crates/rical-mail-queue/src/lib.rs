@@ -10,4 +10,5 @@ pub mod config;
 pub mod message;
 pub mod queue;
 pub mod send;
+pub mod watch;
 pub mod worker;

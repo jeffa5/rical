@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::{
-    book::{Books, CardId},
+    book::{Books, CardId, CardRef, Keyed},
     edit::Draft,
     model::{Address, Card, Field},
     text::{email_key, fold, name_key, phone_tail},
@@ -63,14 +63,16 @@ impl Group {
 /// Cards sharing only a name make groups of their own: a common name never
 /// joins otherwise unrelated cards together.
 pub fn find(books: &Books) -> Vec<Group> {
-    let mut cards: Vec<(CardId, Card)> = Vec::new();
+    // from the index: no card is read
+    let keyed = books.keyed();
+    let mut cards: Vec<&Keyed> = Vec::new();
     let mut first_book: HashMap<&str, Option<usize>> = HashMap::new();
-    for (id, _, c) in books.cards() {
-        if c.kind() != "individual" {
+    for c in &keyed {
+        if c.kind != "individual" {
             continue;
         }
-        if let Some(uid) = c.uid().filter(|u| !u.is_empty()) {
-            let book = books.book_of(&id.path);
+        if let Some(uid) = c.uid.as_deref().filter(|u| !u.is_empty()) {
+            let book = books.book_of(&c.id.path);
             match first_book.get(uid) {
                 // a copy in another book
                 Some(b) if *b != book => continue,
@@ -80,32 +82,29 @@ pub fn find(books: &Books) -> Vec<Group> {
                 }
             }
         }
-        cards.push((id, c));
+        cards.push(c);
     }
     let mut strong: HashMap<Reason, Vec<usize>> = HashMap::new();
     let mut by_name: HashMap<String, (String, Vec<usize>)> = HashMap::new();
-    for (i, (_, c)) in cards.iter().enumerate() {
+    for (i, c) in cards.iter().enumerate() {
         let mut add = |r: Reason| {
             let v = strong.entry(r).or_default();
             if v.last() != Some(&i) {
                 v.push(i);
             }
         };
-        if let Some(uid) = c.uid().filter(|u| !u.is_empty()) {
+        if let Some(uid) = c.uid.as_deref().filter(|u| !u.is_empty()) {
             add(Reason::SameUid(uid.to_owned()));
         }
-        for e in c.emails() {
-            let k = email_key(&e.value);
+        for k in &c.email_keys {
             if k.contains('@') {
-                add(Reason::SameEmail(k));
+                add(Reason::SameEmail(k.clone()));
             }
         }
-        for p in c.phones() {
-            if let Some(t) = phone_tail(&p.value) {
-                add(Reason::SamePhone(t));
-            }
+        for t in &c.phone_tails {
+            add(Reason::SamePhone(t.clone()));
         }
-        let display = c.display_name();
+        let display = c.name.clone();
         let key = name_key(&display);
         if key.split(' ').count() >= 2 {
             let entry = by_name.entry(key).or_insert_with(|| (display, Vec::new()));
@@ -153,7 +152,7 @@ pub fn find(books: &Books) -> Vec<Group> {
             grouped[i] = true;
         }
         out.push(Group {
-            cards: members.iter().map(|&i| cards[i].0.clone()).collect(),
+            cards: members.iter().map(|&i| cards[i].id.clone()).collect(),
             reasons,
         });
     }
@@ -162,7 +161,7 @@ pub fn find(books: &Books) -> Vec<Group> {
         let loose: Vec<usize> = members.into_iter().filter(|&i| !grouped[i]).collect();
         if loose.len() > 1 {
             out.push(Group {
-                cards: loose.iter().map(|&i| cards[i].0.clone()).collect(),
+                cards: loose.iter().map(|&i| cards[i].id.clone()).collect(),
                 reasons: vec![Reason::SameName(shown)],
             });
         }
@@ -255,10 +254,11 @@ fn union<T: Clone>(list: &mut Vec<T>, more: &[T], key: impl Fn(&T) -> String) {
 /// Plan merging `ids` (two or more): keep the one that says the most, take
 /// in what the others add, and list where they disagree.
 pub fn plan(books: &Books, ids: &[CardId]) -> Option<Merge> {
-    let cards: Vec<(CardId, Card)> = ids
+    let read: Vec<(CardId, CardRef)> = ids
         .iter()
         .filter_map(|id| books.get(id).map(|c| (id.clone(), c)))
         .collect();
+    let cards: Vec<(CardId, Card)> = read.iter().map(|(id, c)| (id.clone(), c.card())).collect();
     if cards.len() < 2 {
         return None;
     }
@@ -444,6 +444,7 @@ mod tests {
         b.update(&m.keep, &m.draft).unwrap();
         b.delete(&m.others[0]).unwrap();
         let kept = b.get(&m.keep).unwrap();
+        let kept = kept.card();
         assert_eq!(kept.emails().len(), 2);
         assert_eq!(kept.birthday().as_deref(), Some("1990-01-30"));
         assert_eq!(b.len(), 1);

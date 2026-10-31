@@ -45,6 +45,9 @@ pub struct Window {
     pub composes: RefCell<Vec<Rc<crate::compose::Compose>>>,
     pub history: RefCell<Vec<String>>,
     pending_keys: RefCell<Vec<rical_ui::binds::Key>>,
+    /// Whether each fold in the folder list (an account, a folder with
+    /// folders in it, everything) is open as shown.
+    folds: RefCell<std::collections::HashMap<String, bool>>,
     monitors: RefCell<Vec<gio::FileMonitor>>,
     debounce: RefCell<Option<glib::SourceId>>,
     read_timer: RefCell<Option<glib::SourceId>>,
@@ -54,6 +57,8 @@ pub struct Window {
     pub quiet_until: Cell<Option<Instant>>,
     pub syncing: Cell<bool>,
     me: RefCell<std::rc::Weak<Window>>,
+    /// What loads is shown after the window's first frame.
+    first_frame: rical_ui::app::FirstFrame,
 }
 
 /// "14:05" today, "5 Nov" this year, "5 Nov 2025" before.
@@ -305,6 +310,7 @@ impl Window {
         narrow.add_setter(&outer, "collapsed", Some(&true.to_value()));
         window.add_breakpoint(narrow);
 
+        let first_frame = rical_ui::app::FirstFrame::watch(&window);
         let this = Rc::new(Self {
             window,
             app: app.clone(),
@@ -328,12 +334,14 @@ impl Window {
             history: Default::default(),
             pending_keys: Default::default(),
             monitors: Default::default(),
+            folds: Default::default(),
             debounce: Default::default(),
             read_timer: Default::default(),
             reader_ticket: Cell::new(0),
             quiet_until: Cell::new(None),
             syncing: Cell::new(false),
             me: Default::default(),
+            first_frame,
         });
         *this.me.borrow_mut() = Rc::downgrade(&this);
         let weak = Rc::downgrade(&this);
@@ -358,9 +366,37 @@ impl Window {
         this.setup_actions();
         this.watch();
         this.refresh();
-        this.load();
+        this.open_place();
+        this.load_others();
         this.focus_view();
         this
+    }
+
+    /// Read the contacts (to complete addresses) on the background pool,
+    /// from their index (brought up to date there).
+    fn load_others(self: &Rc<Self>) {
+        let Some(contacts) = self.state.borrow().opts.contacts.clone() else {
+            return;
+        };
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let read = gio::spawn_blocking(move || {
+                rical_cards::Books::open(&contacts)
+                    .map_err(|e| log::warn!("contacts {}: {e:#}", contacts.display()))
+                    .ok()
+            })
+            .await;
+            let (Some(w), Ok(books)) = (weak.upgrade(), read) else {
+                return;
+            };
+            {
+                let mut s = w.state.borrow_mut();
+                s.books = books;
+                s.build_people();
+            }
+            // whether the sender is a contact
+            w.show_message();
+        });
     }
 
     pub fn present(&self) {
@@ -656,8 +692,8 @@ impl Window {
             let name = row.widget_name();
             if name == "outbox" {
                 let _ = w.execute("outbox");
-            } else if let Some(account) = name.strip_prefix("account:") {
-                w.toggle_account(account);
+            } else if let Some(key) = name.strip_prefix("fold:") {
+                let _ = w.execute(&format!("fold-folder {}", rical_ui::command::quote(key)));
             } else if let Some(role) = name.strip_prefix("unified:") {
                 let _ = w.execute(&format!("unified {role}"));
             } else if let Some(f) = w
@@ -819,18 +855,15 @@ impl Window {
         }
         let s = self.state.borrow();
         let mut select: Option<gtk::ListBoxRow> = None;
-        let icon = |role: Role| match role {
-            Role::Inbox => "mail-unread-symbolic",
-            Role::Drafts => "document-edit-symbolic",
-            Role::Sent => "mail-send-symbolic",
-            Role::Archive => "folder-symbolic",
-            Role::Junk => "mail-mark-junk-symbolic",
-            Role::Trash => "user-trash-symbolic",
-            Role::Other => "folder-symbolic",
-        };
+        let remembered = rical_ui::uistate::get("folds").unwrap_or_default();
+        self.folds.borrow_mut().clear();
         if s.grouped() {
             // everything together, then each account
-            self.folder_list.append(&heading_row("All accounts"));
+            let open = remembered_fold(&remembered, ALL_FOLD).unwrap_or(true);
+            self.folds.borrow_mut().insert(ALL_FOLD.to_owned(), open);
+            let head = fold_row("All accounts", 0, open, 0, true);
+            head.set_widget_name(&format!("fold:{ALL_FOLD}"));
+            self.folder_list.append(&head);
             for role in [
                 Role::Inbox,
                 Role::Drafts,
@@ -839,6 +872,9 @@ impl Window {
                 Role::Junk,
                 Role::Trash,
             ] {
+                if !open {
+                    break;
+                }
                 let of = s.with_role(role);
                 if of.is_empty() || (role != Role::Inbox && of.len() < 2) {
                     continue;
@@ -848,62 +884,51 @@ impl Window {
                 } else {
                     of.iter().map(|f| f.unread).sum()
                 };
-                let row = folder_row(icon(role), unified_title(role), unread, 0);
+                let row = folder_row(folder_icon(role), unified_title(role), unread, 1, None);
                 row.set_widget_name(&format!("unified:{}", unified_key(role)));
                 self.folder_list.append(&row);
                 if s.place == Place::Unified(role) {
                     select = Some(row);
                 }
             }
-            let remembered = rical_ui::uistate::get("accounts").unwrap_or_default();
             for a in s.accounts() {
-                let unread: usize = a
+                let entries: Vec<(String, usize)> = a
                     .folders
                     .iter()
-                    .filter(|&&i| !matches!(s.folders[i].role, Role::Junk | Role::Trash))
-                    .map(|&i| s.folders[i].unread)
-                    .sum();
+                    .map(|&i| (s.short_name(&s.folders[i]), i))
+                    .collect();
+                let unread = counted_unread(&s, entries.iter().map(|e| e.1));
                 // open when asked to be, else when it has something unread
-                let open = match remembered.split(',').find_map(|e| {
-                    e.strip_suffix('+')
-                        .filter(|n| *n == a.name)
-                        .map(|_| true)
-                        .or_else(|| e.strip_suffix('-').filter(|n| *n == a.name).map(|_| false))
-                }) {
-                    Some(v) => v,
-                    None => unread > 0,
-                };
-                let head = account_row(&a.name, unread, open);
-                head.set_widget_name(&format!("account:{}", a.name));
+                // or is where you are
+                let here = entries
+                    .iter()
+                    .any(|e| s.place == Place::Folder(s.folders[e.1].path.clone()));
+                let open = remembered_fold(&remembered, &a.name).unwrap_or(unread > 0 || here);
+                self.folds.borrow_mut().insert(a.name.clone(), open);
+                let head = fold_row(&a.name, unread, open, 0, true);
+                head.set_widget_name(&format!("fold:{}", a.name));
                 self.folder_list.append(&head);
-                if !open {
-                    continue;
-                }
-                for &i in &a.folders {
-                    let f = &s.folders[i];
-                    let row = folder_row(icon(f.role), &s.short_name(f), f.unread, 1);
-                    row.set_widget_name(&f.path.to_string_lossy());
-                    self.droppable(&row, &f.name);
-                    self.folder_list.append(&row);
-                    if s.place == Place::Folder(f.path.clone()) {
-                        select = Some(row);
-                    }
+                if open {
+                    let entries: Vec<(Vec<&str>, usize)> = entries
+                        .iter()
+                        .map(|(n, i)| (n.split('/').collect(), *i))
+                        .collect();
+                    let prefix = format!("{}/", a.name);
+                    self.append_tree(&s, &entries, 0, 1, &prefix, &remembered, &mut select);
                 }
             }
             self.folder_list.append(&heading_row("Outgoing"));
         } else {
-            for f in &s.folders {
-                let row = folder_row(icon(f.role), &f.name, f.unread, 0);
-                row.set_widget_name(&f.path.to_string_lossy());
-                self.droppable(&row, &f.name);
-                self.folder_list.append(&row);
-                if s.place == Place::Folder(f.path.clone()) {
-                    select = Some(row);
-                }
-            }
+            let entries: Vec<(Vec<&str>, usize)> = s
+                .folders
+                .iter()
+                .enumerate()
+                .map(|(i, f)| (f.name.split('/').collect(), i))
+                .collect();
+            self.append_tree(&s, &entries, 0, 0, "", &remembered, &mut select);
         }
         let n = s.outbox_count();
-        let row = folder_row("network-transmit-symbolic", "Outbox", n, 0);
+        let row = folder_row("network-transmit-symbolic", "Outbox", n, 0, None);
         row.set_widget_name("outbox");
         self.folder_list.append(&row);
         if s.place == Place::Outbox {
@@ -917,34 +942,98 @@ impl Window {
         }
     }
 
-    /// Fold or open an account's folders, and remember which.
-    pub fn toggle_account(&self, name: &str) {
-        let (open_now, remembered) = {
-            let s = self.state.borrow();
-            let remembered = rical_ui::uistate::get("accounts").unwrap_or_default();
-            let unread: usize = s
-                .accounts()
+    /// Folders as a tree by the parts of their names: a folder with folders
+    /// in it (`[Gmail]`, `Projects`) folds them away. `entries` are the names
+    /// split at `/` with the folder's index, in the order to show them.
+    #[allow(clippy::too_many_arguments)]
+    fn append_tree(
+        &self,
+        s: &crate::state::State,
+        entries: &[(Vec<&str>, usize)],
+        depth: usize,
+        indent: i32,
+        prefix: &str,
+        remembered: &str,
+        select: &mut Option<gtk::ListBoxRow>,
+    ) {
+        // the names at this level, in order, those with nothing in them first
+        let mut names: Vec<&str> = Vec::new();
+        for (parts, _) in entries {
+            if !names.contains(&parts[depth]) {
+                names.push(parts[depth]);
+            }
+        }
+        let inside = |n: &str| {
+            entries
                 .iter()
-                .find(|a| a.name == name)
-                .map_or(0, |a| a.folders.iter().map(|&i| s.folders[i].unread).sum());
-            let open = remembered
-                .split(',')
-                .find_map(|e| {
-                    e.strip_suffix('+')
-                        .filter(|n| *n == name)
-                        .map(|_| true)
-                        .or_else(|| e.strip_suffix('-').filter(|n| *n == name).map(|_| false))
-                })
-                .unwrap_or(unread > 0);
-            (open, remembered)
+                .filter(|(p, _)| p.len() > depth + 1 && p[depth] == n)
+                .cloned()
+                .collect::<Vec<_>>()
         };
+        names.sort_by_key(|n| !inside(n).is_empty());
+        for name in names {
+            let own = entries
+                .iter()
+                .find(|(p, _)| p.len() == depth + 1 && p[depth] == name)
+                .map(|e| e.1);
+            let kids = inside(name);
+            let key = format!("{prefix}{name}");
+            let mut fold = None;
+            if !kids.is_empty() {
+                let here = kids
+                    .iter()
+                    .any(|e| s.place == Place::Folder(s.folders[e.1].path.clone()));
+                let unread = counted_unread(s, kids.iter().map(|e| e.1));
+                let open = remembered_fold(remembered, &key).unwrap_or(unread > 0 || here);
+                self.folds.borrow_mut().insert(key.clone(), open);
+                fold = Some((key.clone(), open, unread));
+            }
+            let row = match (own, &fold) {
+                (Some(i), _) => {
+                    let f = &s.folders[i];
+                    let toggle = fold.as_ref().map(|(k, open, _)| (k.as_str(), *open));
+                    let row = folder_row(folder_icon(f.role), name, f.unread, indent, toggle);
+                    row.set_widget_name(&f.path.to_string_lossy());
+                    self.droppable(&row, &f.name);
+                    if s.place == Place::Folder(f.path.clone()) {
+                        *select = Some(row.clone());
+                    }
+                    row
+                }
+                (None, Some((k, open, unread))) => {
+                    let row = fold_row(name, *unread, *open, indent, false);
+                    row.set_widget_name(&format!("fold:{k}"));
+                    row
+                }
+                (None, None) => continue,
+            };
+            self.folder_list.append(&row);
+            if let Some((_, true, _)) = fold {
+                self.append_tree(
+                    s,
+                    &kids,
+                    depth + 1,
+                    indent + 1,
+                    &format!("{key}/"),
+                    remembered,
+                    select,
+                );
+            }
+        }
+    }
+
+    /// Fold or open a part of the folder list (an account, a folder with
+    /// folders in it, or `*` for everything together), and remember which.
+    pub fn toggle_fold(&self, key: &str) {
+        let open_now = self.folds.borrow().get(key).copied().unwrap_or(false);
+        let remembered = rical_ui::uistate::get("folds").unwrap_or_default();
         let mut entries: Vec<String> = remembered
-            .split(',')
-            .filter(|e| !e.is_empty() && e[..e.len() - 1] != *name)
+            .split('|')
+            .filter(|e| !e.is_empty() && e[..e.len() - 1] != *key)
             .map(str::to_owned)
             .collect();
-        entries.push(format!("{name}{}", if open_now { '-' } else { '+' }));
-        rical_ui::uistate::set("accounts", &entries.join(","));
+        entries.push(format!("{key}{}", if open_now { '-' } else { '+' }));
+        rical_ui::uistate::set("folds", &entries.join("|"));
         self.fill_folders();
     }
 
@@ -1069,21 +1158,33 @@ impl Window {
                 s.opts.read_after,
             )
         };
-        // a big message is parsed away from the window
+        // a big message is parsed away from the window, and an invitation
+        // compared with the calendar there too
         self.state.borrow_mut().opened = None;
         let ticket = self.reader_ticket.get() + 1;
         self.reader_ticket.set(ticket);
         let weak = Rc::downgrade(self);
         let p = path.clone();
+        let vdir = self.state.borrow().opts.vdir.clone();
         glib::spawn_future_local(async move {
-            let opened = gio::spawn_blocking(move || read::open(&p)).await;
+            let opened = gio::spawn_blocking(move || {
+                read::open(&p).map(|o| {
+                    let diffs = if o.invites.is_empty() {
+                        Vec::new()
+                    } else {
+                        crate::state::invite_diffs(vdir.as_deref(), &p)
+                    };
+                    (o, diffs)
+                })
+            })
+            .await;
             let Some(w) = weak.upgrade() else { return };
             // another was chosen meanwhile
             if w.reader_ticket.get() != ticket {
                 return;
             }
             match opened {
-                Ok(Ok(o)) => w.shown_opened(o, &path, note.as_deref(), delay),
+                Ok(Ok((o, diffs))) => w.shown_opened(o, diffs, note.as_deref(), delay),
                 Ok(Err(e)) => {
                     w.reader.clear();
                     w.toast(&format!("{e:#}"));
@@ -1096,7 +1197,7 @@ impl Window {
     fn shown_opened(
         self: &Rc<Self>,
         o: read::Opened,
-        path: &std::path::Path,
+        diffs: Vec<rical_core::diff::Diff>,
         note: Option<&str>,
         delay: Option<u32>,
     ) {
@@ -1105,11 +1206,6 @@ impl Window {
             .first()
             .is_some_and(|f| self.state.borrow().is_contact(&f.address));
         self.reader_title.set_title(&o.subject);
-        let diffs = if o.invites.is_empty() {
-            Vec::new()
-        } else {
-            self.state.borrow_mut().invite_diffs(path)
-        };
         self.reader.show(&o, in_contacts, note, &diffs);
         self.state.borrow_mut().opened = Some(Rc::new(o));
         let unread = self
@@ -1132,20 +1228,70 @@ impl Window {
     /// Read the messages of the place in front, away from the window, and
     /// show them when they are read. A spinner shows while the list is empty.
     pub fn load(self: &Rc<Self>) {
+        self.load_with(false);
+    }
+
+    /// Open the place: [`Window::load`], showing what the header index has
+    /// first (as the folders were when last listed). Not after a change,
+    /// which the index has yet to hear of, so would flicker back.
+    pub fn open_place(self: &Rc<Self>) {
+        self.load_with(true);
+    }
+
+    fn load_with(self: &Rc<Self>, quick: bool) {
         let job = self.state.borrow_mut().load_job();
         if self.state.borrow().messages.is_empty() {
             self.list_stack.set_visible_child_name("loading");
         }
         let weak = Rc::downgrade(self);
+        let started = std::time::Instant::now();
         glib::spawn_future_local(async move {
+            // the folders as the header index has them, at once, if it
+            // has them; then as they are, which shows only what changed
+            let quick = job.quick().filter(|_| quick);
+            if let Some(quick) = quick {
+                let loaded = gio::spawn_blocking(move || quick.run()).await;
+                let Some(w) = weak.upgrade() else { return };
+                let Ok(l) = loaded else { return };
+                w.show_loaded(l, started, false);
+            }
             let loaded = gio::spawn_blocking(move || job.run()).await;
             let Some(w) = weak.upgrade() else { return };
             let Ok(l) = loaded else { return };
-            let applied = w.state.borrow_mut().apply_loaded(l);
+            w.show_loaded(l, started, true);
+        });
+    }
+
+    /// Show messages a load read, once the window is shown (a quick read
+    /// must not hold it back; what waits for it is shown in order);
+    /// `caught_up`, only if they changed.
+    fn show_loaded(
+        self: &Rc<Self>,
+        l: crate::load::Loaded,
+        started: std::time::Instant,
+        caught_up: bool,
+    ) {
+        let read = started.elapsed();
+        let w = self.clone();
+        let first = self.first_frame.clone();
+        first.then(move || {
+            let applied = if caught_up {
+                w.state.borrow_mut().apply_caught_up(l)
+            } else {
+                w.state.borrow_mut().apply_loaded(l)
+            };
             if applied {
                 w.fill_list();
                 w.search_body();
                 w.show_message();
+                log::info!(
+                    target: "perf",
+                    "{} messages read in {read:?}{}, shown in {:?} (ready at {:?})",
+                    w.state.borrow().messages.len(),
+                    if caught_up { " from the folders" } else { " from the index" },
+                    started.elapsed(),
+                    rical_ui::app::since_start()
+                );
             }
         });
     }
@@ -1257,29 +1403,95 @@ impl Window {
             w.debounce.borrow_mut().take();
             if w.quiet_until.get().is_some_and(|t| Instant::now() < t) {
                 // our own change: the folder counts, not the whole list
-                w.state.borrow_mut().reload_folders();
-                w.fill_folders();
+                w.reload_folders(|w| w.fill_folders());
                 return;
             }
             let before = w.inbox_unread();
-            w.reload();
-            w.maybe_notify(before);
+            w.reload_folders(move |w| {
+                w.refresh();
+                w.load();
+                w.maybe_notify(before);
+            });
         });
         *self.debounce.borrow_mut() = Some(id);
     }
 
     /// Read the folders and the current list again, keeping the place.
     pub fn reload(self: &Rc<Self>) {
-        {
-            let mut s = self.state.borrow_mut();
-            s.reload_folders();
-        }
-        self.refresh();
-        self.load();
+        self.reload_folders(|w| {
+            w.refresh();
+            w.load();
+        });
+    }
+
+    /// Read the folders (and how many messages each has) on the background
+    /// pool, then `then`.
+    fn reload_folders(self: &Rc<Self>, then: impl FnOnce(&Rc<Self>) + 'static) {
+        let root = self.state.borrow().root.clone();
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let found = gio::spawn_blocking(move || rical_maildir::store::folders(&root)).await;
+            let Some(w) = weak.upgrade() else { return };
+            match found {
+                Ok(Ok(folders)) => w.state.borrow_mut().folders = folders,
+                Ok(Err(e)) => log::warn!("{e:#}"),
+                Err(_) => {}
+            }
+            then(&w);
+        });
     }
 }
 
-fn folder_row(icon: &str, name: &str, unread: usize, indent: i32) -> gtk::ListBoxRow {
+/// The fold key for "All accounts".
+const ALL_FOLD: &str = "*";
+
+/// Whether a fold was left open (`key+`) or shut (`key-`).
+fn remembered_fold(remembered: &str, key: &str) -> Option<bool> {
+    remembered
+        .split('|')
+        .find_map(|e| match e.strip_suffix('+') {
+            Some(n) if n == key => Some(true),
+            _ => e.strip_suffix('-').filter(|n| *n == key).map(|_| false),
+        })
+}
+
+/// The unread worth counting in some folders: not junk or trash.
+fn counted_unread(s: &crate::state::State, folders: impl Iterator<Item = usize>) -> usize {
+    folders
+        .filter(|&i| !matches!(s.folders[i].role, Role::Junk | Role::Trash))
+        .map(|i| s.folders[i].unread)
+        .sum()
+}
+
+fn folder_icon(role: Role) -> &'static str {
+    match role {
+        Role::Inbox => "mail-unread-symbolic",
+        Role::Drafts => "document-edit-symbolic",
+        Role::Sent => "mail-send-symbolic",
+        Role::Archive => "folder-symbolic",
+        Role::Junk => "mail-mark-junk-symbolic",
+        Role::Trash => "user-trash-symbolic",
+        Role::Other => "folder-symbolic",
+    }
+}
+
+fn fold_icon(open: bool) -> &'static str {
+    if open {
+        "pan-down-symbolic"
+    } else {
+        "pan-end-symbolic"
+    }
+}
+
+/// A folder in the list. `fold` is the key and state of the folders in it,
+/// when it has some: a button folds or opens them.
+fn folder_row(
+    icon: &str,
+    name: &str,
+    unread: usize,
+    indent: i32,
+    fold: Option<(&str, bool)>,
+) -> gtk::ListBoxRow {
     let b = gtk::Box::builder()
         .spacing(10)
         .margin_top(6)
@@ -1305,6 +1517,21 @@ fn folder_row(icon: &str, name: &str, unread: usize, indent: i32) -> gtk::ListBo
                 .css_classes(["dim-label", "caption", "numeric"])
                 .build(),
         );
+    }
+    if let Some((key, open)) = fold {
+        let button = gtk::Button::builder()
+            .icon_name(fold_icon(open))
+            .tooltip_text(if open {
+                "Fold the folders in this one"
+            } else {
+                "Show the folders in this one"
+            })
+            .css_classes(["flat", "circular"])
+            .valign(gtk::Align::Center)
+            .action_name("win.run")
+            .action_target(&format!("fold-folder {}", rical_ui::command::quote(key)).to_variant())
+            .build();
+        b.append(&button);
     }
     let row = gtk::ListBoxRow::new();
     row.set_child(Some(&b));
@@ -1385,27 +1612,26 @@ fn heading_row(text: &str) -> gtk::ListBoxRow {
     row
 }
 
-/// An account's name over its folders, folding them away when clicked.
-fn account_row(name: &str, unread: usize, open: bool) -> gtk::ListBoxRow {
+/// A name over folders, folding them away when clicked: an account, or a
+/// part of a name that is not itself a folder (`[Gmail]`).
+fn fold_row(name: &str, unread: usize, open: bool, indent: i32, strong: bool) -> gtk::ListBoxRow {
     let b = gtk::Box::builder()
         .spacing(8)
         .margin_top(6)
         .margin_bottom(6)
-        .margin_start(4)
+        .margin_start(4 + indent * 18)
         .margin_end(4)
         .build();
-    b.append(&gtk::Image::from_icon_name(if open {
-        "pan-down-symbolic"
-    } else {
-        "pan-end-symbolic"
-    }));
+    b.append(&gtk::Image::from_icon_name(fold_icon(open)));
     let label = gtk::Label::builder()
         .label(name)
         .xalign(0.0)
         .hexpand(true)
         .ellipsize(pango::EllipsizeMode::End)
-        .css_classes(["heading"])
         .build();
+    if strong || unread > 0 {
+        label.add_css_class("heading");
+    }
     b.append(&label);
     if unread > 0 {
         b.append(

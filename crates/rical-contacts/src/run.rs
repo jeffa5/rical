@@ -80,6 +80,7 @@ impl Window {
                 crate::editor::open(self, Some(id));
             }
             "delete" => self.delete()?,
+            "duplicate" => self.duplicate()?,
             "mail" => {
                 let to = self.with_card(|c| preferred(&c.emails()).map(|f| f.value.clone()))?;
                 let to = to.ok_or("they have no email address")?;
@@ -203,7 +204,7 @@ impl Window {
         let id = self.selected_card()?;
         let s = self.state.borrow();
         let card = s.books.get(&id).ok_or("no one is selected")?;
-        Ok(f(&card))
+        Ok(f(&card.card()))
     }
 
     pub fn selected_group(&self) -> Option<rical_cards::dedupe::Group> {
@@ -306,7 +307,7 @@ impl Window {
             (
                 s.books
                     .get(&id)
-                    .map(|c| c.display_name())
+                    .map(|c| c.card().display_name())
                     .unwrap_or_default(),
                 s.books.books[book].name.clone(),
             )
@@ -361,6 +362,25 @@ impl Window {
             }
         });
         alert.present(Some(&self.window));
+        Ok(())
+    }
+
+    /// `:duplicate`: copy the selected contact beside it, and select the
+    /// copy.
+    fn duplicate(self: &Rc<Self>) -> Result<(), String> {
+        let id = self.selected_card()?;
+        let name = self.with_card(|c| c.display_name())?;
+        let (change, copy) = self
+            .state
+            .borrow_mut()
+            .books
+            .duplicate(&id)
+            .map_err(|e| format!("{e:#}"))?;
+        self.state
+            .borrow_mut()
+            .record("copy the contact", vec![change]);
+        self.after_change(Some(&copy));
+        self.undo_toast(&format!("Copied {name}"));
         Ok(())
     }
 

@@ -117,7 +117,9 @@ From the keyboard:
   addresses, runs of digits a number, and the rest the name. As you type,
   the line below the command shows what will be made and where. Add `--book
   NAME` to choose the address book.
-- `e` edits the selected person, and `x` deletes them.
+- `e` edits the selected person, and `x` deletes them. `Ctrl+D`
+  (`:duplicate`) copies them (with a new UID, in the same address book) to
+  start someone similar from: a colleague at the same company, say.
 
 In the editor:
 
@@ -211,6 +213,7 @@ where you choose which card to keep.
 | `C` | `new ` | quick add |
 | `e`, `Ctrl+E` | `edit` | edit |
 | `x`, Delete | `delete` | delete |
+| `Ctrl+D` | `duplicate` | a copy, to start another from |
 | `M`, `P`, `A` | `mail`, `call`, `map` | reach them |
 | `y`, `Y` | `copy email`, `copy phone` | copy |
 | `O` | `open-file` | open in another app |

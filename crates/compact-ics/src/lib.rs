@@ -124,6 +124,14 @@ const COMMON: &[&str] = &[
 ];
 
 fn name(raw: &str) -> Name {
+    // nearly always written in upper case already: then look it up as it
+    // is, with nothing allocated for the common ones
+    if !raw.bytes().any(|b| b.is_ascii_lowercase()) {
+        return match COMMON.binary_search(&raw) {
+            Ok(i) => Cow::Borrowed(COMMON[i]),
+            Err(_) => Cow::Owned(raw.to_owned()),
+        };
+    }
     let upper = raw.to_ascii_uppercase();
     match COMMON.binary_search(&upper.as_str()) {
         Ok(i) => Cow::Borrowed(COMMON[i]),

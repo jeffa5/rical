@@ -44,6 +44,13 @@ fn action_text(a: &Action) -> String {
 impl Window {
     /// Preview and import `files`.
     pub fn import_files(self: &Rc<Self>, files: &[gio::File]) {
+        // what is imported is compared with what is there: wait for it
+        if !self.state.borrow().loaded {
+            self.waiting_files
+                .borrow_mut()
+                .extend(files.iter().cloned());
+            return;
+        }
         let mut plans = Vec::new();
         for file in files {
             let name = file

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/compact-ics", "crates/rical-core", "crates/rical", "crates/rical-calendar", "crates/rical-ui", "crates/rical-cards", "crates/rical-contacts", "crates/rical-mail-queue", "crates/rical-maildir", "crates/rical-mail"]
+members = ["crates/compact-ics", "crates/rical-index", "crates/rical-core", "crates/rical", "crates/rical-calendar", "crates/rical-ui", "crates/rical-cards", "crates/rical-contacts", "crates/rical-mail-queue", "crates/rical-maildir", "crates/rical-mail"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,6 +11,7 @@ rical-core = { path = "crates/rical-core" }
 rical-ui = { path = "crates/rical-ui" }
 rical-cards = { path = "crates/rical-cards" }
 compact-ics = { path = "crates/compact-ics" }
+rical-index = { path = "crates/rical-index" }
 anyhow = "1.0.100"
 chrono = "0.4.42"
 clap = { version = "4.5.49", features = ["derive", "env"] }

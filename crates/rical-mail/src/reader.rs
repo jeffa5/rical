@@ -43,7 +43,11 @@ pub struct Reader {
     pub on_link: RefCell<Option<LinkHandler>>,
     /// Told the address of a link clicked in the HTML view.
     pub on_url: RefCell<Option<UrlHandler>>,
-    web: webkit::WebView,
+    /// The HTML view, made when first wanted: starting WebKit costs a
+    /// noticeable part of a second, too much to pay before the window shows.
+    web: RefCell<Option<webkit::WebView>>,
+    /// Itself, for the HTML view's handlers.
+    me: RefCell<std::rc::Weak<Reader>>,
     body_stack: gtk::Stack,
     /// Show HTML as HTML (when there is any), else as text.
     pub prefer_html: std::cell::Cell<bool>,
@@ -156,10 +160,8 @@ impl Reader {
         column.append(&invites);
         column.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
         // the text, or the HTML as it was meant to look (nothing fetched)
-        let web = html_view();
         let body_stack = gtk::Stack::builder().vhomogeneous(false).build();
         body_stack.add_named(&body, Some("text"));
-        body_stack.add_named(&web, Some("html"));
         column.append(&body_stack);
         let fold_button = gtk::Button::builder()
             .halign(gtk::Align::Start)
@@ -193,12 +195,13 @@ impl Reader {
             scroller,
             on_link: RefCell::default(),
             on_url: RefCell::default(),
-            web,
+            web: RefCell::default(),
+            me: RefCell::default(),
             body_stack,
             prefer_html: std::cell::Cell::new(true),
         });
         reader.setup_links();
-        reader.setup_html();
+        *reader.me.borrow_mut() = Rc::downgrade(&reader);
         let weak = Rc::downgrade(&reader);
         reader.fold_button.connect_clicked(move |b| {
             let Some(r) = weak.upgrade() else { return };
@@ -881,11 +884,23 @@ fn html_view() -> webkit::WebView {
 }
 
 impl Reader {
-    /// Wire the HTML view: links go to the app, it grows to fit its page.
-    pub fn setup_html(self: &Rc<Self>) {
+    /// The HTML view, made (and wired: links go to the app, it grows to
+    /// fit its page) the first time it is wanted.
+    fn web(&self) -> webkit::WebView {
+        if let Some(w) = self.web.borrow().as_ref() {
+            return w.clone();
+        }
+        let web = html_view();
+        self.body_stack.add_named(&web, Some("html"));
+        self.wire_html(&web);
+        *self.web.borrow_mut() = Some(web.clone());
+        web
+    }
+
+    fn wire_html(&self, web: &webkit::WebView) {
         use webkit::prelude::*;
-        let weak = Rc::downgrade(self);
-        self.web.connect_decide_policy(move |_, decision, kind| {
+        let weak = self.me.borrow().clone();
+        web.connect_decide_policy(move |_, decision, kind| {
             use webkit::PolicyDecisionType as T;
             if !matches!(kind, T::NavigationAction | T::NewWindowAction) {
                 return false;
@@ -915,8 +930,8 @@ impl Reader {
             true
         });
         // as tall as its page, so the reader scrolls it with the rest
-        let weak = Rc::downgrade(self);
-        self.web.connect_load_changed(move |web, ev| {
+        let weak = self.me.borrow().clone();
+        web.connect_load_changed(move |web, ev| {
             if ev != webkit::LoadEvent::Finished {
                 return;
             }
@@ -956,8 +971,9 @@ impl Reader {
             .flatten();
         match doc {
             Some(doc) => {
-                self.web.set_height_request(240);
-                self.web.load_html(&doc, None);
+                let web = self.web();
+                web.set_height_request(240);
+                web.load_html(&doc, None);
                 self.body_stack.set_visible_child_name("html");
             }
             None => self.body_stack.set_visible_child_name("text"),

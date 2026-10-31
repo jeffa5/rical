@@ -154,7 +154,11 @@ pub fn preview(s: &State) -> gtk::Widget {
     b.append(&buttons);
     for id in &group.cards {
         if let (Some(card), Some(book)) = (s.books.get(id), s.books.book(id)) {
-            b.append(&card_group(&card, &book.name, &s.books.place(&id.path)));
+            b.append(&card_group(
+                &card.card(),
+                &book.name,
+                &s.books.place(&id.path),
+            ));
         }
     }
     b.upcast()
@@ -488,7 +492,7 @@ pub fn merge_with(win: &Rc<Window>, query: &str) -> Result<(), String> {
         .borrow()
         .books
         .get(&first)
-        .map(|c| c.display_name())
+        .map(|c| c.card().display_name())
         .unwrap_or_default();
 
     let search = gtk::SearchEntry::builder()

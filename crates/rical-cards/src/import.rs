@@ -112,6 +112,7 @@ fn match_card(books: &Books, incoming: &Card) -> Match {
         && let Some(id) = books.by_uid(uid).first()
         && let Some(mine) = books.get(id)
     {
+        let mine = mine.card();
         if substance(mine.0) == substance(incoming.0) {
             return Match::Same(id.clone());
         }
@@ -140,21 +141,11 @@ fn match_card(books: &Books, incoming: &Card) -> Match {
     if emails.is_empty() && phones.is_empty() {
         return Match::New;
     }
-    for (id, _, card) in books.cards() {
-        let same_email = card
-            .emails()
-            .iter()
-            .any(|e| emails.contains(&email_key(&e.value)));
-        let same_phone = card
-            .phones()
-            .iter()
-            .filter_map(|p| phone_tail(&p.value))
-            .any(|t| phones.contains(&t));
-        if same_email || same_phone {
-            return Match::Likely(id);
-        }
+    // by the index: no card is read
+    match books.with_keys(&emails, &phones) {
+        Some(id) => Match::Likely(id),
+        None => Match::New,
     }
-    Match::New
 }
 
 impl Books {
@@ -282,7 +273,7 @@ mod tests {
         let text = change.after.unwrap();
         assert!(text.contains("VERSION:2.1\r\n"), "{text}");
         assert!(text.contains("\r\nUID:"), "{text}");
-        assert_eq!(b.get(&id).unwrap().display_name(), "Jo Park");
+        assert_eq!(b.get(&id).unwrap().card().display_name(), "Jo Park");
         // and opened again, it is now the one you have
         let again = plan(&b, &text).unwrap();
         assert!(matches!(again[0].matched, Match::Same(_)));
