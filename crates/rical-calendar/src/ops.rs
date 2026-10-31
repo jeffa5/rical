@@ -932,16 +932,20 @@ fn descendants(v: &Vdir, calendar: &str, uid: &str) -> Vec<Task> {
         .into_iter()
         .filter(|t| t.calendar == calendar)
         .collect::<Vec<_>>();
+    let mut children: std::collections::HashMap<&str, Vec<&Task>> = Default::default();
+    for t in &tasks {
+        if let Some(p) = t.parent.as_deref() {
+            children.entry(p).or_default().push(t);
+        }
+    }
     let mut out: Vec<Task> = Vec::new();
-    let mut todo = vec![uid.to_owned()];
+    let mut seen = std::collections::HashSet::from([uid]);
+    let mut todo = vec![uid];
     while let Some(parent) = todo.pop() {
-        for t in tasks
-            .iter()
-            .filter(|t| t.parent.as_deref() == Some(parent.as_str()))
-        {
-            if t.uid != uid && !out.iter().any(|o| o.uid == t.uid) {
-                todo.push(t.uid.clone());
-                out.push(t.clone());
+        for t in children.get(parent).into_iter().flatten() {
+            if seen.insert(t.uid.as_str()) {
+                todo.push(t.uid.as_str());
+                out.push((*t).clone());
             }
         }
     }

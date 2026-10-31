@@ -538,14 +538,14 @@ fn expand_series(
         return;
     }
 
-    let mut replaced = Vec::new();
+    let mut replaced = std::collections::HashSet::new();
     let mut this_and_future = Vec::new();
     for o in overrides {
         let Some((rid, future)) = o.recurrence_id() else {
             continue;
         };
         let rid = rid.coerce_like(&master.start);
-        replaced.push(rid);
+        replaced.insert(rid);
         if future {
             this_and_future.push((rid, o));
         }
@@ -555,7 +555,7 @@ fn expand_series(
     }
     this_and_future.sort_by_key(|(rid, _)| rid.to_utc(Tz::UTC));
 
-    let exdates = master.whens("EXDATE");
+    let exdates: std::collections::HashSet<When> = master.whens("EXDATE").into_iter().collect();
 
     for start in instance_starts(master, range) {
         if exdates.contains(&start) || replaced.contains(&start) {

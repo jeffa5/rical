@@ -471,14 +471,18 @@ impl State {
 
     /// Visible occurrences in keyboard order, each once.
     pub fn navigation_order(&self) -> Vec<Occurrence> {
-        let mut out: Vec<Occurrence> = Vec::new();
-        for (_, o) in self.navigation_entries() {
-            let key = OccurrenceKey::of(&o);
-            if !out.iter().any(|seen| key.matches(seen)) {
-                out.push(o);
-            }
-        }
-        out
+        let mut seen = std::collections::HashSet::new();
+        self.navigation_entries()
+            .into_iter()
+            .map(|(_, o)| o)
+            .filter(|o| {
+                seen.insert((
+                    o.uid.clone(),
+                    o.path.clone(),
+                    o.recurrence_id.unwrap_or(o.start),
+                ))
+            })
+            .collect()
     }
 
     /// Select the next (or previous) occurrence in keyboard order, from
