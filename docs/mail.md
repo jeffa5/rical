@@ -85,7 +85,14 @@ junk, `m` move, `s` flag, `U` read or unread, `u` undo.
 archive, move to…, mark, flag, delete), messages drag onto a folder to move
 there, and the message header has buttons for flag, read and a menu for the
 rest. Rows show the first words of a message under its subject, and image
-attachments show as thumbnails.
+attachments show as thumbnails. A folder has a right-click menu too: open it,
+move the selected messages there, or make a folder inside it.
+
+A message you answered shows an arrow by its subject: replied, replied to
+all, or forwarded (with the others on hover). Replied and forwarded are the
+message's Maildir flags (R and P), so they sync; "to all" has no flag, so
+rical-mail keeps it in `~/.local/state/rical-mail/replied-all`, and another
+client shows it as replied.
 
 In a message: `o` lists its links (open one with a number), `w` saves the
 attachments, `i` opens an invitation in the calendar app, `@` opens the

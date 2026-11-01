@@ -154,6 +154,7 @@ pub struct Compose {
     toasts: adw::ToastOverlay,
     /// What the message answers, and where the draft is kept.
     answering: RefCell<Option<PathBuf>>,
+    answer: Cell<rical_maildir::compose::Answer>,
     saved_as: RefCell<Option<PathBuf>>,
     in_reply_to: RefCell<Option<String>>,
     references: RefCell<Vec<String>>,
@@ -402,6 +403,7 @@ impl Compose {
             status,
             toasts,
             answering: RefCell::new(d.answering.clone()),
+            answer: Cell::new(d.answer),
             saved_as: RefCell::new(editing),
             in_reply_to: RefCell::new(d.in_reply_to.clone()),
             references: RefCell::new(d.references.clone()),
@@ -754,6 +756,7 @@ impl Compose {
             references: self.references.borrow().clone(),
             attachments: self.attachments.borrow().clone(),
             answering: self.answering.borrow().clone(),
+            answer: self.answer.get(),
             markdown: self.markdown.get(),
             calendar: self.calendar.borrow().clone(),
             forwarded: self.forwarded.clone(),
@@ -1371,11 +1374,22 @@ impl Compose {
         self.state.borrow_mut().last_sent = (delay > 0).then(|| (id, d.clone()));
 
         // mark what it answers; the draft it came from is done with
-        if let Some(a) = self.answering.borrow().as_deref().and_then(locate) {
+        let answered = self.answering.borrow().as_deref().and_then(locate);
+        if let Some(a) = answered {
+            use rical_maildir::compose::Answer;
             let mut f = store::flags_of(&a);
-            f.replied = true;
+            match self.answer.get() {
+                Answer::Reply | Answer::ReplyAll => f.replied = true,
+                Answer::Forward => f.passed = true,
+            }
             f.seen = true;
             let _ = store::set_flags(&a, f);
+            // no flag says "to all": kept here
+            if self.answer.get() == Answer::ReplyAll
+                && let Some(id) = self.in_reply_to.borrow().as_deref()
+            {
+                self.state.borrow_mut().replied_to_all(id);
+            }
         }
         if let Some(p) = self.saved_as.borrow_mut().take().and_then(|p| locate(&p)) {
             let _ = store::remove(&p);

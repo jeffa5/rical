@@ -14,6 +14,16 @@ use crate::{
     store::unique_name,
 };
 
+/// How a message answers another: what the other is marked once it is
+/// sent (Maildir's R, also for a reply to all, or P).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Answer {
+    #[default]
+    Reply,
+    ReplyAll,
+    Forward,
+}
+
 /// A message being written. Addresses are text, as typed.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Draft {
@@ -26,8 +36,10 @@ pub struct Draft {
     pub in_reply_to: Option<String>,
     pub references: Vec<String>,
     pub attachments: Vec<PathBuf>,
-    /// The message this answers, to mark replied once it is sent.
+    /// The message this answers, to mark once it is sent.
     pub answering: Option<PathBuf>,
+    /// How it answers it: what it is marked once this is sent.
+    pub answer: Answer,
     /// The body is Markdown: sent as written with an HTML alternative.
     pub markdown: bool,
     /// A calendar message to send along (iMIP): its METHOD and the iCalendar.
@@ -157,6 +169,7 @@ pub fn reply(o: &Opened, me: &[Mailbox], all: bool, width: usize) -> Draft {
         references: refs,
         attachments: Vec::new(),
         answering: Some(o.path.clone()),
+        answer: if all { Answer::ReplyAll } else { Answer::Reply },
         markdown: false,
         calendar: None,
         forwarded: Vec::new(),
@@ -192,6 +205,7 @@ pub fn forward(o: &Opened, me: &[Mailbox]) -> Draft {
             .chain(o.message_id.clone())
             .collect(),
         answering: Some(o.path.clone()),
+        answer: Answer::Forward,
         ..Draft::default()
     }
 }
@@ -210,6 +224,7 @@ impl Draft {
             references: o.references.clone(),
             attachments: Vec::new(),
             answering: None,
+            answer: Answer::Reply,
             calendar: None,
             forwarded: Vec::new(),
             markdown: o
@@ -712,6 +727,16 @@ mod tests {
         assert_eq!(all.to, "Ann Lee <ann@x.example>");
         assert_eq!(all.cc, "Bo <bo@z.example>, cy@z.example");
         assert_eq!(prefixed("Re:", "Re: x"), "Re: x");
+    }
+
+    #[test]
+    fn each_answer_says_what_kind_it_is() {
+        let o = opened(MAIL);
+        assert_eq!(reply(&o, &me(), false, 72).answer, Answer::Reply);
+        assert_eq!(reply(&o, &me(), true, 72).answer, Answer::ReplyAll);
+        let f = forward(&o, &me());
+        assert_eq!(f.answer, Answer::Forward);
+        assert_eq!(f.answering.as_deref(), Some(std::path::Path::new("/m/1")));
     }
 
     #[test]

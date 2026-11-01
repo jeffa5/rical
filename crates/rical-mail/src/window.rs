@@ -482,7 +482,13 @@ impl Window {
                 .pixel_size(12)
                 .css_classes(["warning"])
                 .build();
+            // what was done with it: answered (to one or all) or forwarded
+            let answered = gtk::Image::builder()
+                .pixel_size(12)
+                .css_classes(["dim-label"])
+                .build();
             second.append(&subject);
+            second.append(&answered);
             second.append(&clip);
             second.append(&flag);
             let note = gtk::Label::builder()
@@ -561,7 +567,8 @@ impl Window {
             let when = from.next_sibling().and_downcast::<gtk::Label>().unwrap();
             let second = first.next_sibling().unwrap();
             let subject = second.first_child().and_downcast::<gtk::Label>().unwrap();
-            let clip = subject.next_sibling().unwrap();
+            let answered = subject.next_sibling().and_downcast::<gtk::Image>().unwrap();
+            let clip = answered.next_sibling().unwrap();
             let flag = clip.next_sibling().unwrap();
             let note = second.next_sibling().and_downcast::<gtk::Label>().unwrap();
             let preview = note.next_sibling().and_downcast::<gtk::Label>().unwrap();
@@ -617,6 +624,28 @@ impl Window {
             } else {
                 &m.subject
             });
+            let answer = match (m.flags.replied, m.flags.passed) {
+                (true, forwarded) => Some((
+                    if s.was_replied_all(m) {
+                        "mail-reply-all-symbolic"
+                    } else {
+                        "mail-reply-sender-symbolic"
+                    },
+                    match (s.was_replied_all(m), forwarded) {
+                        (true, true) => "Replied to all, and forwarded",
+                        (true, false) => "Replied to all",
+                        (false, true) => "Replied, and forwarded",
+                        (false, false) => "Replied",
+                    },
+                )),
+                (false, true) => Some(("mail-forward-symbolic", "Forwarded")),
+                (false, false) => None,
+            };
+            answered.set_visible(answer.is_some() && !outbox);
+            if let Some((icon, said)) = answer {
+                answered.set_icon_name(Some(icon));
+                answered.set_tooltip_text(Some(said));
+            }
             clip.set_visible(m.attachments);
             flag.set_visible(m.flags.flagged);
             // the Outbox says why each waits; elsewhere where it is, by the date
@@ -703,6 +732,35 @@ impl Window {
                 let _ = w.execute("open");
             }
         });
+        // a right click on a folder: open it, move what is selected there,
+        // or make one inside it (the rows that only open something have
+        // nothing more than a click does)
+        let weak = Rc::downgrade(self);
+        rical_ui::menu::on_right_click(&self.folder_list, move |_, y| {
+            let w = weak.upgrade()?;
+            let row = w.folder_list.row_at_y(y as i32)?;
+            let name = row.widget_name();
+            let folder = w
+                .state
+                .borrow()
+                .folders
+                .iter()
+                .find(|f| f.path.to_string_lossy() == name.as_str())
+                .map(|f| f.name.clone())?;
+            let q = rical_ui::command::quote(&folder);
+            // one section: GTK sizes a menu ending in a section of one item
+            // too short to show it
+            let menu = gio::Menu::new();
+            rical_ui::menu::item(&menu, "_Open", &format!("folder {q}"));
+            rical_ui::menu::item(&menu, "_Move the Selected Here", &format!("move {q}"));
+            let inside = gio::MenuItem::new(Some("_New Folder Inside…"), None);
+            inside.set_action_and_target_value(
+                Some("win.prompt"),
+                Some(&format!("mkdir {folder}/").to_variant()),
+            );
+            menu.append_item(&inside);
+            Some(menu)
+        });
         let weak = Rc::downgrade(self);
         self.folder_list.connect_row_activated(move |_, row| {
             let Some(w) = weak.upgrade() else { return };
@@ -713,15 +771,19 @@ impl Window {
                 let _ = w.execute(&format!("fold-folder {}", rical_ui::command::quote(key)));
             } else if let Some(role) = name.strip_prefix("unified:") {
                 let _ = w.execute(&format!("unified {role}"));
-            } else if let Some(f) = w
-                .state
-                .borrow()
-                .folders
-                .iter()
-                .find(|f| f.path.to_string_lossy() == name.as_str())
-                .map(|f| f.name.clone())
-            {
-                let _ = w.execute(&format!("folder {}", rical_ui::command::quote(&f)));
+            } else {
+                // looked up first: a borrow in the `if let` would last
+                // through the command, which changes the state
+                let folder = w
+                    .state
+                    .borrow()
+                    .folders
+                    .iter()
+                    .find(|f| f.path.to_string_lossy() == name.as_str())
+                    .map(|f| f.name.clone());
+                if let Some(f) = folder {
+                    let _ = w.execute(&format!("folder {}", rical_ui::command::quote(&f)));
+                }
             }
         });
         let weak = Rc::downgrade(self);
@@ -1187,6 +1249,7 @@ impl Window {
                 .count();
             (items, selected, s.place_name(), s.shown.len(), unread)
         };
+        let was_selected = self.selection.selected();
         // only the rows that differ: deleting one changes one row, not the
         // thousands after it, which keep their place in the list (and GTK
         // their widgets)
@@ -1208,13 +1271,29 @@ impl Window {
             )
         };
         if gone > 0 || !new.is_empty() {
+            // rows above what changed are as they were, so the list stays
+            // where it was scrolled to: GTK would otherwise move it, when
+            // the row it keeps its place by is one that changed (archiving
+            // a conversation's first message makes the next its first)
+            let scrolled = self
+                .list
+                .vadjustment()
+                .filter(|_| at > 0)
+                .map(|a| (a.value(), a));
             let refs: Vec<&str> = items[new].iter().map(String::as_str).collect();
             self.model.splice(at as u32, gone as u32, &refs);
+            if let Some((value, adj)) = scrolled {
+                adj.set_value(value);
+            }
         }
         self.list_stack
             .set_visible_child_name(if items.is_empty() { "none" } else { "list" });
         *self.row_keys.borrow_mut() = items;
         match selected {
+            // the selection where it was, with only rows after the first
+            // changed: it is where it was on screen too. Scrolling to it now
+            // would place it by a guess at the height of a row just made.
+            Some(p) if at > 0 && was_selected == p => self.selection.set_selected(p),
             Some(p) => {
                 self.selection.set_selected(p);
                 self.list.scroll_to(p, gtk::ListScrollFlags::NONE, None);
@@ -1496,11 +1575,15 @@ impl Window {
 
     pub fn focus_view(&self) {
         self.list.grab_focus();
-        let at = self.selection.selected();
-        if at != gtk::INVALID_LIST_POSITION {
-            let list = self.list.clone();
+        if self.selection.selected() != gtk::INVALID_LIST_POSITION {
+            // where the selection is by then: the list may have changed
+            // (a folder emptied while it is read, a row archived)
+            let (list, selection) = (self.list.clone(), self.selection.clone());
             glib::idle_add_local_once(move || {
-                list.scroll_to(at, gtk::ListScrollFlags::FOCUS, None);
+                let at = selection.selected();
+                if at < selection.n_items() {
+                    list.scroll_to(at, gtk::ListScrollFlags::FOCUS, None);
+                }
             });
         }
     }

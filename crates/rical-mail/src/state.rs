@@ -74,6 +74,9 @@ pub struct State {
     /// What the list is ordered by, and whether the other way round.
     pub sort: thread::SortKey,
     pub sort_reverse: bool,
+    /// Messages answered to all (by Message-ID): no Maildir flag says
+    /// so, so it is kept here, in [`replied_all_file`].
+    pub replied_all: std::collections::HashSet<String>,
     /// Conversations folded to their first message, by that message.
     pub folded: std::collections::HashSet<PathBuf>,
     /// For the first message of each conversation: how many it has, how many unread.
@@ -124,6 +127,7 @@ impl State {
             sort,
             sort_reverse,
             folded: Default::default(),
+            replied_all: load_replied_all(),
             thread_info: HashMap::new(),
             selected: None,
             opened: None,
@@ -1032,5 +1036,67 @@ impl State {
                 .map(|&i| self.messages[self.rows[i].index].path.clone());
             self.opened = None;
         }
+    }
+}
+
+/// Where the messages answered to all are kept, one Message-ID a line.
+fn replied_all_file() -> Option<PathBuf> {
+    // tests keep away from the real one
+    if cfg!(test) {
+        return None;
+    }
+    Some(rical_ui::app::state_dir()?.join("replied-all"))
+}
+
+/// A Message-ID as kept: without its angle brackets.
+pub fn bare_id(id: &str) -> &str {
+    id.trim().trim_start_matches('<').trim_end_matches('>')
+}
+
+fn load_replied_all() -> std::collections::HashSet<String> {
+    replied_all_file()
+        .and_then(|f| std::fs::read_to_string(f).ok())
+        .map(|t| {
+            t.lines()
+                .map(bare_id)
+                .filter(|l| !l.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+impl State {
+    /// The message with this Message-ID was answered to all.
+    pub fn replied_to_all(&mut self, id: &str) {
+        let id = bare_id(id).to_owned();
+        if id.is_empty() || !self.replied_all.insert(id.clone()) {
+            return;
+        }
+        let Some(file) = replied_all_file() else {
+            return;
+        };
+        let kept = (|| {
+            use std::io::Write as _;
+            if let Some(dir) = file.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&file)?;
+            writeln!(f, "{id}")
+        })();
+        if let Err(e) = kept {
+            log::warn!("could not keep that {id} was answered to all: {e}");
+        }
+    }
+
+    /// Whether a message was answered to all.
+    pub fn was_replied_all(&self, m: &Summary) -> bool {
+        m.flags.replied
+            && m.message_id
+                .as_deref()
+                .is_some_and(|id| self.replied_all.contains(bare_id(id)))
     }
 }
