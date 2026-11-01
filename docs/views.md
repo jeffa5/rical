@@ -50,6 +50,10 @@ remembered.
 - **Create** by clicking empty hours (an hour from the half hour clicked)
   or dragging over them; on the all-day row, click a day or drag across
   days for an all-day event. The editor opens with those times.
+- **Right-click** an event, task or note for what can be done to it (details,
+  edit, duplicate, make a task or event, done, answer an invitation, delete),
+  or empty hours for a new event or task there. The month view and the
+  agenda, tasks, journal and invitations lists have the same menus.
 - **Schedule a task** by dragging it from the sidebar's task list onto the
   hours (an hour then) or the all-day row (due that day).
 

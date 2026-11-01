@@ -5,7 +5,7 @@ use std::ops::Range;
 
 use chrono::{DateTime, Datelike, Days, NaiveDate, NaiveTime, TimeDelta, Utc, Weekday};
 use chrono_tz::Tz;
-use rical_core::{Occurrence, when::resolve_local};
+use rical_core::{Occurrence, When, when::resolve_local};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewKind {
@@ -419,6 +419,76 @@ pub fn month_week_bars(occurrences: &[Occurrence], week: &[NaiveDate], local: Tz
     bars
 }
 
+/// The timed occurrences on each of `days` (in order, without gaps), as
+/// indices: each found once, for working days out from only what is on
+/// them. Asking per day of all of them is days × occurrences, which a
+/// year of a busy calendar makes seconds. Anything that touches a day is
+/// listed under it (and maybe one that only ends at its midnight).
+pub fn by_day(
+    occurrences: &[Occurrence],
+    days: &[NaiveDate],
+    local: Tz,
+) -> std::collections::HashMap<NaiveDate, Vec<usize>> {
+    let (Some(&first), Some(&last)) = (days.first(), days.last()) else {
+        return Default::default();
+    };
+    let mut on: std::collections::HashMap<NaiveDate, Vec<usize>> = Default::default();
+    let date = |w: &When| w.to_utc(local).with_timezone(&local).date_naive();
+    for (i, o) in occurrences.iter().enumerate() {
+        if is_all_day_row(o) {
+            continue;
+        }
+        let (from, to) = (date(&o.start).max(first), date(&o.end).min(last));
+        for day in from.iter_days().take_while(|d| *d <= to) {
+            on.entry(day).or_default().push(i);
+        }
+    }
+    on
+}
+
+/// [`busy_minutes`] for each of `days` (in order, without gaps).
+pub fn busy_by_day(
+    occurrences: &[Occurrence],
+    days: &[NaiveDate],
+    local: Tz,
+) -> std::collections::HashMap<NaiveDate, f64> {
+    by_day(occurrences, days, local)
+        .into_iter()
+        .map(|(day, on)| {
+            let some: Vec<Occurrence> = on.iter().map(|&i| occurrences[i].clone()).collect();
+            (day, busy_minutes(&some, day, local))
+        })
+        .collect()
+}
+
+/// [`busy_by_day`] kept for the occurrences it was worked out from (a
+/// view's, the same until something changes), so a redraw (moving the
+/// focused day) doesn't work it out again.
+#[derive(Default)]
+pub struct BusyMemo(std::cell::RefCell<Option<(std::rc::Rc<Vec<Occurrence>>, Busy)>>);
+
+/// Busy minutes by day.
+pub type Busy = std::rc::Rc<std::collections::HashMap<NaiveDate, f64>>;
+
+impl BusyMemo {
+    pub fn get(
+        &self,
+        occurrences: &std::rc::Rc<Vec<Occurrence>>,
+        days: &[NaiveDate],
+        local: Tz,
+    ) -> Busy {
+        let mut memo = self.0.borrow_mut();
+        if let Some((occ, busy)) = &*memo
+            && std::rc::Rc::ptr_eq(occ, occurrences)
+        {
+            return busy.clone();
+        }
+        let busy = std::rc::Rc::new(busy_by_day(occurrences, days, local));
+        *memo = Some((occurrences.clone(), busy.clone()));
+        busy
+    }
+}
+
 /// Busy minutes on `day` from timed occurrences, merging overlaps.
 pub fn busy_minutes(occurrences: &[Occurrence], day: NaiveDate, local: Tz) -> f64 {
     let mut segs = day_segments(occurrences, day, local, 0.0)
@@ -668,5 +738,25 @@ mod tests {
             occ("20251023", "20251024"),
         ];
         assert_eq!(busy_minutes(&o, date("2025-10-23"), UTC), 90.0);
+    }
+
+    #[test]
+    fn busy_by_day_is_busy_minutes_for_each_day() {
+        let o = [
+            occ("20251023T090000Z", "20251023T100000Z"),
+            occ("20251023T093000Z", "20251023T103000Z"),
+            // over midnight, into the next day
+            occ("20251023T230000Z", "20251024T013000Z"),
+            occ("20251025", "20251026"),
+        ];
+        let days: Vec<NaiveDate> = date("2025-10-22").iter_days().take(5).collect();
+        let busy = busy_by_day(&o, &days, UTC);
+        for d in days {
+            assert_eq!(
+                busy.get(&d).copied().unwrap_or(0.0),
+                busy_minutes(&o, d, UTC),
+                "{d}"
+            );
+        }
     }
 }

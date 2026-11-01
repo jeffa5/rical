@@ -332,6 +332,29 @@ impl TimeGrid {
     ) {
         let h = hits.clone();
         crate::details::edit_on_double_click(area, move |x, y| hit_at(&h.borrow(), x, y).is_some());
+        // a right click: what can be done to what is there, or adding one
+        let (this, h, target, changed) = (
+            Rc::downgrade(self),
+            hits.clone(),
+            area.clone(),
+            on_change.clone(),
+        );
+        rical_ui::menu::on_right_click(area, move |x, y| {
+            let this = this.upgrade()?;
+            let day = this.day_at(x, target.width() as f64)?;
+            let hit = hit_at(&h.borrow(), x, y).map(|h| h.target.clone());
+            {
+                let mut s = this.state.borrow_mut();
+                s.date = day;
+                s.selected = hit;
+            }
+            changed();
+            let s = this.state.borrow();
+            Some(match s.selected_occurrence() {
+                Some(o) => crate::menus::item(&s, &o),
+                None => crate::menus::empty(day, (!all_day).then(|| minute_at(y))),
+            })
+        });
         let gesture = gtk::GestureDrag::new();
 
         let this = Rc::downgrade(self);

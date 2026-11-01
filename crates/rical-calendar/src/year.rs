@@ -23,6 +23,7 @@ pub struct YearView {
     pub area: gtk::DrawingArea,
     state: SharedState,
     hits: Rc<RefCell<Vec<Hit<NaiveDate>>>>,
+    busy: layout::BusyMemo,
 }
 
 impl YearView {
@@ -38,6 +39,7 @@ impl YearView {
             area,
             state,
             hits: Default::default(),
+            busy: Default::default(),
         });
         let weak = Rc::downgrade(&this);
         this.area.set_draw_func(move |area, cr, w, h| {
@@ -80,6 +82,7 @@ impl YearView {
         let pal = Palette::of(area);
         let days = state.visible_days();
         let occ = state.occurrences(&days);
+        let busy = self.busy.get(&occ, &days, state.local);
         let today = Utc::now().with_timezone(&state.local).date_naive();
         let year = state.date.year();
 
@@ -150,7 +153,7 @@ impl YearView {
                     target: day,
                 });
 
-                let busy = layout::busy_minutes(&occ, day, state.local) / 60.0;
+                let busy = busy.get(&day).copied().unwrap_or(0.0) / 60.0;
                 if busy > 0.0 {
                     pal.accent(cr, 0.10 + 0.45 * (busy / BUSY_HOURS_FULL).min(1.0));
                     draw::rounded_rect(cr, x + 1.0, y + 1.0, cell_w - 2.0, cell_h - 2.0, 4.0);

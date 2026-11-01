@@ -94,6 +94,7 @@ impl TasksView {
                 on_change();
             }
         });
+        crate::menus::on_list(&this.list, this.state.clone());
         this
     }
 

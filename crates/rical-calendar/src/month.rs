@@ -31,6 +31,7 @@ pub struct MonthView {
     pub area: gtk::DrawingArea,
     state: SharedState,
     hits: Rc<RefCell<Vec<Hit<Target>>>>,
+    busy: layout::BusyMemo,
 }
 
 impl MonthView {
@@ -46,6 +47,7 @@ impl MonthView {
             area,
             state,
             hits: Default::default(),
+            busy: Default::default(),
         });
 
         let weak = Rc::downgrade(&this);
@@ -56,6 +58,7 @@ impl MonthView {
         });
 
         let click = gtk::GestureClick::new();
+        let changed = on_change.clone();
         let weak = Rc::downgrade(&this);
         click.connect_pressed(move |_, n_press, x, y| {
             let Some(this) = weak.upgrade() else { return };
@@ -97,6 +100,31 @@ impl MonthView {
             }
         });
         this.area.add_controller(click);
+        // a right click: what can be done to the chip, or adding one that day
+        let weak = Rc::downgrade(&this);
+        rical_ui::menu::on_right_click(&this.area, move |x, y| {
+            let this = weak.upgrade()?;
+            let hits = this.hits.borrow().clone();
+            let day = hits.iter().find_map(|h| match &h.target {
+                Target::Day(d) if h.contains(x, y) => Some(*d),
+                _ => None,
+            })?;
+            let chip = hit_at(&hits, x, y).and_then(|h| match &h.target {
+                Target::Occurrence(k) => Some(k.clone()),
+                Target::Day(_) => None,
+            });
+            {
+                let mut s = this.state.borrow_mut();
+                s.date = day;
+                s.selected = chip;
+            }
+            changed();
+            let s = this.state.borrow();
+            Some(match s.selected_occurrence() {
+                Some(o) => crate::menus::item(&s, &o),
+                None => crate::menus::empty(day, None),
+            })
+        });
         let weak = Rc::downgrade(&this);
         details::edit_on_double_click(&this.area, move |x, y| {
             weak.upgrade().is_some_and(|t| {
@@ -141,6 +169,7 @@ impl MonthView {
         let pal = Palette::of(area);
         let days = state.visible_days();
         let occ = state.occurrences(&days);
+        let busy = self.busy.get(&occ, &days, state.local);
         let today = Utc::now().with_timezone(&state.local).date_naive();
         let month = state.date.month();
 
@@ -175,7 +204,7 @@ impl MonthView {
                 target: Target::Day(*day),
             });
 
-            let busy = layout::busy_minutes(&occ, *day, state.local) / 60.0;
+            let busy = busy.get(day).copied().unwrap_or(0.0) / 60.0;
             if busy > 0.0 {
                 pal.accent(cr, 0.02 + 0.10 * (busy / BUSY_HOURS_FULL).min(1.0));
                 cr.rectangle(x, y, col_w, row_h);

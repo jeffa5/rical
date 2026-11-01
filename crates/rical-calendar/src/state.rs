@@ -451,20 +451,30 @@ impl State {
             return out;
         }
         let bars = layout::all_day_bars(&occ, &days, local);
+        // each day's bars and timed items found once, not by looking
+        // through all of them for every day (a year is 365 days of them)
+        let mut bars_on: Vec<Vec<&layout::Bar>> = vec![Vec::new(); days.len()];
+        for b in &bars {
+            for on in &mut bars_on[b.first..=b.last.min(days.len() - 1)] {
+                on.push(b);
+            }
+        }
+        let on_day = layout::by_day(&occ, &days, local);
         for (i, day) in days.iter().enumerate() {
-            let mut on: Vec<_> = bars
-                .iter()
-                .filter(|b| b.first <= i && i <= b.last)
-                .collect();
+            let on = &mut bars_on[i];
             on.sort_by_key(|b| b.lane);
             out.extend(on.iter().map(|b| (*day, occ[b.index].clone())));
-            let mut segs = layout::day_segments(&occ, *day, local, 0.0);
+            let Some(here) = on_day.get(day) else {
+                continue;
+            };
+            let some: Vec<Occurrence> = here.iter().map(|&n| occ[n].clone()).collect();
+            let mut segs = layout::day_segments(&some, *day, local, 0.0);
             segs.sort_by(|a, b| {
                 a.start_min
                     .total_cmp(&b.start_min)
                     .then(a.column.cmp(&b.column))
             });
-            out.extend(segs.iter().map(|s| (*day, occ[s.index].clone())));
+            out.extend(segs.iter().map(|s| (*day, some[s.index].clone())));
         }
         out
     }

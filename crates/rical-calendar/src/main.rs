@@ -17,6 +17,7 @@ mod guests;
 mod invitations;
 mod journals;
 mod layout;
+mod menus;
 mod minimonth;
 mod month;
 mod person;

@@ -15,6 +15,7 @@ pub mod history;
 pub mod keys;
 pub mod listhead;
 pub mod logfile;
+pub mod menu;
 pub mod palette;
 pub mod prefs;
 pub mod section;

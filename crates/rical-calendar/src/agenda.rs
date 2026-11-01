@@ -148,6 +148,7 @@ impl AgendaView {
                 .and_then(|l| l.row_at_y(y as i32))
                 .is_some_and(|r| r.is_activatable())
         });
+        crate::menus::on_list(&this.list, this.state.clone());
         this
     }
 

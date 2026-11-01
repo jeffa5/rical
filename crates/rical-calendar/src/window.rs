@@ -930,7 +930,8 @@ impl Window {
                 w.check_alarms();
                 // then whether the files changed since the index was
                 // brought up to date, away from the window
-                if let Some(check) = w.state.borrow().vdir.check() {
+                let check = w.state.borrow().vdir.check();
+                if let Some(check) = check {
                     w.run_check(check);
                 }
                 if w.contact_monitors.borrow().is_empty() {

@@ -628,22 +628,7 @@ impl Window {
     /// What edit and delete act on: the selected task in the tasks view,
     /// otherwise the selected occurrence.
     pub(super) fn current_item(&self) -> Option<Occurrence> {
-        let state = self.state.borrow();
-        if state.view == ViewKind::Journal {
-            let (path, uid) = state.selected_journal.as_ref()?;
-            return state
-                .vdir
-                .journals()
-                .into_iter()
-                .find(|(o, _)| o.path == *path && o.uid == *uid)
-                .map(|(o, _)| o);
-        }
-        if state.view != ViewKind::Tasks {
-            return state.selected_occurrence();
-        }
-        let (path, uid) = state.selected_task.as_ref()?;
-        let t = state.vdir.task(path, uid)?;
-        Some(task_occurrence(&t, state.today()))
+        self.state.borrow().current_item()
     }
 
     /// The task the user means: selected in the tasks view, or a selected
@@ -1232,5 +1217,27 @@ impl Window {
              iCalendar files, such as one vdirsyncer keeps in sync.",
             &details,
         );
+    }
+}
+
+impl crate::state::State {
+    /// What edit and delete act on: the selected entry in the journal, the
+    /// selected task in the tasks view, otherwise the selected occurrence.
+    pub(crate) fn current_item(&self) -> Option<Occurrence> {
+        if self.view == ViewKind::Journal {
+            let (path, uid) = self.selected_journal.as_ref()?;
+            return self
+                .vdir
+                .journals()
+                .into_iter()
+                .find(|(o, _)| o.path == *path && o.uid == *uid)
+                .map(|(o, _)| o);
+        }
+        if self.view != ViewKind::Tasks {
+            return self.selected_occurrence();
+        }
+        let (path, uid) = self.selected_task.as_ref()?;
+        let t = self.vdir.task(path, uid)?;
+        Some(task_occurrence(&t, self.today()))
     }
 }

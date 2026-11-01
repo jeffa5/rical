@@ -92,6 +92,7 @@ impl JournalsView {
             }
         });
         crate::details::edit_on_double_click(&this.list, |_, _| true);
+        crate::menus::on_list(&this.list, this.state.clone());
         this
     }
 
