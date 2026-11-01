@@ -450,7 +450,8 @@ impl Window {
 
     /// Each row of the people list: initials, name, and an email or number.
     fn setup_rows(self: &Rc<Self>, factory: &gtk::SignalListItemFactory) {
-        factory.connect_setup(|_, item| {
+        let weak = Rc::downgrade(self);
+        factory.connect_setup(move |_, item| {
             let item = item.downcast_ref::<gtk::ListItem>().unwrap();
             let b = gtk::Box::builder()
                 .spacing(10)
@@ -481,6 +482,13 @@ impl Window {
             b.append(&avatar);
             b.append(&text);
             item.set_child(Some(&b));
+            // a right click: that person, and what can be done for them
+            let (w, it) = (weak.clone(), item.clone());
+            rical_ui::menu::on_right_click(&b, move |_, _| {
+                let w = w.upgrade()?;
+                w.select_index(it.position() as usize);
+                Some(person_menu())
+            });
         });
         let state = self.state.clone();
         factory.connect_bind(move |_, item| {
@@ -517,7 +525,8 @@ impl Window {
         factory: &gtk::SignalListItemFactory,
         headers: &gtk::SignalListItemFactory,
     ) {
-        factory.connect_setup(|_, item| {
+        let weak = Rc::downgrade(self);
+        factory.connect_setup(move |_, item| {
             let item = item.downcast_ref::<gtk::ListItem>().unwrap();
             let b = gtk::Box::builder()
                 .orientation(gtk::Orientation::Vertical)
@@ -541,6 +550,18 @@ impl Window {
                     .build(),
             );
             item.set_child(Some(&b));
+            // a right click: those cards, merged or said to be different
+            let (w, it) = (weak.clone(), item.clone());
+            rical_ui::menu::on_right_click(&b, move |_, _| {
+                let w = w.upgrade()?;
+                w.dup_selection.set_selected(it.position());
+                let menu = gio::Menu::new();
+                rical_ui::menu::section(
+                    &menu,
+                    &[("_Merge…", "merge"), ("_Not the Same", "not-duplicates")],
+                );
+                Some(menu)
+            });
         });
         let rows = self.dup_rows.clone();
         factory.connect_bind(move |_, item| {
@@ -1355,4 +1376,37 @@ fn initials(name: &str) -> String {
         .chain(last)
         .flat_map(char::to_uppercase)
         .collect()
+}
+
+/// What can be done for the person a right click is on (selected first).
+fn person_menu() -> gio::Menu {
+    let menu = gio::Menu::new();
+    rical_ui::menu::section(
+        &menu,
+        &[
+            ("_Email", "mail"),
+            ("_Call", "call"),
+            ("Show on a _Map", "map"),
+        ],
+    );
+    rical_ui::menu::section(
+        &menu,
+        &[
+            ("Copy Email _Address", "copy email"),
+            ("Copy _Phone Number", "copy phone"),
+        ],
+    );
+    rical_ui::menu::section(
+        &menu,
+        &[
+            ("_Edit", "edit"),
+            ("Du_plicate", "duplicate"),
+            ("Merge _With…", "merge-with"),
+            ("_Open the File", "open-file"),
+            // not a section of its own: GTK sizes a menu ending in one
+            // item too short
+            ("_Delete", "delete"),
+        ],
+    );
+    menu
 }

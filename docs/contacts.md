@@ -108,6 +108,9 @@ From the keyboard:
 - `:copy name`, `:copy address` and `:copy card` copy the rest (`card` is
   the whole vCard).
 - `O` opens their file in another app; it always asks which.
+- Right-click someone for all of this (email, call, map, copy, edit,
+  duplicate, merge with…, open the file, delete); right-click a group of
+  duplicates to merge them or say they are different people.
 
 ## Adding and editing
 

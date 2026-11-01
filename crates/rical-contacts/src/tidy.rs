@@ -373,7 +373,8 @@ pub fn merge_group(
     dialog.connect_closed(move |_| {
         let taken = imported.borrow_mut().take();
         if let Some(i) = taken {
-            if let Err(e) = w.state.borrow_mut().books.undo(&i.added) {
+            let undone = w.state.borrow_mut().books.undo(&i.added);
+            if let Err(e) = undone {
                 w.toast(&format!("{e:#}"));
             }
             w.after_change(None);
