@@ -150,7 +150,11 @@ impl State {
             .find(|f| f.role == Role::Inbox)
             .or(s.folders.first())
             .map(|f| f.path.clone());
-        s.place = first.map_or(Place::Outbox, Place::Folder);
+        s.place = if s.folders.iter().any(|f| f.role == Role::Inbox) {
+            Place::Unified(Role::Inbox)
+        } else {
+            first.map_or(Place::Outbox, Place::Folder)
+        };
         // the messages are read by the window, away from it
         s.arrange();
         s

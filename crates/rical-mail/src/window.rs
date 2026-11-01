@@ -294,7 +294,14 @@ impl Window {
         let mail_page = tabs.append_pinned(&outer);
         mail_page.set_title("Mail");
         mail_page.set_icon(Some(&gio::ThemedIcon::new("mail-unread-symbolic")));
-        let tab_bar = adw::TabBar::builder().view(&tabs).autohide(true).build();
+        // a pinned tab keeps an autohiding bar up, so show it by hand: only
+        // once a second tab (a message being written) exists
+        let tab_bar = adw::TabBar::builder().view(&tabs).autohide(false).build();
+        tab_bar.set_visible(false);
+        {
+            let bar = tab_bar.clone();
+            tabs.connect_n_pages_notify(move |t| bar.set_visible(t.n_pages() > 1));
+        }
         let tabbed = gtk::Box::new(gtk::Orientation::Vertical, 0);
         tabbed.append(&tab_bar);
         tabs.set_vexpand(true);
