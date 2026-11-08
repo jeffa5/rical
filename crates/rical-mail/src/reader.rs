@@ -175,6 +175,11 @@ impl Reader {
             .vexpand(true)
             .hscrollbar_policy(gtk::PolicyType::Never)
             .build();
+        // a click focuses the text or the page, and the viewport would scroll
+        // that (tall) child into view: the reader jumps
+        if let Some(v) = scroller.child().and_downcast::<gtk::Viewport>() {
+            v.set_scroll_to_focus(false);
+        }
 
         let stack = gtk::Stack::new();
         stack.add_named(&empty, Some("empty"));
@@ -892,6 +897,10 @@ fn html_view() -> webkit::WebView {
         .build();
     web.set_height_request(240);
     web.set_hexpand(true);
+    // taking focus on a click scrolls the (page-tall) view into place, which
+    // jumps the reader; the app handles keys itself
+    web.set_focusable(false);
+    web.set_focus_on_click(false);
     web.update_property(&[gtk::accessible::Property::Label("Message")]);
     web
 }
@@ -934,7 +943,11 @@ impl Reader {
                 .downcast_ref::<webkit::NavigationPolicyDecision>()
                 .and_then(|d| d.navigation_action())
                 .is_some_and(|a| a.navigation_type() == webkit::NavigationType::LinkClicked);
+            // a link that asks for a new window (target=_blank) is a click
+            // too, whatever type it is tagged with
+            let clicked = clicked || kind == T::NewWindowAction;
             if clicked
+                && !uri.is_empty()
                 && let Some(r) = weak.upgrade()
                 && let Some(h) = r.on_url.borrow().clone()
             {
