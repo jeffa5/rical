@@ -393,8 +393,12 @@ impl Reader {
                     if p.tracking_pixels == 1 { "s" } else { "" }
                 );
             }
+            s += ".";
             let can = o.has_html && self.prefer_html.get();
-            lines.push((s + ".", can.then_some(("Load images", "images"))));
+            if can {
+                s += " I loads them.";
+            }
+            lines.push((s, can.then_some(("Load images", "images"))));
         }
         if let Some(who) = &p.read_receipt {
             lines.push((

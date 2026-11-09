@@ -2103,6 +2103,7 @@ fn message_menu() -> gio::Menu {
     let look = gio::Menu::new();
     item(&look, "_Links", "links");
     item(&look, "HTML or _Text", "view");
+    item(&look, "Load _Images", "images");
     item(&look, "_Headers", "headers");
     item(&look, "Message _Source", "source");
     item(&look, "_Save as File", "export");
