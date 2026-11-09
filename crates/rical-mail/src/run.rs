@@ -331,6 +331,11 @@ impl Window {
                 self.reader.prefer_html.set(html);
                 self.show_message();
             }
+            "images" => {
+                let path = self.opened()?.path.clone();
+                *self.reader.images_for.borrow_mut() = Some(path);
+                self.show_message();
+            }
             "headers" => self.show_headers()?,
             "source" => self.show_source()?,
             "mkdir" => {

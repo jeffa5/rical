@@ -468,7 +468,7 @@ pub const HTML_POLICY: &str = "default-src 'none'; img-src data:; style-src 'uns
 /// (`cid:`) put inline, and a Content-Security-Policy in front that blocks
 /// any other load (remote images, styles, fonts, frames, prefetches).
 /// None if it has no HTML.
-pub fn html_document(path: &Path) -> Result<Option<String>> {
+pub fn html_document(path: &Path, remote_images: bool) -> Result<Option<String>> {
     use base64::Engine as _;
     let bytes = std::fs::read(path)?;
     let msg = MessageParser::new()
@@ -507,8 +507,13 @@ pub fn html_document(path: &Path) -> Result<Option<String>> {
         );
         html = html.replace(&needle, &uri);
     }
+    let policy = if remote_images {
+        HTML_POLICY.replace("img-src data:", "img-src data: https: http:")
+    } else {
+        HTML_POLICY.to_owned()
+    };
     Ok(Some(format!(
-        "<meta http-equiv=\"Content-Security-Policy\" content=\"{HTML_POLICY}\">\n\
+        "<meta http-equiv=\"Content-Security-Policy\" content=\"{policy}\">\n\
          <meta http-equiv=\"x-dns-prefetch-control\" content=\"off\">\n\
          <meta name=\"referrer\" content=\"no-referrer\">\n{html}"
     )))
@@ -527,7 +532,7 @@ mod html_tests {
             "From: a@x\nSubject: s\nMIME-Version: 1.0\nContent-Type: multipart/related; boundary=B\n\n--B\nContent-Type: text/html\n\n<p>Hi <img src=\"cid:logo@x\"> <img src=\"https://t.example/p.gif\"></p>\n--B\nContent-Type: image/png\nContent-ID: <logo@x>\nContent-Transfer-Encoding: base64\n\niVBORw0KGgo=\n--B--\n",
         )
         .unwrap();
-        let doc = html_document(&f).unwrap().unwrap();
+        let doc = html_document(&f, false).unwrap().unwrap();
         assert!(doc.starts_with("<meta http-equiv=\"Content-Security-Policy\""));
         assert!(doc.contains("default-src 'none'"));
         assert!(
@@ -538,6 +543,6 @@ mod html_tests {
         assert!(doc.contains("https://t.example/p.gif"));
         let plain = dir.path().join("p");
         std::fs::write(&plain, "From: a@x\nSubject: s\n\nplain\n").unwrap();
-        assert!(html_document(&plain).unwrap().is_none());
+        assert!(html_document(&plain, false).unwrap().is_none());
     }
 }

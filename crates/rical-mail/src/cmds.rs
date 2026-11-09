@@ -275,6 +275,10 @@ pub static SPECS: &[Spec] = &[
             "Show a message as its HTML (nothing is fetched) or as text; toggles by default",
         )
     },
+    spec(
+        "images",
+        "Load this message's images from the web (tells the sender you opened it)",
+    ),
     spec("headers", "Show every header of the message"),
     spec("source", "Show the message as it is on disk"),
     // the outside

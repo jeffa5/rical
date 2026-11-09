@@ -51,6 +51,8 @@ pub struct Reader {
     body_stack: gtk::Stack,
     /// Show HTML as HTML (when there is any), else as text.
     pub prefer_html: std::cell::Cell<bool>,
+    /// The message whose remote images the reader asked for (just that one).
+    pub images_for: RefCell<Option<std::path::PathBuf>>,
 }
 
 pub fn full_date(ts: i64) -> String {
@@ -204,6 +206,7 @@ impl Reader {
             me: RefCell::default(),
             body_stack,
             prefer_html: std::cell::Cell::new(true),
+            images_for: RefCell::default(),
         });
         reader.setup_links();
         *reader.me.borrow_mut() = Rc::downgrade(&reader);
@@ -362,8 +365,20 @@ impl Reader {
             self.banner.remove(&c);
         }
         let p = &o.privacy;
-        let mut lines: Vec<String> = Vec::new();
-        if p.remote_images > 0 {
+        let mut lines: Vec<(String, Option<(&str, &str)>)> = Vec::new();
+        let loaded = o.has_html
+            && self.prefer_html.get()
+            && self.images_for.borrow().as_deref() == Some(o.path.as_path());
+        if p.remote_images > 0 && loaded {
+            lines.push((
+                format!(
+                    "Loading {} image{} from the web. The sender can see you opened this.",
+                    p.remote_images,
+                    if p.remote_images == 1 { "" } else { "s" }
+                ),
+                None,
+            ));
+        } else if p.remote_images > 0 {
             let mut s = format!(
                 "{} image{} it would have loaded from the web {} not loaded",
                 p.remote_images,
@@ -378,31 +393,41 @@ impl Reader {
                     if p.tracking_pixels == 1 { "s" } else { "" }
                 );
             }
-            lines.push(s + ".");
+            let can = o.has_html && self.prefer_html.get();
+            lines.push((s + ".", can.then_some(("Load images", "images"))));
         }
         if let Some(who) = &p.read_receipt {
-            lines.push(format!(
-                "{who} asked to be told when you read this. No receipt is sent."
+            lines.push((
+                format!("{who} asked to be told when you read this. No receipt is sent."),
+                None,
             ));
         }
         if p.misleading_links > 0 {
-            lines.push(format!(
-                "{} link{} show{} one address and go{} to another. Check before opening.",
-                p.misleading_links,
-                if p.misleading_links == 1 { "" } else { "s" },
-                if p.misleading_links == 1 { "s" } else { "" },
-                if p.misleading_links == 1 { "es" } else { "" },
+            lines.push((
+                format!(
+                    "{} link{} show{} one address and go{} to another. Check before opening.",
+                    p.misleading_links,
+                    if p.misleading_links == 1 { "" } else { "s" },
+                    if p.misleading_links == 1 { "s" } else { "" },
+                    if p.misleading_links == 1 { "es" } else { "" },
+                ),
+                Some(("Links", "links")),
             ));
         }
         if o.has_html && self.prefer_html.get() {
-            lines.push(
+            let s = if loaded {
+                "Shown as its HTML, with its images from the web. h shows it as text."
+            } else {
                 "Shown as its HTML, with nothing loaded from the web. h shows it as text."
-                    .to_owned(),
-            );
+            };
+            lines.push((s.to_owned(), Some(("Show as text", "view text"))));
         } else if o.body.kind == BodyKind::Html {
-            lines.push("This message is HTML, shown as text. h shows its HTML.".to_owned());
+            lines.push((
+                "This message is HTML, shown as text. h shows its HTML.".to_owned(),
+                Some(("Show HTML", "view html")),
+            ));
         }
-        for l in &lines {
+        for (l, button) in &lines {
             let warn = p.misleading_links > 0 && l.contains("link") && !l.contains("HTML");
             let b = gtk::Box::builder().spacing(8).build();
             b.add_css_class("card");
@@ -427,6 +452,18 @@ impl Reader {
                 .build();
             b.append(&icon);
             b.append(&label);
+            if let Some((text, cmd)) = button {
+                b.append(
+                    &gtk::Button::builder()
+                        .label(*text)
+                        .valign(gtk::Align::Center)
+                        .margin_end(8)
+                        .css_classes(["flat", "pill"])
+                        .action_name("win.run")
+                        .action_target(&cmd.to_variant())
+                        .build(),
+                );
+            }
             self.banner.append(&b);
         }
     }
@@ -993,7 +1030,14 @@ impl Reader {
     fn show_html(&self, o: &Opened) {
         use webkit::prelude::*;
         let doc = (o.has_html && self.prefer_html.get())
-            .then(|| rical_maildir::read::html_document(&o.path).ok().flatten())
+            .then(|| {
+                rical_maildir::read::html_document(
+                    &o.path,
+                    self.images_for.borrow().as_deref() == Some(o.path.as_path()),
+                )
+                .ok()
+                .flatten()
+            })
             .flatten();
         match doc {
             Some(doc) => {
