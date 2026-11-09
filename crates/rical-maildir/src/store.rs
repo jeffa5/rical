@@ -479,20 +479,20 @@ pub fn move_to(path: &Path, dest: &Path) -> Result<PathBuf> {
         .context("no file name")?
         .to_string_lossy()
         .into_owned();
-    let (unique, f) = split_name(&name);
-    let mut to = if in_new {
-        dest.join("new").join(unique)
-    } else {
-        dest.join("cur").join(name_with(unique, f))
-    };
-    if to.exists() {
-        // the same name from another folder: take a new one
+    let (_, f) = split_name(&name);
+    // A fresh name: the old one can carry another program's per-folder
+    // data (mbsync's `,U=<uid>`), which would clash in this folder.
+    let mut to;
+    loop {
         let fresh = unique_name();
         to = if in_new {
-            dest.join("new").join(fresh)
+            dest.join("new").join(&fresh)
         } else {
             dest.join("cur").join(name_with(&fresh, f))
         };
+        if !to.exists() {
+            break;
+        }
     }
     // rename needs one file system; mail trees nearly always are
     match fs::rename(path, &to) {
@@ -569,6 +569,18 @@ mod tests {
         assert_eq!((now[0].name.as_str(), now[0].total), ("INBOX", 0));
         assert!(list(&now[1])[0].flags.flagged);
         remove(&q).unwrap();
+    }
+
+    #[test]
+    fn a_move_drops_the_old_folders_uid() {
+        let d = tempfile::tempdir().unwrap();
+        let (inbox, archive) = (d.path().join("INBOX"), d.path().join("Archive"));
+        let p = deliver(&inbox, MAIL, Flags::default(), false).unwrap();
+        let named = p.with_file_name("1700000000.M1P2.host,U=1234:2,S");
+        fs::rename(&p, &named).unwrap();
+        let q = move_to(&named, &archive).unwrap();
+        let name = q.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(!name.contains("U=") && name.ends_with(":2,S"), "{name}");
     }
 }
 
